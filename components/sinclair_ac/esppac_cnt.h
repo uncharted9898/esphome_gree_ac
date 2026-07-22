@@ -226,10 +226,19 @@ class SinclairACCNT : public SinclairAC {
         bool gree_fan_layout_detected_{false};
         std::string last_command_result_{"none"};
         std::string last_command_failure_reason_{"none"};
+        bool has_published_request_diagnostics_{false};
+        uint32_t last_request_diagnostics_publish_{0};
+        uint32_t published_polls_sent_{0}, published_poll_responses_{0}, published_poll_response_timeouts_{0};
+        uint32_t published_consecutive_poll_timeouts_{0}, published_last_poll_response_ms_{0};
+        uint32_t published_command_attempts_{0}, published_command_response_timeouts_{0}, published_command_mismatches_{0};
+        std::string published_last_command_result_, published_last_command_failure_reason_;
+        bool has_published_candidate_telemetry_byte_44_{false};
+        uint8_t published_candidate_telemetry_byte_44_{0};
+        uint32_t last_candidate_telemetry_byte_44_publish_{0};
         sensor::Sensor *polls_sent_sensor_{nullptr}, *poll_responses_sensor_{nullptr}, *poll_response_timeouts_sensor_{nullptr}, *consecutive_poll_timeouts_sensor_{nullptr}, *last_poll_response_ms_sensor_{nullptr}, *command_attempts_sensor_{nullptr}, *command_response_timeouts_sensor_{nullptr}, *command_mismatches_sensor_{nullptr};
         text_sensor::TextSensor *last_command_result_sensor_{nullptr}, *last_command_failure_reason_sensor_{nullptr};
 
-        void publish_request_diagnostics();
+        void publish_request_diagnostics(bool force = false);
 
         climate::ClimateMode determine_mode();
         const char* determine_fan_mode();
