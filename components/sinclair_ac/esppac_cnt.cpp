@@ -96,7 +96,8 @@ void SinclairACCNT::handle_active_control_response(const std::vector<uint8_t> &p
         this->request_lifecycle_.acknowledge_report(millis());
         this->wait_response_ = false;  // retained solely for compatibility with base setup.
         if (this->request_lifecycle_.last_poll_response_ms > protocol::TIME_REFRESH_PERIOD_MS * 3) {
-            ESP_LOGW(TAG, "Abnormal poll response latency: %ums", this->request_lifecycle_.last_poll_response_ms);
+            ESP_LOGW(TAG, "Abnormal poll response latency: %lums",
+                     static_cast<unsigned long>(this->request_lifecycle_.last_poll_response_ms));
             this->publish_request_diagnostics(true);
         }
         return;
