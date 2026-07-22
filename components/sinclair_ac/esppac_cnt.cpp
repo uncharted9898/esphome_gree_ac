@@ -59,7 +59,8 @@ void SinclairACCNT::loop()
         }
         }
         this->reset_parser();
-    }
+    }  // closes validation else
+    }  // closes: if (serialProcess_.state == STATE_COMPLETE)
 
     this->publish_diagnostics();
     /* we will send a packet to the AC as a reponse to indicate changes */
