@@ -24,7 +24,10 @@ void SinclairACCNT::begin_pending_control()
     pending.retries = 0;
     pending.mode = this->mode;
     pending.target_temperature = this->target_temperature;
-    pending.custom_fan_mode = this->has_custom_fan_mode() ? this->get_custom_fan_mode() : fan_modes::FAN_AUTO;
+    pending.custom_fan_mode = fan_modes::FAN_AUTO;
+    if (this->has_custom_fan_mode()) {
+        pending.custom_fan_mode = this->get_custom_fan_mode();
+    }
     pending.vertical_swing = this->vertical_swing_state_;
     pending.horizontal_swing = this->horizontal_swing_state_;
     pending.display_mode = this->display_state_;
@@ -304,7 +307,10 @@ void SinclairACCNT::send_packet()
     const bool encode_pending = this->pending_control_.active && this->update_ != ACUpdate::NoUpdate;
     const auto command_mode = encode_pending ? this->pending_control_.mode : this->mode;
     const float command_target_temperature = encode_pending ? this->pending_control_.target_temperature : this->target_temperature;
-    const std::string command_fan_mode = encode_pending ? this->pending_control_.custom_fan_mode : (this->has_custom_fan_mode() ? this->get_custom_fan_mode() : fan_modes::FAN_AUTO);
+    std::string command_fan_mode = encode_pending ? this->pending_control_.custom_fan_mode : fan_modes::FAN_AUTO;
+    if (!encode_pending && this->has_custom_fan_mode()) {
+        command_fan_mode = this->get_custom_fan_mode();
+    }
     const std::string &command_vertical_swing = encode_pending ? this->pending_control_.vertical_swing : this->vertical_swing_state_;
     const std::string &command_horizontal_swing = encode_pending ? this->pending_control_.horizontal_swing : this->horizontal_swing_state_;
     const std::string &command_display = encode_pending ? this->pending_control_.display_mode : this->display_state_;
