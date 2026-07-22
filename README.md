@@ -168,6 +168,27 @@ deliberately observational: it does not create guessed pressure, electrical, or
 compressor entities.
 Capture repeated labelled transitions before adding a decoded sensor.
 
+### Read-only telemetry capture
+
+`telemetry_discovery` records command and per-byte observations without naming
+unverified fields. It tracks first/last-seen times, packet/change counts, raw
+payloads, byte ranges, changed-bit masks, and a bounded RX/TX capture history.
+Expose `diagnostics.discovery_summary` for a rate-limited summary and
+`diagnostics.capture_export_csv` for a copyable CSV capture through the normal
+ESPHome text-sensor interfaces. `history_depth` is bounded (1–64).
+
+Payload byte 42 is the confirmed indoor/return-air temperature using
+`(raw - 16) / 2.0` °C. Byte 44 remains unresolved. It may be exposed only as
+`candidate_telemetry_byte_44_raw`; the explicitly named
+`candidate_byte_44_temperature_hypothesis` is disabled unless configured and
+is diagnostic-only—not an outdoor or coil sensor.
+
+`supplemental_queries` is experimental and disabled by default. It accepts
+only byte-for-byte OEM-captured query templates and is gated so an active
+climate transaction or normal poll takes priority. The current release records
+and validates these templates but does not schedule transmission, preserving a
+read-only discovery posture until an OEM query/response mapping is confirmed.
+
 The Livo poll-only example enables encrypted ESPHome native API access and the
 ESP-hosted authenticated web REST/SSE API. Add these values to your local
 `secrets.yaml` (do not commit real credentials):
