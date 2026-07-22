@@ -5,6 +5,7 @@ ROOT = Path(__file__).parents[1]
 CNT = (ROOT / "components/sinclair_ac/esppac_cnt.cpp").read_text()
 CPP = (ROOT / "components/sinclair_ac/esppac.cpp").read_text()
 CLIMATE_PY = (ROOT / "components/sinclair_ac/climate.py").read_text()
+PROTOCOL_STATE = (ROOT / "components/sinclair_ac/protocol_state.h").read_text()
 class ModeContractTests(unittest.TestCase):
     def test_receive_only_has_no_uart_write_path(self):
         self.assertIn("void SinclairACCNT::send_packet()\n{\n    if (this->is_receive_only()) return;", CNT)
@@ -55,6 +56,23 @@ class ModeContractTests(unittest.TestCase):
         self.assertIn("Poll/command response timed out", CNT)
         self.assertIn("this->last_report_payload_ = payload", CNT)
         self.assertIn("std::copy_n(this->last_report_payload_", CNT)
+    def test_protocol_state_transitions_do_not_flood_healthy_polls(self):
+        # Poll-only startup reports initialization, then waiting, then the first valid RX restores ready.
+        self.assertIn('this->publish_protocol_state("initializing");', CPP)
+        self.assertIn('protocol_state_after_transmit(this->update_, this->state_)', CNT)
+        self.assertIn('this->publish_protocol_state("ready");', CPP)
+
+        # Routine polls retain ready; the helper returns no state to publish.
+        self.assertNotIn('this->publish_protocol_state("waiting_for_poll_response");', CNT)
+        self.assertIn('assert(protocol_state_after_transmit(ACUpdate::NoUpdate, ACState::Ready) == nullptr);', (ROOT / "tests/test_protocol_frame.cpp").read_text())
+
+        # A missed response is visible and a subsequent valid RX recovers ready.
+        self.assertIn('this->publish_protocol_state("response_timeout");', CNT)
+
+        # Control transactions retain their explicit apply/clear/verified lifecycle.
+        for state in ("command_apply_waiting", "command_clear_waiting"):
+            self.assertIn(f'"{state}"', PROTOCOL_STATE)
+        self.assertIn('this->publish_protocol_state("command_verified");', CNT)
     def test_discovery_schema_retains_known_and_unknown_raw_payloads(self):
         for key in ("fan_profile", "telemetry_discovery", "last_0x31_payload", "last_0x33_payload", "last_0x44_payload", "last_0x40_payload", "last_unknown_payload"):
             self.assertIn(key, CLIMATE_PY)
