@@ -149,6 +149,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void set_last_0x44_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x44_payload_sensor_ = sensor; }
         void set_last_0x40_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x40_payload_sensor_ = sensor; }
         void set_last_unknown_payload_sensor(text_sensor::TextSensor *sensor) { this->last_unknown_payload_sensor_ = sensor; }
+        void set_candidate_telemetry_byte_44_raw_sensor(sensor::Sensor *sensor) { this->candidate_telemetry_byte_44_raw_sensor_ = sensor; }
 
         void setup() override;
         void loop() override;
@@ -193,7 +194,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         uint32_t valid_rx_packets_{0}, valid_tx_packets_{0}, unknown_packets_{0}, checksum_failures_{0}, invalid_lengths_{0}, too_short_frames_{0}, parser_resyncs_{0}, frame_timeouts_{0};
         uint32_t last_diagnostics_publish_{0};
         uint32_t last_packet_diagnostics_publish_{0};
-        sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *too_short_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *frame_timeout_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr};
+        sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *too_short_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *frame_timeout_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr}, *candidate_telemetry_byte_44_raw_sensor_{nullptr};
         sensor::Sensor *fan_speed_field_1_raw_sensor_{nullptr}, *fan_speed_field_1_low_3_bits_sensor_{nullptr}, *fan_speed_field_2_raw_sensor_{nullptr}, *fan_quiet_raw_sensor_{nullptr}, *fan_turbo_raw_sensor_{nullptr};
         binary_sensor::BinarySensor *communication_sensor_{nullptr}, *receive_only_sensor_{nullptr}, *poll_only_sensor_{nullptr};
         text_sensor::TextSensor *protocol_mode_sensor_{nullptr}, *protocol_state_sensor_{nullptr}, *last_packet_sensor_{nullptr}, *last_unknown_packet_sensor_{nullptr}, *fan_decode_status_sensor_{nullptr}, *fan_decode_profile_sensor_{nullptr};

@@ -3,6 +3,7 @@
 #include "esphome/components/climate/climate_mode.h"
 #include "esppac.h"
 #include "protocol_state.h"
+#include "request_lifecycle.h"
 
 namespace esphome {
 namespace sinclair_ac {
@@ -157,6 +158,16 @@ class SinclairACCNT : public SinclairAC {
 
         void setup() override;
         void loop() override;
+        void set_polls_sent_sensor(sensor::Sensor *s) { polls_sent_sensor_ = s; }
+        void set_poll_responses_sensor(sensor::Sensor *s) { poll_responses_sensor_ = s; }
+        void set_poll_response_timeouts_sensor(sensor::Sensor *s) { poll_response_timeouts_sensor_ = s; }
+        void set_consecutive_poll_timeouts_sensor(sensor::Sensor *s) { consecutive_poll_timeouts_sensor_ = s; }
+        void set_last_poll_response_ms_sensor(sensor::Sensor *s) { last_poll_response_ms_sensor_ = s; }
+        void set_command_attempts_sensor(sensor::Sensor *s) { command_attempts_sensor_ = s; }
+        void set_command_response_timeouts_sensor(sensor::Sensor *s) { command_response_timeouts_sensor_ = s; }
+        void set_command_mismatches_sensor(sensor::Sensor *s) { command_mismatches_sensor_ = s; }
+        void set_last_command_result_sensor(text_sensor::TextSensor *s) { last_command_result_sensor_ = s; }
+        void set_last_command_failure_reason_sensor(text_sensor::TextSensor *s) { last_command_failure_reason_sensor_ = s; }
 
     protected:
         enum PendingField : uint16_t {
@@ -179,6 +190,7 @@ class SinclairACCNT : public SinclairAC {
         ACState state_ = ACState::Initializing; /* Stores if the AC is responsive or not */
         ACUpdate update_ = ACUpdate::NoUpdate;  /* Stores if we need tu send update to AC or no */
         PendingControlState pending_control_;
+        RequestLifecycle request_lifecycle_;
 
         climate::ClimateMode mode_internal_{climate::CLIMATE_MODE_OFF};
         bool power_internal_{false};
@@ -206,7 +218,12 @@ class SinclairACCNT : public SinclairAC {
         bool has_unknown_fan_signature_{false};
         std::vector<uint8_t> last_report_payload_;
         bool gree_fan_layout_detected_{false};
-        uint32_t poll_timeouts_{0};
+        std::string last_command_result_{"none"};
+        std::string last_command_failure_reason_{"none"};
+        sensor::Sensor *polls_sent_sensor_{nullptr}, *poll_responses_sensor_{nullptr}, *poll_response_timeouts_sensor_{nullptr}, *consecutive_poll_timeouts_sensor_{nullptr}, *last_poll_response_ms_sensor_{nullptr}, *command_attempts_sensor_{nullptr}, *command_response_timeouts_sensor_{nullptr}, *command_mismatches_sensor_{nullptr};
+        text_sensor::TextSensor *last_command_result_sensor_{nullptr}, *last_command_failure_reason_sensor_{nullptr};
+
+        void publish_request_diagnostics();
 
         climate::ClimateMode determine_mode();
         const char* determine_fan_mode();
