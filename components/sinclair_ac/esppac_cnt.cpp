@@ -279,7 +279,7 @@ void SinclairACCNT::send_packet()
     const auto command_mode = encode_pending ? this->pending_control_.mode : this->mode;
     const float command_target_temperature = encode_pending ? this->pending_control_.target_temperature : this->target_temperature;
     const std::string command_fan_mode = encode_pending ? this->pending_control_.custom_fan_mode :
-                                         (this->has_custom_fan_mode() ? this->get_custom_fan_mode() : fan_modes::FAN_AUTO);
+                                         (this->has_custom_fan_mode() ? std::string(this->get_custom_fan_mode()) : std::string(fan_modes::FAN_AUTO));
     const std::string &command_vertical_swing = encode_pending ? this->pending_control_.vertical_swing : this->vertical_swing_state_;
     const std::string &command_horizontal_swing = encode_pending ? this->pending_control_.horizontal_swing : this->horizontal_swing_state_;
     const std::string &command_display = encode_pending ? this->pending_control_.display_mode : this->display_state_;
