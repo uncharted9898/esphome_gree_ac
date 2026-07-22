@@ -24,6 +24,12 @@ class ModeContractTests(unittest.TestCase):
     def test_custom_fan_modes_use_the_climate_entity_api(self):
         self.assertIn("this->set_supported_custom_fan_modes(", CPP)
         self.assertNotIn("traits.set_supported_custom_fan_modes(", CPP)
+    def test_uart_frame_length_includes_sync_bytes_and_length_byte(self):
+        self.assertIn("c < 3 || c > DATA_MAX - 3", CPP)
+        self.assertIn("frame_size = static_cast<size_t>(c) + 3", CPP)
+    def test_protocol_state_is_published_only_on_change(self):
+        self.assertIn("if (this->protocol_state_ == state) return;", CPP)
+        self.assertIn("if (this->state_ != ACState::Initializing)", CNT)
     def test_power_off_mode_fallback_handles_every_climate_mode(self):
         self.assertIn("case climate::CLIMATE_MODE_HEAT_COOL:", CNT)
         self.assertIn("case climate::CLIMATE_MODE_OFF:", CNT)

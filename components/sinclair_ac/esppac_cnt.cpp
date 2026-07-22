@@ -69,10 +69,13 @@ void SinclairACCNT::loop()
     /* if there are no packets for 5 seconds - mark module as not ready */
     if (millis() - this->last_packet_received_ >= protocol::TIME_TIMEOUT_INACTIVE_MS)
     {
-        this->state_ = ACState::Initializing;
-        Component::status_set_error();
-        if (this->communication_sensor_) this->communication_sensor_->publish_state(false);
-        this->publish_protocol_state("timeout");
+        if (this->state_ != ACState::Initializing)
+        {
+            this->state_ = ACState::Initializing;
+            Component::status_set_error();
+            if (this->communication_sensor_) this->communication_sensor_->publish_state(false);
+            this->publish_protocol_state("timeout");
+        }
     }
 }
 
