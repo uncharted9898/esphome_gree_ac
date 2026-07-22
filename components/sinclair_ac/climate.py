@@ -68,6 +68,9 @@ diagnostics_schema = cv.Schema({
     # This value is reset after a successful poll, so it is not a total.
     cv.Optional("consecutive_poll_timeouts"): measurement_diagnostic_sensor_schema,
     cv.Optional("last_poll_response_ms"): measurement_diagnostic_sensor_schema,
+    cv.Optional("min_poll_response_ms"): measurement_diagnostic_sensor_schema,
+    cv.Optional("max_poll_response_ms"): measurement_diagnostic_sensor_schema,
+    cv.Optional("average_poll_response_ms"): measurement_diagnostic_sensor_schema,
     cv.Optional("command_attempts"): diagnostic_sensor_schema,
     cv.Optional("command_response_timeouts"): diagnostic_sensor_schema,
     cv.Optional("command_mismatches"): diagnostic_sensor_schema,
@@ -233,7 +236,7 @@ async def to_code(config):
             "valid_rx_packets": "set_valid_rx_packets_sensor", "valid_tx_packets": "set_valid_tx_packets_sensor",
             "unknown_packets": "set_unknown_packets_sensor", "checksum_failures": "set_checksum_failures_sensor",
             "invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "candidate_telemetry_byte_44_raw": "set_candidate_telemetry_byte_44_raw_sensor", "candidate_byte_44_temperature_hypothesis": "set_candidate_byte_44_temperature_hypothesis_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
-            "polls_sent": "set_polls_sent_sensor", "poll_responses": "set_poll_responses_sensor", "poll_response_timeouts": "set_poll_response_timeouts_sensor", "consecutive_poll_timeouts": "set_consecutive_poll_timeouts_sensor", "last_poll_response_ms": "set_last_poll_response_ms_sensor", "command_attempts": "set_command_attempts_sensor", "command_response_timeouts": "set_command_response_timeouts_sensor", "command_mismatches": "set_command_mismatches_sensor",
+            "polls_sent": "set_polls_sent_sensor", "poll_responses": "set_poll_responses_sensor", "poll_response_timeouts": "set_poll_response_timeouts_sensor", "consecutive_poll_timeouts": "set_consecutive_poll_timeouts_sensor", "last_poll_response_ms": "set_last_poll_response_ms_sensor", "min_poll_response_ms": "set_min_poll_response_ms_sensor", "max_poll_response_ms": "set_max_poll_response_ms_sensor", "average_poll_response_ms": "set_average_poll_response_ms_sensor", "command_attempts": "set_command_attempts_sensor", "command_response_timeouts": "set_command_response_timeouts_sensor", "command_mismatches": "set_command_mismatches_sensor",
             "last_packet_length": "set_last_packet_length_sensor", "last_packet_type": "set_last_packet_type_sensor",
             "fan_speed_field_1_raw": "set_fan_speed_field_1_raw_sensor",
             "fan_speed_field_1_low_3_bits": "set_fan_speed_field_1_low_3_bits_sensor",

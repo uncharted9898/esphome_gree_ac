@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 
 namespace esphome {
@@ -14,10 +15,13 @@ struct RequestLifecycle {
   uint32_t outstanding_request_sent_at{0};
   uint32_t polls_sent{0}, poll_responses{0}, poll_response_timeouts{0};
   uint32_t consecutive_poll_timeouts{0}, last_poll_response_ms{0};
+  uint32_t min_poll_response_ms{0}, max_poll_response_ms{0};
+  uint64_t total_poll_response_ms{0};
   uint32_t command_attempts{0}, command_response_timeouts{0}, command_mismatches{0};
 
   bool may_send() const { return outstanding_request == OutstandingRequest::NONE; }
   void sent(OutstandingRequest request, uint32_t now) {
+    assert(may_send());  // Request ownership is never replaced in flight.
     outstanding_request = request;
     outstanding_request_sent_at = now;
     if (request == OutstandingRequest::POLL) ++polls_sent;
@@ -29,6 +33,9 @@ struct RequestLifecycle {
       ++poll_responses;
       consecutive_poll_timeouts = 0;
       last_poll_response_ms = now - outstanding_request_sent_at;
+      if (poll_responses == 1 || last_poll_response_ms < min_poll_response_ms) min_poll_response_ms = last_poll_response_ms;
+      if (last_poll_response_ms > max_poll_response_ms) max_poll_response_ms = last_poll_response_ms;
+      total_poll_response_ms += last_poll_response_ms;
     }
     outstanding_request = OutstandingRequest::NONE;
     return true;

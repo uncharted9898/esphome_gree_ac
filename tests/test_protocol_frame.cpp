@@ -160,6 +160,34 @@ int main() {
   lifecycle.sent(OutstandingRequest::COMMAND_CLEAR, 2300);
   assert(lifecycle.acknowledge_report(2580));
 
+  // A control arriving during a poll must remain queued.  The scheduler can
+  // only send its apply request after the poll response releases ownership;
+  // the old-state poll report is never a command response or mismatch.
+  RequestLifecycle serialized;
+  uint32_t command_attempts_before = serialized.command_attempts;
+  bool target_control_queued = false;
+  constexpr uint8_t queued_target_field = 0x20;
+  for (int i = 0; i < 3; ++i) {
+    serialized.sent(OutstandingRequest::POLL, 3000 + i * 1000);
+    target_control_queued = true;
+    assert(serialized.outstanding_request == OutstandingRequest::POLL);
+    assert(target_control_queued && queued_target_field == 0x20);
+    assert(serialized.command_attempts == command_attempts_before);
+    assert(serialized.acknowledge_report(3200 + i * 1000));
+    assert(serialized.poll_responses == static_cast<uint32_t>(i + 1));
+    assert(serialized.command_mismatches == 0 && serialized.may_send());
+    serialized.sent(OutstandingRequest::COMMAND_APPLY, 3300 + i * 1000);
+    ++command_attempts_before;
+    assert(serialized.command_attempts == command_attempts_before);
+    assert(serialized.acknowledge_report(3400 + i * 1000));  // target 0x20 -> clear
+    serialized.sent(OutstandingRequest::COMMAND_CLEAR, 3500 + i * 1000);
+    ++command_attempts_before;
+    assert(serialized.acknowledge_report(3600 + i * 1000));  // target 0x20 -> verified
+    assert(serialized.polls_sent - serialized.poll_responses <= 1);
+  }
+  assert(serialized.min_poll_response_ms == 200 && serialized.max_poll_response_ms == 200);
+  assert(serialized.total_poll_response_ms / serialized.poll_responses == 200);
+
   // NoUpdate starts from the 45-byte report baseline and only changes its envelope.
   std::vector<uint8_t> report{0x00,0x00,0x40,0x00,0x90,0x80,0x06,0xC2,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x41,0x00,0x44,0x00,0x00};
   report.resize(45);
