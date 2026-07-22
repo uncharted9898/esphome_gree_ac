@@ -9,7 +9,7 @@ struct ParsedFrame { std::vector<uint8_t> raw; uint8_t declared_length{0}; uint8
 enum class Result { VALID_KNOWN, VALID_UNKNOWN, TOO_SHORT, LENGTH, CHECKSUM };
 inline Result parse(const std::vector<uint8_t> &raw, ParsedFrame &frame) {
  frame = ParsedFrame{}; frame.raw=raw; if(raw.size()<5) return Result::TOO_SHORT;
- frame.declared_length=raw[2]; if(raw[0]!=SYNC||raw[1]!=SYNC||static_cast<size_t>(raw[2]) + 2 != raw.size()) return Result::LENGTH;
+ frame.declared_length=raw[2]; if(raw[0]!=SYNC||raw[1]!=SYNC||static_cast<size_t>(raw[2]) + 3 != raw.size()) return Result::LENGTH;
  frame.command=raw[3]; frame.payload_length=raw.size()-5; frame.received_checksum=raw.back();
  for(size_t i=2;i+1<raw.size();++i) frame.calculated_checksum=static_cast<uint8_t>(frame.calculated_checksum+raw[i]);
  if(frame.calculated_checksum!=frame.received_checksum) return Result::CHECKSUM;

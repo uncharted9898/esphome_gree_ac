@@ -86,9 +86,12 @@ void SinclairAC::read_data()
                         this->serialProcess_.data.assign(1, c);
                     }
                 } else if (this->serialProcess_.data.size() == 2) {
-                    if (c < 3 || c > DATA_MAX - 2) { this->reset_parser(true); break; }
+                    if (c < 3 || c > DATA_MAX - 3) { this->reset_parser(true); break; }
                     this->serialProcess_.data.push_back(c);
-                    this->serialProcess_.frame_size = c + 2;  // complete frame includes sync bytes
+
+                    // LEN counts CMD + payload + checksum. Complete frame also
+                    // includes two sync bytes and the LEN byte.
+                    this->serialProcess_.frame_size = static_cast<size_t>(c) + 3;
                     this->serialProcess_.started_at = millis();
                     this->serialProcess_.state = STATE_RECIEVE;
                 } else {
@@ -130,7 +133,12 @@ void SinclairAC::reset_parser(bool resynchronized) {
 void SinclairAC::set_debug(bool rx, bool tx, bool unknown, bool differences, uint16_t maximum_hex_length) {
     this->log_rx_ = rx; this->log_tx_ = tx; this->log_unknown_ = unknown; this->log_differences_ = differences; this->maximum_hex_length_ = maximum_hex_length;
 }
-void SinclairAC::publish_protocol_state(const char *state) { if (this->protocol_state_sensor_) this->protocol_state_sensor_->publish_state(state); }
+void SinclairAC::publish_protocol_state(const char *state) {
+    if (this->protocol_state_ == state) return;
+
+    this->protocol_state_ = state;
+    if (this->protocol_state_sensor_) this->protocol_state_sensor_->publish_state(state);
+}
 void SinclairAC::record_received_packet(bool known) {
     this->last_packet_received_ = millis(); this->valid_rx_packets_++;
     if (!known) this->unknown_packets_++;

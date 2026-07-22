@@ -166,6 +166,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         // uint32_t last_read_;   // Stores the time at which the last read was done
         uint32_t last_packet_sent_{0};
         uint32_t last_packet_received_{0};
+        std::string protocol_state_;
         bool wait_response_{false};
         ProtocolMode protocol_mode_{ProtocolMode::CONTROL};
         bool transmit_warning_logged_{false};
