@@ -183,6 +183,8 @@ class SinclairACCNT : public SinclairAC {
         uint32_t last_unknown_fan_warning_{0};
         uint32_t last_unknown_fan_signature_{0};
         bool has_unknown_fan_signature_{false};
+        std::vector<uint8_t> last_report_payload_;
+        uint32_t poll_timeouts_{0};
 
         climate::ClimateMode determine_mode();
         const char* determine_fan_mode();

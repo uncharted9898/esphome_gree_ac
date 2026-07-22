@@ -40,6 +40,8 @@ CONF_TRANSMIT_ENABLED = "transmit_enabled"
 CONF_PROTOCOL_MODE = "protocol_mode"
 CONF_DEBUG = "debug"
 CONF_DIAGNOSTICS = "diagnostics"
+CONF_FAN_PROFILE = "fan_profile"
+CONF_TELEMETRY_DISCOVERY = "telemetry_discovery"
 
 diagnostic_sensor_schema = sensor.sensor_schema(
     sensor.Sensor, accuracy_decimals=0, state_class="total_increasing"
@@ -68,7 +70,21 @@ diagnostics_schema = cv.Schema({
     cv.Optional("fan_quiet_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
     cv.Optional("fan_turbo_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
     cv.Optional("fan_decode_status"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("fan_decode_profile"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x31_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x33_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x44_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x40_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_unknown_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
 })
+telemetry_discovery_schema = cv.Schema({
+    cv.Optional("enabled", default=False): cv.boolean,
+    cv.Optional("expose_raw_payload", default=True): cv.boolean,
+    cv.Optional("expose_raw_bytes", default=False): cv.boolean,
+    cv.Optional("log_changes_only", default=True): cv.boolean,
+    cv.Optional("history_depth", default=16): cv.int_range(min=1, max=64),
+})
+
 debug_schema = cv.Schema({
     cv.Optional("log_rx", default=False): cv.boolean,
     cv.Optional("log_tx", default=False): cv.boolean,
@@ -135,6 +151,8 @@ SCHEMA = climate.climate_schema(climate.Climate).extend(
         cv.Optional(CONF_SAVE_SWITCH): switch_schema,
         cv.Optional(CONF_TRANSMIT_ENABLED): cv.boolean,
         cv.Optional(CONF_PROTOCOL_MODE): cv.one_of("receive_only", "poll_only", "control", lower=True),
+        cv.Optional(CONF_FAN_PROFILE, default="auto"): cv.one_of("sinclair_extended", "gree_4_speed", "auto", lower=True),
+        cv.Optional(CONF_TELEMETRY_DISCOVERY, default={}): telemetry_discovery_schema,
         cv.Optional(CONF_DEBUG, default={}): debug_schema,
         cv.Optional(CONF_DIAGNOSTICS): diagnostics_schema,
     }
@@ -170,6 +188,9 @@ async def to_code(config):
     cg.add(var.set_protocol_mode({"receive_only": cg.RawExpression("sinclair_ac::ProtocolMode::RECEIVE_ONLY"), "poll_only": cg.RawExpression("sinclair_ac::ProtocolMode::POLL_ONLY"), "control": cg.RawExpression("sinclair_ac::ProtocolMode::CONTROL")}[config[CONF_PROTOCOL_MODE]]))
     debug = config[CONF_DEBUG]
     cg.add(var.set_debug(debug["log_rx"], debug["log_tx"], debug["log_unknown_packets"], debug["log_packet_differences"], debug["maximum_hex_length"]))
+    cg.add(var.set_fan_profile({"sinclair_extended": cg.RawExpression("sinclair_ac::FanProfile::SINCLAIR_EXTENDED"), "gree_4_speed": cg.RawExpression("sinclair_ac::FanProfile::GREE_4_SPEED"), "auto": cg.RawExpression("sinclair_ac::FanProfile::AUTO")}[config[CONF_FAN_PROFILE]]))
+    discovery = config[CONF_TELEMETRY_DISCOVERY]
+    cg.add(var.set_telemetry_discovery(discovery["enabled"], discovery["expose_raw_payload"], discovery["expose_raw_bytes"], discovery["log_changes_only"], discovery["history_depth"]))
 
     if CONF_DIAGNOSTICS in config:
         for key, method in {
@@ -189,7 +210,7 @@ async def to_code(config):
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await binary_sensor.new_binary_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))
-        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor", "fan_decode_status": "set_fan_decode_status_sensor"}.items():
+        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor", "fan_decode_status": "set_fan_decode_status_sensor", "fan_decode_profile": "set_fan_decode_profile_sensor", "last_0x31_payload": "set_last_0x31_payload_sensor", "last_0x33_payload": "set_last_0x33_payload_sensor", "last_0x44_payload": "set_last_0x44_payload_sensor", "last_0x40_payload": "set_last_0x40_payload_sensor", "last_unknown_payload": "set_last_unknown_payload_sensor"}.items():
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await text_sensor.new_text_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))

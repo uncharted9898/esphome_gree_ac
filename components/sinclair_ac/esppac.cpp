@@ -29,9 +29,14 @@ climate::ClimateTraits SinclairAC::traits()
 
 void SinclairAC::setup()
 {
-    this->set_supported_custom_fan_modes({fan_modes::FAN_AUTO, fan_modes::FAN_QUIET, fan_modes::FAN_LOW,
-                                          fan_modes::FAN_MEDL, fan_modes::FAN_MED, fan_modes::FAN_MEDH,
-                                          fan_modes::FAN_HIGH, fan_modes::FAN_TURBO});
+    if (this->fan_profile_ == FanProfile::GREE_4_SPEED || this->fan_profile_ == FanProfile::AUTO) {
+        this->set_supported_custom_fan_modes({fan_modes::FAN_AUTO, fan_modes::FAN_QUIET, fan_modes::FAN_LOW,
+                                              fan_modes::FAN_MED, fan_modes::FAN_HIGH, fan_modes::FAN_TURBO});
+    } else {
+        this->set_supported_custom_fan_modes({fan_modes::FAN_AUTO, fan_modes::FAN_QUIET, fan_modes::FAN_LOW,
+                                              fan_modes::FAN_MEDL, fan_modes::FAN_MED, fan_modes::FAN_MEDH,
+                                              fan_modes::FAN_HIGH, fan_modes::FAN_TURBO});
+    }
 
   // Initialize times
     this->reset_parser();
@@ -46,6 +51,7 @@ void SinclairAC::setup()
     ESP_LOGI(TAG, "Sinclair AC component v%s starting...", VERSION);
     this->publish_protocol_state("initializing");
     if (this->protocol_mode_sensor_) this->protocol_mode_sensor_->publish_state(this->protocol_mode_name());
+    if (this->fan_decode_profile_sensor_) this->fan_decode_profile_sensor_->publish_state(this->fan_profile_name());
     if (this->receive_only_sensor_) this->receive_only_sensor_->publish_state(this->is_receive_only());
     if (this->poll_only_sensor_) this->poll_only_sensor_->publish_state(this->is_poll_only());
     if (this->communication_sensor_) this->communication_sensor_->publish_state(false);
@@ -130,6 +136,28 @@ void SinclairAC::reset_parser(bool resynchronized) {
     if (resynchronized) this->parser_resyncs_++;
 }
 
+void SinclairAC::set_telemetry_discovery(bool enabled, bool expose_raw_payload, bool expose_raw_bytes, bool log_changes_only, uint8_t history_depth) {
+    this->telemetry_discovery_enabled_ = enabled;
+    this->telemetry_expose_raw_payload_ = expose_raw_payload;
+    this->telemetry_expose_raw_bytes_ = expose_raw_bytes;
+    this->telemetry_log_changes_only_ = log_changes_only;
+    this->telemetry_history_depth_ = history_depth;
+}
+const char *SinclairAC::fan_profile_name() const {
+    switch (this->fan_profile_) { case FanProfile::SINCLAIR_EXTENDED: return "sinclair_extended"; case FanProfile::GREE_4_SPEED: return "gree_4_speed"; default: return "auto"; }
+}
+void SinclairAC::retain_payload(uint8_t command, const std::vector<uint8_t> &payload) {
+    if (!this->telemetry_discovery_enabled_) return;
+    const bool changed = this->last_payloads_[command] != payload;
+    this->last_payloads_[command] = payload;
+    if (this->telemetry_log_changes_only_ && !changed) return;
+    if (this->telemetry_expose_raw_payload_) {
+        const std::string raw = format_hex_pretty(payload);
+        text_sensor::TextSensor *target = command == 0x31 ? this->last_0x31_payload_sensor_ : command == 0x33 ? this->last_0x33_payload_sensor_ : command == 0x44 ? this->last_0x44_payload_sensor_ : command == 0x40 ? this->last_0x40_payload_sensor_ : this->last_unknown_payload_sensor_;
+        if (target != nullptr) target->publish_state(raw);
+    }
+    if (changed) ESP_LOGD(TAG, "Telemetry discovery: cmd=0x%02X payload changed (%u bytes)", command, payload.size());
+}
 void SinclairAC::set_debug(bool rx, bool tx, bool unknown, bool differences, uint16_t maximum_hex_length) {
     this->log_rx_ = rx; this->log_tx_ = tx; this->log_unknown_ = unknown; this->log_differences_ = differences; this->maximum_hex_length_ = maximum_hex_length;
 }

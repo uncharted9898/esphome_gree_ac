@@ -10,6 +10,8 @@ climate:
   - platform: sinclair_ac
     name: Gree Livo poll only
     protocol_mode: poll_only # only no-change polls; HA control calls are ignored
+    fan_profile: gree_4_speed
+    telemetry_discovery: {enabled: true, expose_raw_payload: true, log_changes_only: true, history_depth: 16}
     debug: {log_rx: true, log_tx: true, log_packet_differences: true, maximum_hex_length: 128}
     diagnostics:
       communication: {name: Gree communication}
@@ -25,6 +27,24 @@ climate:
       fan_quiet_raw: {name: Gree fan quiet raw}
       fan_turbo_raw: {name: Gree fan turbo raw}
       fan_decode_status: {name: Gree fan decode status}
+      fan_decode_profile: {name: Gree fan decode profile}
+      last_0x31_payload: {name: Gree last 0x31 payload}
+      last_0x33_payload: {name: Gree last 0x33 payload}
+      last_0x44_payload: {name: Gree last 0x44 payload}
+      last_0x40_payload: {name: Gree last 0x40 payload}
+      last_unknown_payload: {name: Gree last unknown payload}
 wifi: {ssid: !secret wifi_ssid, password: !secret wifi_password}
-api: {}
+api:
+  port: 6053
+  batch_delay: 100ms
+  reboot_timeout: 0s
+  encryption: {key: !secret gree_livo_api_key}
+web_server:
+  port: 80
+  version: 3
+  local: true
+  log: false
+  ota: false
+  include_internal: false
+  auth: {type: digest, username: !secret gree_livo_web_username, password: !secret gree_livo_web_password}
 ota: {platform: esphome, password: !secret ota_password}

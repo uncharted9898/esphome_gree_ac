@@ -15,7 +15,8 @@ class ModeContractTests(unittest.TestCase):
     def test_control_callbacks_are_guarded(self):
         self.assertGreaterEqual(CNT.count("if (!this->can_control()) return;"), 8)
     def test_invalid_or_unknown_do_not_release_response_guard(self):
-        self.assertIn("if (known && this->wait_response_) this->wait_response_ = false;", CNT)
+        self.assertIn("if (this->wait_response_) {\n            this->wait_response_ = false;", CNT)
+        self.assertIn("if (this->update_ == ACUpdate::UpdateStart)", CNT)
         self.assertNotIn("this->wait_response_ = false;\n        /* log", CNT)
     def test_mode_and_diagnostics_schema_accept_documented_keys(self):
         self.assertIn('cv.Optional(CONF_PROTOCOL_MODE)', CLIMATE_PY)
@@ -44,6 +45,20 @@ class ModeContractTests(unittest.TestCase):
         for key in ("fan_speed_field_1_raw", "fan_speed_field_1_low_3_bits", "fan_speed_field_2_raw", "fan_quiet_raw", "fan_turbo_raw", "fan_decode_status"):
             self.assertIn(f'cv.Optional("{key}")', CLIMATE_PY)
         self.assertIn("record_fan_diagnostics", CPP)
+    def test_gree_profile_uses_combined_mode_fan_low_bits(self):
+        self.assertIn("FanProfile::GREE_4_SPEED", CNT)
+        self.assertIn("switch (fanSpeed2)", CNT)
+        self.assertIn('"gree_4_speed:medium"', CNT)
+        self.assertIn("Byte 18=0x08 is not a fan request", CNT)
+    def test_polling_waits_for_response_and_uses_report_baseline(self):
+        self.assertIn("if (this->wait_response_)", CNT)
+        self.assertIn("Poll/command response timed out", CNT)
+        self.assertIn("this->last_report_payload_ = payload", CNT)
+        self.assertIn("std::copy_n(this->last_report_payload_", CNT)
+    def test_discovery_schema_retains_known_and_unknown_raw_payloads(self):
+        for key in ("fan_profile", "telemetry_discovery", "last_0x31_payload", "last_0x33_payload", "last_0x44_payload", "last_0x40_payload", "last_unknown_payload"):
+            self.assertIn(key, CLIMATE_PY)
+        self.assertIn("void SinclairAC::retain_payload", CPP)
     def test_power_off_mode_fallback_handles_every_climate_mode(self):
         self.assertIn("case climate::CLIMATE_MODE_HEAT_COOL:", CNT)
         self.assertIn("case climate::CLIMATE_MODE_OFF:", CNT)
