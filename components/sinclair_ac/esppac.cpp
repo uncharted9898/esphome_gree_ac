@@ -178,7 +178,9 @@ void SinclairAC::capture_packet(bool transmitted, uint8_t command, const std::ve
     CaptureRecord record;
     record.timestamp_ms = millis(); record.transmitted = transmitted; record.command = command; record.payload = payload;
     record.decoded_mode = static_cast<uint8_t>(this->mode); record.target_temperature = this->target_temperature;
-    record.indoor_temperature = this->current_temperature; record.requested_fan = this->has_custom_fan_mode() ? this->get_custom_fan_mode() : "";
+    record.indoor_temperature = this->current_temperature;
+    record.requested_fan.clear();
+    if (this->has_custom_fan_mode()) record.requested_fan = this->get_custom_fan_mode();
     this->telemetry_capture_.capture(record);
 }
 
