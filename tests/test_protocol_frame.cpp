@@ -1,6 +1,8 @@
 #include "../components/sinclair_ac/protocol_frame.h"
+#include "../components/sinclair_ac/protocol_state.h"
 
 #include <cassert>
+#include <string>
 
 using namespace sinclair_ac_protocol;
 
@@ -58,5 +60,13 @@ int main() {
   auto length = known;
   length[2]--;
   assert(parse(length, parsed) == Result::LENGTH);
+
+  // Poll-only startup waits for its first response, while healthy routine polls stay ready.
+  assert(std::string(protocol_state_after_transmit(ACUpdate::NoUpdate, ACState::Initializing)) == "waiting_for_first_poll_response");
+  assert(protocol_state_after_transmit(ACUpdate::NoUpdate, ACState::Ready) == nullptr);
+
+  // Control packets retain the explicit apply and clear transaction states.
+  assert(std::string(protocol_state_after_transmit(ACUpdate::UpdateStart, ACState::Ready)) == "command_apply_waiting");
+  assert(std::string(protocol_state_after_transmit(ACUpdate::UpdateClear, ACState::Ready)) == "command_clear_waiting");
   return 0;
 }

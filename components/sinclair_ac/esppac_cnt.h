@@ -2,21 +2,11 @@
 #include "esphome/components/climate/climate.h"
 #include "esphome/components/climate/climate_mode.h"
 #include "esppac.h"
+#include "protocol_state.h"
 
 namespace esphome {
 namespace sinclair_ac {
 namespace CNT {
-
-enum class ACState {
-    Initializing, /* no data for quite a long time */
-    Ready,        /* AC talking to us */
-};
-
-enum class ACUpdate {
-    NoUpdate,    /* no parameters changed - normally process data, static flag set */
-    UpdateStart, /* start update with 0xAF and cleared static flag */
-    UpdateClear, /* update without 0xAF and cleared static flag */
-};
 
 namespace protocol {
     /* SYNC */

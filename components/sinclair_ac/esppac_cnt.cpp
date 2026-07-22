@@ -570,9 +570,12 @@ void SinclairACCNT::send_packet()
     this->record_transmitted_packet(packet);
     log_packet(packet, true);            /* Log uart for debug purposes */
 
-    if (this->update_ == ACUpdate::UpdateStart) this->publish_protocol_state("command_apply_waiting");
-    else if (this->update_ == ACUpdate::UpdateClear) this->publish_protocol_state("command_clear_waiting");
-    else this->publish_protocol_state("waiting_for_poll_response");
+    const char *protocol_state = protocol_state_after_transmit(this->update_, this->state_);
+    if (protocol_state != nullptr) {
+        this->publish_protocol_state(protocol_state);
+    }
+
+    // Normal polling while Ready leaves protocol_state as "ready".
 }
 
 /*
