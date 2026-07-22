@@ -3,6 +3,7 @@
 #include "protocol_frame.h"
 
 #include <cassert>
+#include <cmath>
 
 namespace esphome {
 namespace sinclair_ac {
@@ -27,6 +28,8 @@ void SinclairACCNT::begin_pending_control()
     pending.retries = 0;
     pending.mode = this->mode;
     pending.target_temperature = this->target_temperature;
+    pending.target_temperature_requested = this->target_temperature;
+    pending.target_temperature_field = encode_target_temperature_field(this->target_temperature);
     pending.custom_fan_mode = fan_modes::FAN_AUTO;
     if (this->has_custom_fan_mode()) {
         pending.custom_fan_mode = this->get_custom_fan_mode();
@@ -44,19 +47,36 @@ void SinclairACCNT::restart_pending_control(uint16_t fields)
     this->begin_pending_control();
     this->pending_control_.requested_fields |= fields;
     this->pending_control_.retries = 0;
-    this->update_ = ACUpdate::UpdateStart;
-    this->wait_response_ = false;
-    this->request_lifecycle_.outstanding_request = OutstandingRequest::NONE;
+    this->control_send_queued_ = true;
+    if (this->request_lifecycle_.outstanding_request == OutstandingRequest::POLL) {
+        this->publish_protocol_state("command_queued_waiting_for_poll");
+    }
 }
 
-bool SinclairACCNT::pending_control_matches_report(const std::vector<uint8_t> &payload) const
+void SinclairACCNT::start_queued_control_if_ready()
 {
-    (void) payload;
-    const auto &pending = this->pending_control_;
+    if (!this->control_send_queued_ || this->active_control_.active || !this->request_lifecycle_.may_send()) return;
+    this->active_control_ = this->pending_control_;
+    this->pending_control_.active = false;
+    this->control_send_queued_ = false;
+    this->update_ = ACUpdate::UpdateStart;
+}
+
+bool SinclairACCNT::active_control_matches_report(const std::vector<uint8_t> &payload) const
+{
+    const auto &pending = this->active_control_;
     if (!pending.active) return true;
     if ((pending.requested_fields & PENDING_MODE) &&
         (this->mode != pending.mode || (pending.mode != climate::CLIMATE_MODE_OFF && !this->power_internal_))) return false;
-    if ((pending.requested_fields & PENDING_TARGET_TEMPERATURE) && this->target_temperature != pending.target_temperature) return false;
+    if (pending.requested_fields & PENDING_TARGET_TEMPERATURE) {
+        const uint8_t observed = payload[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK;
+        if (observed != pending.target_temperature_field) {
+            ESP_LOGD(TAG, "Target mismatch: requested_original=%.3fC normalized=%.1fC expected_field=0x%02X observed_field=0x%02X decoded_observed=%.1fC",
+                     pending.target_temperature_requested, pending.target_temperature,
+                     pending.target_temperature_field, observed, decode_target_temperature_field(observed));
+            return false;
+        }
+    }
     if ((pending.requested_fields & PENDING_FAN) && (!this->has_custom_fan_mode() || this->get_custom_fan_mode() != pending.custom_fan_mode)) return false;
     if ((pending.requested_fields & PENDING_VERTICAL_SWING) && this->vertical_swing_state_ != pending.vertical_swing) return false;
     if ((pending.requested_fields & PENDING_HORIZONTAL_SWING) && this->horizontal_swing_state_ != pending.horizontal_swing) return false;
@@ -69,48 +89,59 @@ bool SinclairACCNT::pending_control_matches_report(const std::vector<uint8_t> &p
     return true;
 }
 
-void SinclairACCNT::handle_pending_control_response(const std::vector<uint8_t> &payload)
+void SinclairACCNT::handle_active_control_response(const std::vector<uint8_t> &payload)
 {
     const auto request = this->request_lifecycle_.outstanding_request;
     if (request == OutstandingRequest::POLL) {
         this->request_lifecycle_.acknowledge_report(millis());
         this->wait_response_ = false;  // retained solely for compatibility with base setup.
+        if (this->request_lifecycle_.last_poll_response_ms > protocol::TIME_REFRESH_PERIOD_MS * 3) {
+            ESP_LOGW(TAG, "Abnormal poll response latency: %ums", this->request_lifecycle_.last_poll_response_ms);
+            this->publish_request_diagnostics(true);
+        }
         return;
     }
     if (request != OutstandingRequest::COMMAND_APPLY && request != OutstandingRequest::COMMAND_CLEAR) return;
     this->request_lifecycle_.acknowledge_report(millis());
     this->wait_response_ = false;
-    const bool matches = this->pending_control_matches_report(payload);
+    const bool matches = this->active_control_matches_report(payload);
     if (!matches) {
         ++this->request_lifecycle_.command_mismatches;
-        if (++this->pending_control_.retries >= 3) {
-            this->pending_control_.active = false;
+        if (++this->active_control_.retries >= 3) {
+            this->active_control_.active = false;
             this->update_ = ACUpdate::NoUpdate;
             this->last_command_result_ = "failed";
             this->last_command_failure_reason_ = "mismatch";
             this->publish_protocol_state("command_failed_mismatch");
+            this->publish_request_diagnostics(true);
             return;
         }
         this->update_ = ACUpdate::UpdateStart;
         this->last_command_result_ = "retrying";
         this->publish_protocol_state("command_mismatch_retry");
+        this->publish_request_diagnostics(true);
         return;
     }
     if (request == OutstandingRequest::COMMAND_APPLY) {
         this->update_ = ACUpdate::UpdateClear;
         this->last_command_result_ = "clear_pending";
         this->publish_protocol_state("command_clear_pending");
+        this->publish_request_diagnostics(true);
     } else {
-        this->pending_control_.active = false;
+        this->active_control_.active = false;
         this->update_ = ACUpdate::NoUpdate;
         this->last_command_result_ = "verified";
         this->last_command_failure_reason_ = "none";
         this->publish_protocol_state("command_verified");
+        this->publish_request_diagnostics(true);
     }
 }
 
 void SinclairACCNT::publish_request_diagnostics(bool force)
 {
+    constexpr uint32_t DIAGNOSTICS_PUBLISH_INTERVAL_MS = 5000;
+    if (!force && this->has_published_request_diagnostics_ &&
+        millis() - this->last_request_diagnostics_publish_ < DIAGNOSTICS_PUBLISH_INTERVAL_MS) return;
     const auto &d = this->request_lifecycle_;
     const bool initial = !this->has_published_request_diagnostics_;
     if (this->polls_sent_sensor_ && (force || initial || d.polls_sent != this->published_polls_sent_)) this->polls_sent_sensor_->publish_state(d.polls_sent);
@@ -118,6 +149,10 @@ void SinclairACCNT::publish_request_diagnostics(bool force)
     if (this->poll_response_timeouts_sensor_ && (force || initial || d.poll_response_timeouts != this->published_poll_response_timeouts_)) this->poll_response_timeouts_sensor_->publish_state(d.poll_response_timeouts);
     if (this->consecutive_poll_timeouts_sensor_ && (force || initial || d.consecutive_poll_timeouts != this->published_consecutive_poll_timeouts_)) this->consecutive_poll_timeouts_sensor_->publish_state(d.consecutive_poll_timeouts);
     if (this->last_poll_response_ms_sensor_ && (force || initial || d.last_poll_response_ms != this->published_last_poll_response_ms_)) this->last_poll_response_ms_sensor_->publish_state(d.last_poll_response_ms);
+    if (this->min_poll_response_ms_sensor_ && (force || initial || d.min_poll_response_ms != this->published_min_poll_response_ms_)) this->min_poll_response_ms_sensor_->publish_state(d.min_poll_response_ms);
+    if (this->max_poll_response_ms_sensor_ && (force || initial || d.max_poll_response_ms != this->published_max_poll_response_ms_)) this->max_poll_response_ms_sensor_->publish_state(d.max_poll_response_ms);
+    const float average_poll_response_ms = d.poll_responses == 0 ? 0.0f : static_cast<float>(d.total_poll_response_ms) / d.poll_responses;
+    if (this->average_poll_response_ms_sensor_ && (force || initial || average_poll_response_ms != this->published_average_poll_response_ms_)) this->average_poll_response_ms_sensor_->publish_state(average_poll_response_ms);
     if (this->command_attempts_sensor_ && (force || initial || d.command_attempts != this->published_command_attempts_)) this->command_attempts_sensor_->publish_state(d.command_attempts);
     if (this->command_response_timeouts_sensor_ && (force || initial || d.command_response_timeouts != this->published_command_response_timeouts_)) this->command_response_timeouts_sensor_->publish_state(d.command_response_timeouts);
     if (this->command_mismatches_sensor_ && (force || initial || d.command_mismatches != this->published_command_mismatches_)) this->command_mismatches_sensor_->publish_state(d.command_mismatches);
@@ -128,6 +163,9 @@ void SinclairACCNT::publish_request_diagnostics(bool force)
     this->published_poll_response_timeouts_ = d.poll_response_timeouts;
     this->published_consecutive_poll_timeouts_ = d.consecutive_poll_timeouts;
     this->published_last_poll_response_ms_ = d.last_poll_response_ms;
+    this->published_min_poll_response_ms_ = d.min_poll_response_ms;
+    this->published_max_poll_response_ms_ = d.max_poll_response_ms;
+    this->published_average_poll_response_ms_ = average_poll_response_ms;
     this->published_command_attempts_ = d.command_attempts;
     this->published_command_response_timeouts_ = d.command_response_timeouts;
     this->published_command_mismatches_ = d.command_mismatches;
@@ -178,15 +216,14 @@ void SinclairACCNT::loop()
 
         handle_packet(); /* Reports are acknowledgements as well as state updates. */
         const std::vector<uint8_t> payload(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1);
-        this->handle_pending_control_response(payload); /* Verify after decoded state has been updated. */
-        this->publish_request_diagnostics();
+        this->handle_active_control_response(payload); /* Verify after decoded state has been updated. */
         }
         this->reset_parser();
     }  // closes validation else
     }  // closes: if (serialProcess_.state == STATE_COMPLETE)
 
     this->publish_diagnostics();
-    if (millis() - this->last_request_diagnostics_publish_ >= 60000) this->publish_request_diagnostics(true);
+    this->publish_request_diagnostics();
     /* we will send a packet to the AC as a reponse to indicate changes */
     send_packet();
 
@@ -199,6 +236,7 @@ void SinclairACCNT::loop()
             Component::status_set_error();
             if (this->communication_sensor_) this->communication_sensor_->publish_state(false);
             this->publish_protocol_state("timeout");
+            this->publish_request_diagnostics(true);
         }
     }
 }
@@ -227,15 +265,38 @@ void SinclairACCNT::control(const climate::ClimateCall &call)
     if (call.get_target_temperature().has_value())
     {
         ESP_LOGV(TAG, "Requested target teperature change");
-        this->restart_pending_control(PENDING_TARGET_TEMPERATURE);
-        this->pending_control_.target_temperature = *call.get_target_temperature();
-        if (this->pending_control_.target_temperature < MIN_TEMPERATURE)
-        {
-            this->pending_control_.target_temperature = MIN_TEMPERATURE;
-        }
-        else if (this->pending_control_.target_temperature > MAX_TEMPERATURE)
-        {
-            this->pending_control_.target_temperature = MAX_TEMPERATURE;
+        const float requested = *call.get_target_temperature();
+        const float normalized = normalize_target_temperature(requested);
+        if (!std::isfinite(normalized)) {
+            ESP_LOGW(TAG, "Ignoring non-finite target temperature request");
+        } else {
+            const uint8_t field = encode_target_temperature_field(normalized);
+            if (this->active_control_.active &&
+                (this->active_control_.requested_fields & PENDING_TARGET_TEMPERATURE) &&
+                this->active_control_.target_temperature_field == field) {
+                ESP_LOGD(TAG, "Target request coalesced with active command: requested=%.3fC normalized=%.1fC field=0x%02X", requested, normalized, field);
+            } else if (this->pending_control_.active &&
+                (this->pending_control_.requested_fields & PENDING_TARGET_TEMPERATURE) &&
+                this->pending_control_.target_temperature_field == field) {
+                ESP_LOGD(TAG, "Target request coalesced: requested=%.3fC normalized=%.1fC field=0x%02X", requested, normalized, field);
+            } else if (!this->pending_control_.active && !this->active_control_.active &&
+                       this->last_report_payload_.size() > protocol::REPORT_TEMP_SET_BYTE &&
+                       (this->last_report_payload_[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK) == field) {
+                this->update_target_temperature(normalized);
+                this->publish_state();
+                this->last_command_result_ = "already_matched";
+                this->last_command_failure_reason_ = "none";
+                this->update_ = ACUpdate::NoUpdate;
+                ESP_LOGD(TAG, "Target request already matched: requested=%.3fC normalized=%.1fC field=0x%02X", requested, normalized, field);
+                this->publish_protocol_state("ready");
+                this->publish_request_diagnostics(true);
+            } else {
+                this->restart_pending_control(PENDING_TARGET_TEMPERATURE);
+                this->pending_control_.target_temperature_requested = requested;
+                this->pending_control_.target_temperature = normalized;
+                this->pending_control_.target_temperature_field = field;
+                ESP_LOGD(TAG, "Target request: requested=%.3fC normalized=%.1fC field=0x%02X", requested, normalized, field);
+            }
         }
     }
 
@@ -322,8 +383,8 @@ std::vector<uint8_t> SinclairACCNT::build_command_packet(ACUpdate update) const
 
 void SinclairACCNT::apply_requested_field_patches(std::vector<uint8_t> &packet) const
 {
-    const auto fields = this->pending_control_.requested_fields;
-    if (!this->pending_control_.active || fields == 0) return;
+    const auto fields = this->active_control_.requested_fields;
+    if (!this->active_control_.active || fields == 0) return;
     const auto put = [&packet](size_t index, uint8_t mask, uint8_t value) {
         packet[index] = (packet[index] & ~mask) | (value & mask);
     };
@@ -331,7 +392,7 @@ void SinclairACCNT::apply_requested_field_patches(std::vector<uint8_t> &packet) 
     if (fields & PENDING_MODE) {
         uint8_t mode = protocol::REPORT_MODE_AUTO;
         bool power = true;
-        switch (this->pending_control_.mode) {
+        switch (this->active_control_.mode) {
             case climate::CLIMATE_MODE_COOL: mode = protocol::REPORT_MODE_COOL; break;
             case climate::CLIMATE_MODE_DRY: mode = protocol::REPORT_MODE_DRY; break;
             case climate::CLIMATE_MODE_FAN_ONLY: mode = protocol::REPORT_MODE_FAN; break;
@@ -343,13 +404,12 @@ void SinclairACCNT::apply_requested_field_patches(std::vector<uint8_t> &packet) 
             (power ? protocol::REPORT_PWR_MASK : 0) | (mode << protocol::REPORT_MODE_POS));
     }
     if (fields & PENDING_TARGET_TEMPERATURE) {
-        const uint8_t temp = (static_cast<uint8_t>(this->pending_control_.target_temperature) - protocol::REPORT_TEMP_SET_OFF) << protocol::REPORT_TEMP_SET_POS;
-        put(protocol::REPORT_TEMP_SET_BYTE, protocol::REPORT_TEMP_SET_MASK, temp);
+        put(protocol::REPORT_TEMP_SET_BYTE, protocol::REPORT_TEMP_SET_MASK, this->active_control_.target_temperature_field);
     }
     if (fields & PENDING_FAN) {
         uint8_t speed1 = 0, speed2 = 0;
         bool quiet = false, turbo = false;
-        const auto &fan = this->pending_control_.custom_fan_mode;
+        const auto &fan = this->active_control_.custom_fan_mode;
         if (fan == fan_modes::FAN_LOW) { speed1 = 1; speed2 = 1; }
         else if (fan == fan_modes::FAN_QUIET) { speed1 = 1; speed2 = 1; quiet = true; }
         else if (fan == fan_modes::FAN_MEDL) { speed1 = 2; speed2 = 2; }
@@ -366,7 +426,7 @@ void SinclairACCNT::apply_requested_field_patches(std::vector<uint8_t> &packet) 
         put(protocol::REPORT_FAN_TURBO_BYTE, protocol::REPORT_FAN_TURBO_MASK, turbo ? protocol::REPORT_FAN_TURBO_MASK : 0);
     }
     const auto vertical_value = [this]() {
-        const auto &v = this->pending_control_.vertical_swing;
+        const auto &v = this->active_control_.vertical_swing;
         if (v == vertical_swing_options::FULL) return protocol::REPORT_VSWING_FULL;
         if (v == vertical_swing_options::DOWN) return protocol::REPORT_VSWING_DOWN;
         if (v == vertical_swing_options::MIDD) return protocol::REPORT_VSWING_MIDD;
@@ -381,7 +441,7 @@ void SinclairACCNT::apply_requested_field_patches(std::vector<uint8_t> &packet) 
         return protocol::REPORT_VSWING_OFF;
     };
     const auto horizontal_value = [this]() {
-        const auto &v = this->pending_control_.horizontal_swing;
+        const auto &v = this->active_control_.horizontal_swing;
         if (v == horizontal_swing_options::FULL) return protocol::REPORT_HSWING_FULL;
         if (v == horizontal_swing_options::CLEFT) return protocol::REPORT_HSWING_CLEFT;
         if (v == horizontal_swing_options::CMIDL) return protocol::REPORT_HSWING_CMIDL;
@@ -394,8 +454,8 @@ void SinclairACCNT::apply_requested_field_patches(std::vector<uint8_t> &packet) 
     if (fields & PENDING_HORIZONTAL_SWING) put(protocol::REPORT_HSWING_BYTE, protocol::REPORT_HSWING_MASK, horizontal_value() << protocol::REPORT_HSWING_POS);
     if (fields & PENDING_DISPLAY) {
         uint8_t mode = (packet[protocol::REPORT_DISP_MODE_BYTE] & protocol::REPORT_DISP_MODE_MASK) >> protocol::REPORT_DISP_MODE_POS;
-        bool power = this->pending_control_.display_mode != display_options::OFF;
-        const auto &display = this->pending_control_.display_mode;
+        bool power = this->active_control_.display_mode != display_options::OFF;
+        const auto &display = this->active_control_.display_mode;
         if (display == display_options::AUTO) mode = protocol::REPORT_DISP_MODE_AUTO;
         else if (display == display_options::SET) mode = protocol::REPORT_DISP_MODE_SET;
         else if (display == display_options::ACT) mode = protocol::REPORT_DISP_MODE_ACT;
@@ -404,15 +464,15 @@ void SinclairACCNT::apply_requested_field_patches(std::vector<uint8_t> &packet) 
         put(protocol::REPORT_DISP_ON_BYTE, protocol::REPORT_DISP_ON_MASK, power ? protocol::REPORT_DISP_ON_MASK : 0);
     }
     if (fields & PENDING_DISPLAY_UNIT) put(protocol::REPORT_DISP_F_BYTE, protocol::REPORT_DISP_F_MASK,
-                                            this->pending_control_.display_unit == display_unit_options::DEGF ? protocol::REPORT_DISP_F_MASK : 0);
+                                            this->active_control_.display_unit == display_unit_options::DEGF ? protocol::REPORT_DISP_F_MASK : 0);
     if (fields & PENDING_PLASMA) {
-        const uint8_t value = this->pending_control_.plasma ? 0xFF : 0;
+        const uint8_t value = this->active_control_.plasma ? 0xFF : 0;
         put(protocol::REPORT_PLASMA1_BYTE, protocol::REPORT_PLASMA1_MASK, value);
         put(protocol::REPORT_PLASMA2_BYTE, protocol::REPORT_PLASMA2_MASK, value);
     }
-    if (fields & PENDING_SLEEP) put(protocol::REPORT_SLEEP_BYTE, protocol::REPORT_SLEEP_MASK, this->pending_control_.sleep ? protocol::REPORT_SLEEP_MASK : 0);
-    if (fields & PENDING_XFAN) put(protocol::REPORT_XFAN_BYTE, protocol::REPORT_XFAN_MASK, this->pending_control_.xfan ? protocol::REPORT_XFAN_MASK : 0);
-    if (fields & PENDING_SAVE) put(protocol::REPORT_SAVE_BYTE, protocol::REPORT_SAVE_MASK, this->pending_control_.save ? protocol::REPORT_SAVE_MASK : 0);
+    if (fields & PENDING_SLEEP) put(protocol::REPORT_SLEEP_BYTE, protocol::REPORT_SLEEP_MASK, this->active_control_.sleep ? protocol::REPORT_SLEEP_MASK : 0);
+    if (fields & PENDING_XFAN) put(protocol::REPORT_XFAN_BYTE, protocol::REPORT_XFAN_MASK, this->active_control_.xfan ? protocol::REPORT_XFAN_MASK : 0);
+    if (fields & PENDING_SAVE) put(protocol::REPORT_SAVE_BYTE, protocol::REPORT_SAVE_MASK, this->active_control_.save ? protocol::REPORT_SAVE_MASK : 0);
 }
 
 uint8_t SinclairACCNT::allowed_command_mask(size_t index, uint16_t fields, bool gree) const
@@ -449,7 +509,7 @@ uint8_t SinclairACCNT::allowed_envelope_mask(size_t index, ACUpdate update) cons
 void SinclairACCNT::verify_packet_changes(const std::vector<uint8_t> &packet, ACUpdate update) const
 {
     if (this->last_report_payload_.empty()) return;
-    const uint16_t fields = update == ACUpdate::NoUpdate ? 0 : this->pending_control_.requested_fields;
+    const uint16_t fields = update == ACUpdate::NoUpdate ? 0 : this->active_control_.requested_fields;
     for (size_t i = 0; i < packet.size() && i < this->last_report_payload_.size(); ++i) {
         const uint8_t allowed = this->allowed_envelope_mask(i, update) | this->allowed_command_mask(i, fields, this->uses_gree_fan_layout());
         const uint8_t unexpected = (packet[i] ^ this->last_report_payload_[i]) & ~allowed;
@@ -465,18 +525,20 @@ void SinclairACCNT::send_packet()
     if (expired != OutstandingRequest::NONE) {
         this->wait_response_ = false;
         if (expired == OutstandingRequest::POLL) { ESP_LOGW(TAG, "Poll response timed out"); this->publish_protocol_state("response_timeout"); }
-        else if (++this->pending_control_.retries >= 3) { this->pending_control_.active = false; this->update_ = ACUpdate::NoUpdate; this->last_command_result_ = "failed"; this->last_command_failure_reason_ = "timeout"; this->publish_protocol_state("command_failed_timeout"); }
+        else if (++this->active_control_.retries >= 3) { this->active_control_.active = false; this->update_ = ACUpdate::NoUpdate; this->last_command_result_ = "failed"; this->last_command_failure_reason_ = "timeout"; this->publish_protocol_state("command_failed_timeout"); }
         else { this->update_ = expired == OutstandingRequest::COMMAND_CLEAR ? ACUpdate::UpdateClear : ACUpdate::UpdateStart; this->last_command_result_ = "retrying"; }
-        this->publish_request_diagnostics();
+        this->publish_request_diagnostics(true);
     }
     if (!this->request_lifecycle_.may_send() || millis() - this->last_packet_sent_ < protocol::TIME_REFRESH_PERIOD_MS) return;
+
+    this->start_queued_control_if_ready();
 
     const ACUpdate update = this->update_;
     std::vector<uint8_t> packet = update == ACUpdate::NoUpdate ? this->build_poll_packet() : this->build_command_packet(update);
     this->verify_packet_changes(packet, update);
     if (update == ACUpdate::NoUpdate) this->verify_no_change_packet(packet);
     else {
-        ESP_LOGD(TAG, "Command build: fields=0x%03X envelope=%s", this->pending_control_.requested_fields, update == ACUpdate::UpdateStart ? "apply" : "clear");
+        ESP_LOGD(TAG, "Command build: fields=0x%03X envelope=%s", this->active_control_.requested_fields, update == ACUpdate::UpdateStart ? "apply" : "clear");
         for (size_t i = 0; i < packet.size() && i < this->last_report_payload_.size(); ++i) if (packet[i] != this->last_report_payload_[i]) ESP_LOGD(TAG, "TX build changed payload[%u]: 0x%02X -> 0x%02X", static_cast<unsigned>(i), this->last_report_payload_[i], packet[i]);
     }
 
@@ -490,7 +552,6 @@ void SinclairACCNT::send_packet()
     this->last_packet_sent_ = millis();
     const OutstandingRequest request = update == ACUpdate::NoUpdate ? OutstandingRequest::POLL : update == ACUpdate::UpdateStart ? OutstandingRequest::COMMAND_APPLY : OutstandingRequest::COMMAND_CLEAR;
     this->request_lifecycle_.sent(request, this->last_packet_sent_);
-    this->publish_request_diagnostics();
     this->wait_response_ = true;
     write_array(packet);
     this->record_transmitted_packet(packet);
@@ -607,8 +668,7 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
     }
     this->set_custom_fan_mode_(newFanMode);
     
-    float newTargetTemperature = (float)((((*this->report_payload_)[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK) >> protocol::REPORT_TEMP_SET_POS)
-        + protocol::REPORT_TEMP_SET_OFF);
+    float newTargetTemperature = decode_target_temperature_field((*this->report_payload_)[protocol::REPORT_TEMP_SET_BYTE]);
     if (this->target_temperature != newTargetTemperature) hasChanged = true;
     this->update_target_temperature(newTargetTemperature);
     

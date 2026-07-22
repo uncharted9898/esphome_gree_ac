@@ -4,6 +4,7 @@
 #include "esppac.h"
 #include "protocol_state.h"
 #include "request_lifecycle.h"
+#include "target_temperature.h"
 
 namespace esphome {
 namespace sinclair_ac {
@@ -163,6 +164,9 @@ class SinclairACCNT : public SinclairAC {
         void set_poll_response_timeouts_sensor(sensor::Sensor *s) { poll_response_timeouts_sensor_ = s; }
         void set_consecutive_poll_timeouts_sensor(sensor::Sensor *s) { consecutive_poll_timeouts_sensor_ = s; }
         void set_last_poll_response_ms_sensor(sensor::Sensor *s) { last_poll_response_ms_sensor_ = s; }
+        void set_min_poll_response_ms_sensor(sensor::Sensor *s) { min_poll_response_ms_sensor_ = s; }
+        void set_max_poll_response_ms_sensor(sensor::Sensor *s) { max_poll_response_ms_sensor_ = s; }
+        void set_average_poll_response_ms_sensor(sensor::Sensor *s) { average_poll_response_ms_sensor_ = s; }
         void set_command_attempts_sensor(sensor::Sensor *s) { command_attempts_sensor_ = s; }
         void set_command_response_timeouts_sensor(sensor::Sensor *s) { command_response_timeouts_sensor_ = s; }
         void set_command_mismatches_sensor(sensor::Sensor *s) { command_mismatches_sensor_ = s; }
@@ -182,6 +186,8 @@ class SinclairACCNT : public SinclairAC {
             uint16_t requested_fields{0};
             climate::ClimateMode mode{climate::CLIMATE_MODE_OFF};
             float target_temperature{MIN_TEMPERATURE};
+            float target_temperature_requested{MIN_TEMPERATURE};
+            uint8_t target_temperature_field{0};
             std::string custom_fan_mode{fan_modes::FAN_AUTO};
             std::string vertical_swing, horizontal_swing, display_mode, display_unit;
             bool plasma{false}, sleep{false}, xfan{false}, save{false};
@@ -189,7 +195,12 @@ class SinclairACCNT : public SinclairAC {
         };
         ACState state_ = ACState::Initializing; /* Stores if the AC is responsive or not */
         ACUpdate update_ = ACUpdate::NoUpdate;  /* Stores if we need tu send update to AC or no */
+        // Requests are accumulated here while an outstanding UART request or
+        // command transaction owns the wire.  The scheduler snapshots this
+        // state into active_control_ only when it sends COMMAND_APPLY.
         PendingControlState pending_control_;
+        PendingControlState active_control_;
+        bool control_send_queued_{false};
         RequestLifecycle request_lifecycle_;
 
         climate::ClimateMode mode_internal_{climate::CLIMATE_MODE_OFF};
@@ -209,8 +220,9 @@ class SinclairACCNT : public SinclairAC {
         void verify_no_change_packet(const std::vector<uint8_t> &packet) const;
         void begin_pending_control();
         void restart_pending_control(uint16_t fields);
-        bool pending_control_matches_report(const std::vector<uint8_t> &payload) const;
-        void handle_pending_control_response(const std::vector<uint8_t> &payload);
+        bool active_control_matches_report(const std::vector<uint8_t> &payload) const;
+        void handle_active_control_response(const std::vector<uint8_t> &payload);
+        void start_queued_control_if_ready();
 
         void send_packet();
 
@@ -229,13 +241,14 @@ class SinclairACCNT : public SinclairAC {
         bool has_published_request_diagnostics_{false};
         uint32_t last_request_diagnostics_publish_{0};
         uint32_t published_polls_sent_{0}, published_poll_responses_{0}, published_poll_response_timeouts_{0};
-        uint32_t published_consecutive_poll_timeouts_{0}, published_last_poll_response_ms_{0};
+        uint32_t published_consecutive_poll_timeouts_{0}, published_last_poll_response_ms_{0}, published_min_poll_response_ms_{0}, published_max_poll_response_ms_{0};
+        float published_average_poll_response_ms_{0};
         uint32_t published_command_attempts_{0}, published_command_response_timeouts_{0}, published_command_mismatches_{0};
         std::string published_last_command_result_, published_last_command_failure_reason_;
         bool has_published_candidate_telemetry_byte_44_{false};
         uint8_t published_candidate_telemetry_byte_44_{0};
         uint32_t last_candidate_telemetry_byte_44_publish_{0};
-        sensor::Sensor *polls_sent_sensor_{nullptr}, *poll_responses_sensor_{nullptr}, *poll_response_timeouts_sensor_{nullptr}, *consecutive_poll_timeouts_sensor_{nullptr}, *last_poll_response_ms_sensor_{nullptr}, *command_attempts_sensor_{nullptr}, *command_response_timeouts_sensor_{nullptr}, *command_mismatches_sensor_{nullptr};
+        sensor::Sensor *polls_sent_sensor_{nullptr}, *poll_responses_sensor_{nullptr}, *poll_response_timeouts_sensor_{nullptr}, *consecutive_poll_timeouts_sensor_{nullptr}, *last_poll_response_ms_sensor_{nullptr}, *min_poll_response_ms_sensor_{nullptr}, *max_poll_response_ms_sensor_{nullptr}, *average_poll_response_ms_sensor_{nullptr}, *command_attempts_sensor_{nullptr}, *command_response_timeouts_sensor_{nullptr}, *command_mismatches_sensor_{nullptr};
         text_sensor::TextSensor *last_command_result_sensor_{nullptr}, *last_command_failure_reason_sensor_{nullptr};
 
         void publish_request_diagnostics(bool force = false);

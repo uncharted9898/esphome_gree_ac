@@ -2,6 +2,7 @@
 #include "../components/sinclair_ac/protocol_state.h"
 #include "../components/sinclair_ac/request_lifecycle.h"
 #include "../components/sinclair_ac/telemetry_discovery.h"
+#include "../components/sinclair_ac/target_temperature.h"
 
 #include <cassert>
 #include <string>
@@ -12,6 +13,9 @@ using esphome::sinclair_ac::RequestLifecycle;
 using esphome::sinclair_ac::CaptureRecord;
 using esphome::sinclair_ac::SupplementalQueryGate;
 using esphome::sinclair_ac::TelemetryDiscovery;
+using esphome::sinclair_ac::CNT::decode_target_temperature_field;
+using esphome::sinclair_ac::CNT::encode_target_temperature_field;
+using esphome::sinclair_ac::CNT::normalize_target_temperature;
 
 static std::vector<uint8_t> frame(uint8_t command, size_t payload_length) {
   std::vector<uint8_t> raw{SYNC, SYNC, static_cast<uint8_t>(payload_length + 2), command};
@@ -24,6 +28,34 @@ static std::vector<uint8_t> frame(uint8_t command, size_t payload_length) {
 }
 
 int main() {
+  // Target setpoints are whole-degree protocol values, even when HA supplies
+  // Fahrenheit-derived fractional Celsius requests.
+  assert(normalize_target_temperature(21.111111f) == 21.0f);
+  assert(encode_target_temperature_field(21.111111f) == 0x50);
+  assert(decode_target_temperature_field(0x50) == 21.0f);
+  assert(normalize_target_temperature(18.333334f) == 18.0f);
+  assert(encode_target_temperature_field(18.333334f) == 0x20);
+  assert(decode_target_temperature_field(0x20) == 18.0f);
+  assert(normalize_target_temperature(25.555556f) == 26.0f);
+  assert(encode_target_temperature_field(25.555556f) == 0xA0);
+  assert(normalize_target_temperature(10.0f) == 16.0f);
+  assert(encode_target_temperature_field(10.0f) == 0x00);
+  assert(normalize_target_temperature(35.0f) == 30.0f);
+  assert(encode_target_temperature_field(35.0f) == 0xE0);
+  assert(!std::isfinite(normalize_target_temperature(std::numeric_limits<float>::infinity())));
+  assert(!std::isfinite(normalize_target_temperature(std::numeric_limits<float>::quiet_NaN())));
+  // Target command verification is a comparison of the protocol field, not
+  // the original floating-point HA request.  An already-matching baseline is
+  // therefore a no-op, a stale field needs a retry, and the same expected
+  // field verifies both the apply and clear responses.
+  constexpr uint8_t target_mask = 0xF0;
+  const uint8_t expected_18c = encode_target_temperature_field(18.333334f);
+  const uint8_t baseline_18c = 0x20;
+  assert((baseline_18c & target_mask) == expected_18c);  // no packet needed
+  const uint8_t stale_21c = 0x50;
+  assert((stale_21c & target_mask) != expected_18c);      // retry apply
+  const uint8_t confirmed_18c = 0x20;
+  assert((confirmed_18c & target_mask) == expected_18c);  // apply/clear verify
   ParsedFrame parsed;
 
   const auto known = frame(0x31, 43);
@@ -127,6 +159,34 @@ int main() {
   assert(lifecycle.acknowledge_report(2280));
   lifecycle.sent(OutstandingRequest::COMMAND_CLEAR, 2300);
   assert(lifecycle.acknowledge_report(2580));
+
+  // A control arriving during a poll must remain queued.  The scheduler can
+  // only send its apply request after the poll response releases ownership;
+  // the old-state poll report is never a command response or mismatch.
+  RequestLifecycle serialized;
+  uint32_t command_attempts_before = serialized.command_attempts;
+  bool target_control_queued = false;
+  constexpr uint8_t queued_target_field = 0x20;
+  for (int i = 0; i < 3; ++i) {
+    serialized.sent(OutstandingRequest::POLL, 3000 + i * 1000);
+    target_control_queued = true;
+    assert(serialized.outstanding_request == OutstandingRequest::POLL);
+    assert(target_control_queued && queued_target_field == 0x20);
+    assert(serialized.command_attempts == command_attempts_before);
+    assert(serialized.acknowledge_report(3200 + i * 1000));
+    assert(serialized.poll_responses == static_cast<uint32_t>(i + 1));
+    assert(serialized.command_mismatches == 0 && serialized.may_send());
+    serialized.sent(OutstandingRequest::COMMAND_APPLY, 3300 + i * 1000);
+    ++command_attempts_before;
+    assert(serialized.command_attempts == command_attempts_before);
+    assert(serialized.acknowledge_report(3400 + i * 1000));  // target 0x20 -> clear
+    serialized.sent(OutstandingRequest::COMMAND_CLEAR, 3500 + i * 1000);
+    ++command_attempts_before;
+    assert(serialized.acknowledge_report(3600 + i * 1000));  // target 0x20 -> verified
+    assert(serialized.polls_sent - serialized.poll_responses <= 1);
+  }
+  assert(serialized.min_poll_response_ms == 200 && serialized.max_poll_response_ms == 200);
+  assert(serialized.total_poll_response_ms / serialized.poll_responses == 200);
 
   // NoUpdate starts from the 45-byte report baseline and only changes its envelope.
   std::vector<uint8_t> report{0x00,0x00,0x40,0x00,0x90,0x80,0x06,0xC2,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x41,0x00,0x44,0x00,0x00};
