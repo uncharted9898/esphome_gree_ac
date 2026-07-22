@@ -1,10 +1,13 @@
 #include "../components/sinclair_ac/protocol_frame.h"
 #include "../components/sinclair_ac/protocol_state.h"
+#include "../components/sinclair_ac/request_lifecycle.h"
 
 #include <cassert>
 #include <string>
 
 using namespace sinclair_ac_protocol;
+using esphome::sinclair_ac::OutstandingRequest;
+using esphome::sinclair_ac::RequestLifecycle;
 
 static std::vector<uint8_t> frame(uint8_t command, size_t payload_length) {
   std::vector<uint8_t> raw{SYNC, SYNC, static_cast<uint8_t>(payload_length + 2), command};
@@ -104,5 +107,27 @@ int main() {
   // Control packets retain the explicit apply and clear transaction states.
   assert(std::string(protocol_state_after_transmit(ACUpdate::UpdateStart, ACState::Ready)) == "command_apply_waiting");
   assert(std::string(protocol_state_after_transmit(ACUpdate::UpdateClear, ACState::Ready)) == "command_clear_waiting");
+  // Request ownership is behavioral, rather than inferred from a boolean.
+  RequestLifecycle lifecycle;
+  lifecycle.sent(OutstandingRequest::POLL, 0);
+  assert(!lifecycle.may_send());
+  assert(lifecycle.acknowledge_report(280));
+  assert(lifecycle.may_send() && lifecycle.poll_responses == 1);
+  assert(lifecycle.last_poll_response_ms == 280 && lifecycle.poll_response_timeouts == 0);
+  lifecycle.sent(OutstandingRequest::POLL, 300);
+  // A valid unsupported frame cannot acknowledge a request.
+  assert(lifecycle.outstanding_request == OutstandingRequest::POLL);
+  assert(lifecycle.timeout(1800, 1500) == OutstandingRequest::POLL);
+  assert(lifecycle.poll_response_timeouts == 1 && lifecycle.consecutive_poll_timeouts == 1);
+  lifecycle.sent(OutstandingRequest::COMMAND_APPLY, 2000);
+  assert(lifecycle.acknowledge_report(2280));
+  lifecycle.sent(OutstandingRequest::COMMAND_CLEAR, 2300);
+  assert(lifecycle.acknowledge_report(2580));
+
+  // NoUpdate starts from the 45-byte report baseline and only changes its envelope.
+  std::vector<uint8_t> report{0x00,0x00,0x40,0x00,0xA1,0x80,0x02,0x82,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x40,0x00,0x46,0x00,0x00};
+  report.resize(45);
+  auto poll = report; poll[3] &= ~0xAF; poll[39] = 0x02; poll[7] |= 0x02; poll[11] |= 0x08;
+  assert(poll[18] == 0x08 && poll[44] == 0x46 && poll[39] == 0x02);
   return 0;
 }

@@ -55,6 +55,16 @@ diagnostics_schema = cv.Schema({
     cv.Optional("parser_resynchronizations"): diagnostic_sensor_schema,
     cv.Optional("too_short_frames"): diagnostic_sensor_schema,
     cv.Optional("frame_timeouts"): diagnostic_sensor_schema,
+    # Unresolved raw candidate; intentionally unitless and diagnostic-only.
+    cv.Optional("candidate_telemetry_byte_44_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("polls_sent"): diagnostic_sensor_schema,
+    cv.Optional("poll_responses"): diagnostic_sensor_schema,
+    cv.Optional("poll_response_timeouts"): diagnostic_sensor_schema,
+    cv.Optional("consecutive_poll_timeouts"): diagnostic_sensor_schema,
+    cv.Optional("last_poll_response_ms"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("command_attempts"): diagnostic_sensor_schema,
+    cv.Optional("command_response_timeouts"): diagnostic_sensor_schema,
+    cv.Optional("command_mismatches"): diagnostic_sensor_schema,
     cv.Optional("last_packet_length"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
     cv.Optional("last_packet_type"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
     cv.Optional("communication"): binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor),
@@ -76,6 +86,8 @@ diagnostics_schema = cv.Schema({
     cv.Optional("last_0x44_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("last_0x40_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("last_unknown_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_command_result"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_command_failure_reason"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
 })
 telemetry_discovery_schema = cv.Schema({
     cv.Optional("enabled", default=False): cv.boolean,
@@ -196,7 +208,8 @@ async def to_code(config):
         for key, method in {
             "valid_rx_packets": "set_valid_rx_packets_sensor", "valid_tx_packets": "set_valid_tx_packets_sensor",
             "unknown_packets": "set_unknown_packets_sensor", "checksum_failures": "set_checksum_failures_sensor",
-            "invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
+            "invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "candidate_telemetry_byte_44_raw": "set_candidate_telemetry_byte_44_raw_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
+            "polls_sent": "set_polls_sent_sensor", "poll_responses": "set_poll_responses_sensor", "poll_response_timeouts": "set_poll_response_timeouts_sensor", "consecutive_poll_timeouts": "set_consecutive_poll_timeouts_sensor", "last_poll_response_ms": "set_last_poll_response_ms_sensor", "command_attempts": "set_command_attempts_sensor", "command_response_timeouts": "set_command_response_timeouts_sensor", "command_mismatches": "set_command_mismatches_sensor",
             "last_packet_length": "set_last_packet_length_sensor", "last_packet_type": "set_last_packet_type_sensor",
             "fan_speed_field_1_raw": "set_fan_speed_field_1_raw_sensor",
             "fan_speed_field_1_low_3_bits": "set_fan_speed_field_1_low_3_bits_sensor",
@@ -210,7 +223,7 @@ async def to_code(config):
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await binary_sensor.new_binary_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))
-        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor", "fan_decode_status": "set_fan_decode_status_sensor", "fan_decode_profile": "set_fan_decode_profile_sensor", "last_0x31_payload": "set_last_0x31_payload_sensor", "last_0x33_payload": "set_last_0x33_payload_sensor", "last_0x44_payload": "set_last_0x44_payload_sensor", "last_0x40_payload": "set_last_0x40_payload_sensor", "last_unknown_payload": "set_last_unknown_payload_sensor"}.items():
+        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor", "fan_decode_status": "set_fan_decode_status_sensor", "fan_decode_profile": "set_fan_decode_profile_sensor", "last_0x31_payload": "set_last_0x31_payload_sensor", "last_0x33_payload": "set_last_0x33_payload_sensor", "last_0x44_payload": "set_last_0x44_payload_sensor", "last_0x40_payload": "set_last_0x40_payload_sensor", "last_unknown_payload": "set_last_unknown_payload_sensor", "last_command_result": "set_last_command_result_sensor", "last_command_failure_reason": "set_last_command_failure_reason_sensor"}.items():
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await text_sensor.new_text_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))

@@ -45,6 +45,7 @@ void SinclairACCNT::restart_pending_control(uint16_t fields)
     this->pending_control_.retries = 0;
     this->update_ = ACUpdate::UpdateStart;
     this->wait_response_ = false;
+    this->request_lifecycle_.outstanding_request = OutstandingRequest::NONE;
 }
 
 bool SinclairACCNT::pending_control_matches_report(const std::vector<uint8_t> &payload) const
@@ -69,47 +70,57 @@ bool SinclairACCNT::pending_control_matches_report(const std::vector<uint8_t> &p
 
 void SinclairACCNT::handle_pending_control_response(const std::vector<uint8_t> &payload)
 {
-    if (!this->wait_response_ || !this->pending_control_.active) return;
+    const auto request = this->request_lifecycle_.outstanding_request;
+    if (request == OutstandingRequest::POLL) {
+        this->request_lifecycle_.acknowledge_report(millis());
+        this->wait_response_ = false;  // retained solely for compatibility with base setup.
+        return;
+    }
+    if (request != OutstandingRequest::COMMAND_APPLY && request != OutstandingRequest::COMMAND_CLEAR) return;
+    this->request_lifecycle_.acknowledge_report(millis());
+    this->wait_response_ = false;
     const bool matches = this->pending_control_matches_report(payload);
     if (!matches) {
-        this->wait_response_ = false;
-        if (this->pending_control_.requested_fields & PENDING_MODE) {
-            ESP_LOGD(TAG, "Command mismatch: requested mode=%u observed mode=%u", static_cast<unsigned>(this->pending_control_.mode), static_cast<unsigned>(this->mode));
-        }
-        if ((this->pending_control_.requested_fields & (PENDING_MODE | PENDING_FAN)) && payload.size() > protocol::REPORT_FAN_SPD2_BYTE) {
-            const uint8_t requested_mode = this->pending_control_.mode == climate::CLIMATE_MODE_COOL ? protocol::REPORT_MODE_COOL :
-                                           this->pending_control_.mode == climate::CLIMATE_MODE_DRY ? protocol::REPORT_MODE_DRY : protocol::REPORT_MODE_AUTO;
-            const uint8_t requested_fan = this->pending_control_.custom_fan_mode == fan_modes::FAN_LOW ? protocol::REPORT_GREE_FAN_LOW :
-                                          this->pending_control_.custom_fan_mode == fan_modes::FAN_MED ? protocol::REPORT_GREE_FAN_MED :
-                                          this->pending_control_.custom_fan_mode == fan_modes::FAN_HIGH ? protocol::REPORT_GREE_FAN_HIGH : protocol::REPORT_GREE_FAN_AUTO;
-            ESP_LOGD(TAG, "requested payload[4] masked=0x%02X observed=0x%02X retry=%u/3",
-                     (requested_mode << protocol::REPORT_MODE_POS) | requested_fan,
-                     payload[protocol::REPORT_FAN_SPD2_BYTE] & (protocol::REPORT_MODE_MASK | protocol::REPORT_GREE_FAN_MASK),
-                     this->pending_control_.retries + 1);
-        }
+        ++this->request_lifecycle_.command_mismatches;
         if (++this->pending_control_.retries >= 3) {
-            ESP_LOGW(TAG, "Command mismatch after 3 attempts; accepting reported state");
             this->pending_control_.active = false;
             this->update_ = ACUpdate::NoUpdate;
+            this->last_command_result_ = "failed";
+            this->last_command_failure_reason_ = "mismatch";
             this->publish_protocol_state("command_failed_mismatch");
             return;
         }
-        ESP_LOGD(TAG, "Command mismatch: retry=%u/3", this->pending_control_.retries);
         this->update_ = ACUpdate::UpdateStart;
+        this->last_command_result_ = "retrying";
         this->publish_protocol_state("command_mismatch_retry");
         return;
     }
-    this->wait_response_ = false;
-    if (this->update_ == ACUpdate::UpdateStart) {
-        ESP_LOGD(TAG, "Command applied: requested fields match report");
+    if (request == OutstandingRequest::COMMAND_APPLY) {
         this->update_ = ACUpdate::UpdateClear;
+        this->last_command_result_ = "clear_pending";
         this->publish_protocol_state("command_clear_pending");
-    } else if (this->update_ == ACUpdate::UpdateClear) {
-        ESP_LOGD(TAG, "Command clear verified");
+    } else {
         this->pending_control_.active = false;
         this->update_ = ACUpdate::NoUpdate;
+        this->last_command_result_ = "verified";
+        this->last_command_failure_reason_ = "none";
         this->publish_protocol_state("command_verified");
     }
+}
+
+void SinclairACCNT::publish_request_diagnostics()
+{
+    const auto &d = this->request_lifecycle_;
+    if (this->polls_sent_sensor_) this->polls_sent_sensor_->publish_state(d.polls_sent);
+    if (this->poll_responses_sensor_) this->poll_responses_sensor_->publish_state(d.poll_responses);
+    if (this->poll_response_timeouts_sensor_) this->poll_response_timeouts_sensor_->publish_state(d.poll_response_timeouts);
+    if (this->consecutive_poll_timeouts_sensor_) this->consecutive_poll_timeouts_sensor_->publish_state(d.consecutive_poll_timeouts);
+    if (this->last_poll_response_ms_sensor_) this->last_poll_response_ms_sensor_->publish_state(d.last_poll_response_ms);
+    if (this->command_attempts_sensor_) this->command_attempts_sensor_->publish_state(d.command_attempts);
+    if (this->command_response_timeouts_sensor_) this->command_response_timeouts_sensor_->publish_state(d.command_response_timeouts);
+    if (this->command_mismatches_sensor_) this->command_mismatches_sensor_->publish_state(d.command_mismatches);
+    if (this->last_command_result_sensor_) this->last_command_result_sensor_->publish_state(this->last_command_result_);
+    if (this->last_command_failure_reason_sensor_) this->last_command_failure_reason_sensor_->publish_state(this->last_command_failure_reason_);
 }
 
 void SinclairACCNT::loop()
@@ -130,7 +141,7 @@ void SinclairACCNT::loop()
             this->reset_parser();
         } else {
         const bool known = validation == PacketValidationResult::VALID_KNOWN;
-        this->record_received_packet(known);
+        if (known) this->record_received_packet(true);  // Unsupported traffic is not proof of HVAC health.
         this->log_packet_difference(this->serialProcess_.data);
         this->retain_payload(this->serialProcess_.data[3], std::vector<uint8_t>(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1));
         const std::string packet_description = "RX cmd=0x" + format_hex_pretty(std::vector<uint8_t>{this->serialProcess_.data[3]});
@@ -160,6 +171,7 @@ void SinclairACCNT::loop()
     }  // closes: if (serialProcess_.state == STATE_COMPLETE)
 
     this->publish_diagnostics();
+    this->publish_request_diagnostics();
     /* we will send a packet to the AC as a reponse to indicate changes */
     send_packet();
 
@@ -261,18 +273,37 @@ void SinclairACCNT::send_packet()
 {
     if (this->is_receive_only()) return;
     if (this->is_poll_only()) this->update_ = ACUpdate::NoUpdate;
-    if (this->wait_response_) {
-        if (millis() - this->last_packet_sent_ < protocol::POLL_RESPONSE_TIMEOUT_MS) return;
+    const auto expired = this->request_lifecycle_.timeout(millis(), protocol::POLL_RESPONSE_TIMEOUT_MS);
+    if (expired != OutstandingRequest::NONE) {
         this->wait_response_ = false;
-        this->poll_timeouts_++;
-        ESP_LOGW(TAG, "Poll/command response timed out; retrying after one outstanding request");
-        this->publish_protocol_state("response_timeout");
+        if (expired == OutstandingRequest::POLL) {
+            ESP_LOGW(TAG, "Poll response timed out");
+            this->publish_protocol_state("response_timeout");
+        } else if (++this->pending_control_.retries >= 3) {
+            this->pending_control_.active = false;
+            this->update_ = ACUpdate::NoUpdate;
+            this->last_command_result_ = "failed";
+            this->last_command_failure_reason_ = "timeout";
+            this->publish_protocol_state("command_failed_timeout");
+        } else {
+            this->update_ = expired == OutstandingRequest::COMMAND_CLEAR ? ACUpdate::UpdateClear : ACUpdate::UpdateStart;
+            this->last_command_result_ = "retrying";
+        }
     }
+    if (!this->request_lifecycle_.may_send()) return;
     if (millis() - this->last_packet_sent_ < protocol::TIME_REFRESH_PERIOD_MS) return;
     /* Preserve model-specific fields from the last valid report; patch only owned fields below. */
     std::vector<uint8_t> packet(protocol::SET_PACKET_LEN, 0);
     if (!this->last_report_payload_.empty()) {
         std::copy_n(this->last_report_payload_.begin(), std::min(this->last_report_payload_.size(), packet.size()), packet.begin());
+    }
+    // A NoUpdate poll is a raw report pass-through.  Its envelope is the only
+    // part owned by this component; notably byte 18 and unknown byte 44 survive.
+    if (this->update_ == ACUpdate::NoUpdate) {
+        packet[protocol::SET_AF_BYTE] &= ~protocol::SET_AF_VAL;
+        packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL;
+        packet[protocol::SET_CONST_BIT_BYTE] |= protocol::SET_CONST_BIT_MASK;
+        packet[protocol::SET_NOCHANGE_BYTE] |= protocol::SET_NOCHANGE_MASK;
     }
     const bool encode_pending = this->pending_control_.active && this->update_ != ACUpdate::NoUpdate;
     const bool gree_fan_layout = this->uses_gree_fan_layout();
@@ -289,7 +320,7 @@ void SinclairACCNT::send_packet()
     const bool command_xfan = encode_pending ? this->pending_control_.xfan : this->xfan_state_;
     const bool command_save = encode_pending ? this->pending_control_.save : this->save_state_;
 
-    packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL;
+    if (this->update_ != ACUpdate::NoUpdate) packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL;
     /* Clear only fields this component owns before writing requested state. */
     uint8_t mode_fields = protocol::REPORT_PWR_MASK | protocol::REPORT_MODE_MASK | protocol::REPORT_FAN_SPD2_MASK;
     if (!gree_fan_layout || (encode_pending && (this->pending_control_.requested_fields & PENDING_SLEEP))) {
@@ -662,6 +693,14 @@ void SinclairACCNT::send_packet()
     {
         packet[protocol::REPORT_SAVE_BYTE] |= protocol::REPORT_SAVE_MASK;
     }
+    if (this->update_ == ACUpdate::NoUpdate) {
+        packet.assign(protocol::SET_PACKET_LEN, 0);
+        if (!this->last_report_payload_.empty()) std::copy_n(this->last_report_payload_.begin(), std::min(this->last_report_payload_.size(), packet.size()), packet.begin());
+        packet[protocol::SET_AF_BYTE] &= ~protocol::SET_AF_VAL;
+        packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL;
+        packet[protocol::SET_CONST_BIT_BYTE] |= protocol::SET_CONST_BIT_MASK;
+        packet[protocol::SET_NOCHANGE_BYTE] |= protocol::SET_NOCHANGE_MASK;
+    }
     if (encode_pending && this->update_ == ACUpdate::UpdateStart && !this->last_report_payload_.empty()) {
         ESP_LOGD(TAG, "Encoding payload[4]: current=0x%02X command=0x%02X", this->last_report_payload_[protocol::REPORT_MODE_BYTE], packet[protocol::REPORT_MODE_BYTE]);
     }
@@ -696,6 +735,9 @@ void SinclairACCNT::send_packet()
     packet.insert(packet.begin(), protocol::SYNC);
 
     this->last_packet_sent_ = millis();  /* Save the time when we sent the last packet */
+    const OutstandingRequest request = this->update_ == ACUpdate::NoUpdate ? OutstandingRequest::POLL :
+        this->update_ == ACUpdate::UpdateStart ? OutstandingRequest::COMMAND_APPLY : OutstandingRequest::COMMAND_CLEAR;
+    this->request_lifecycle_.sent(request, this->last_packet_sent_);
     this->wait_response_ = true;
     write_array(packet);                 /* Sent the packet by UART */
     this->record_transmitted_packet(packet);
@@ -810,6 +852,7 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
 {
     bool hasChanged = false;
     this->last_report_payload_ = payload;
+    if (payload.size() > 44 && this->candidate_telemetry_byte_44_raw_sensor_) this->candidate_telemetry_byte_44_raw_sensor_->publish_state(payload[44]);
     if (this->fan_profile_ == FanProfile::AUTO && !this->gree_fan_layout_detected_ &&
         payload.size() > protocol::REPORT_FAN_SPD1_BYTE &&
         payload[protocol::REPORT_FAN_SPD1_BYTE] == 0x08 &&

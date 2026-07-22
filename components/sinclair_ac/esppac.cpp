@@ -147,28 +147,28 @@ const char *SinclairAC::fan_profile_name() const {
     switch (this->fan_profile_) { case FanProfile::SINCLAIR_EXTENDED: return "sinclair_extended"; case FanProfile::GREE_4_SPEED: return "gree_4_speed"; default: return "auto"; }
 }
 void SinclairAC::retain_payload(uint8_t command, const std::vector<uint8_t> &payload) {
-    if (!this->telemetry_discovery_enabled_) return;
     const auto previous = this->last_payloads_.find(command);
-    bool changed = previous == this->last_payloads_.end() || previous->second != payload;
-    if (changed && command == 0x31 && previous != this->last_payloads_.end() &&
+    const bool raw_changed = previous == this->last_payloads_.end() || previous->second != payload;
+    bool meaningful_changed = raw_changed;
+    if (meaningful_changed && command == 0x31 && previous != this->last_payloads_.end() &&
         previous->second.size() == payload.size() && payload.size() > 42) {
-        changed = false;
+        meaningful_changed = false;
         for (size_t i = 0; i < payload.size(); ++i) {
-            if (i != 42 && previous->second[i] != payload[i]) {
-                changed = true;
-                break;
-            }
+            // Byte 42 is confirmed indoor temperature; byte 44 deliberately remains visible.
+            if (i != 42 && previous->second[i] != payload[i]) { meaningful_changed = true; break; }
         }
     }
+    // Raw retention is unconditional: the Last 0x31 entity must never be stale.
     this->last_payloads_[command] = payload;
-    if (this->telemetry_log_changes_only_ && !changed) return;
     if (this->telemetry_expose_raw_payload_) {
-        const std::string raw = format_hex_pretty(payload);
         text_sensor::TextSensor *target = command == 0x31 ? this->last_0x31_payload_sensor_ : command == 0x33 ? this->last_0x33_payload_sensor_ : command == 0x44 ? this->last_0x44_payload_sensor_ : command == 0x40 ? this->last_0x40_payload_sensor_ : this->last_unknown_payload_sensor_;
-        if (target != nullptr) target->publish_state(raw);
+        if (target != nullptr && (raw_changed || !this->telemetry_log_changes_only_)) target->publish_state(format_hex_pretty(payload));
     }
-    if (changed) ESP_LOGD(TAG, "Telemetry discovery: cmd=0x%02X payload changed (%u bytes)", command, payload.size());
+    if (!this->telemetry_discovery_enabled_) return;
+    if (this->telemetry_log_changes_only_ && !meaningful_changed) return;
+    if (meaningful_changed) ESP_LOGD(TAG, "Telemetry discovery: cmd=0x%02X payload changed (%u bytes)", command, payload.size());
 }
+
 void SinclairAC::set_debug(bool rx, bool tx, bool unknown, bool differences, uint16_t maximum_hex_length) {
     this->log_rx_ = rx; this->log_tx_ = tx; this->log_unknown_ = unknown; this->log_differences_ = differences; this->maximum_hex_length_ = maximum_hex_length;
 }
