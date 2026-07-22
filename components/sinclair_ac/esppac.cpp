@@ -29,7 +29,7 @@ climate::ClimateTraits SinclairAC::traits()
 
 void SinclairAC::setup()
 {
-    if (this->fan_profile_ == FanProfile::GREE_4_SPEED || this->fan_profile_ == FanProfile::AUTO) {
+    if (this->fan_profile_ == FanProfile::GREE_4_SPEED) {
         this->set_supported_custom_fan_modes({fan_modes::FAN_AUTO, fan_modes::FAN_QUIET, fan_modes::FAN_LOW,
                                               fan_modes::FAN_MED, fan_modes::FAN_HIGH, fan_modes::FAN_TURBO});
     } else {
@@ -148,7 +148,18 @@ const char *SinclairAC::fan_profile_name() const {
 }
 void SinclairAC::retain_payload(uint8_t command, const std::vector<uint8_t> &payload) {
     if (!this->telemetry_discovery_enabled_) return;
-    const bool changed = this->last_payloads_[command] != payload;
+    const auto previous = this->last_payloads_.find(command);
+    bool changed = previous == this->last_payloads_.end() || previous->second != payload;
+    if (changed && command == 0x31 && previous != this->last_payloads_.end() &&
+        previous->second.size() == payload.size() && payload.size() > 42) {
+        changed = false;
+        for (size_t i = 0; i < payload.size(); ++i) {
+            if (i != 42 && previous->second[i] != payload[i]) {
+                changed = true;
+                break;
+            }
+        }
+    }
     this->last_payloads_[command] = payload;
     if (this->telemetry_log_changes_only_ && !changed) return;
     if (this->telemetry_expose_raw_payload_) {
