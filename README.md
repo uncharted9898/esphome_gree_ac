@@ -88,7 +88,39 @@ Use the following staged process on a live unit:
 
 `receive_only` never calls a UART write method and ignores every Home Assistant control request. `poll_only` sends only the established no-change poll (never the `0xAF` apply marker) and ignores Home Assistant controls. `control` is the backward-compatible default. The old `transmit_enabled` option is deprecated (`false` maps to receive-only and `true` to control); it cannot be combined with `protocol_mode`.
 
-For local development the examples use `type: local` sources. Real installations should pin the revision being tested, for example `source: github://OWNER/esphome_gree_ac@BRANCH_OR_TAG`, rather than demonstrating an unpinned upstream `main`.
+### Mode and diagnostics configuration
+
+`protocol_mode` belongs directly under the `platform: sinclair_ac` climate entry.
+The diagnostic entities belong one level below its `diagnostics:` key. For example:
+
+```yaml
+climate:
+  - platform: sinclair_ac
+    name: Bedroom AC
+    protocol_mode: receive_only
+    diagnostics:
+      communication:
+        name: Bedroom AC communication
+      receive_only:
+        name: Bedroom AC receive-only active
+      poll_only:
+        name: Bedroom AC poll-only active
+      protocol_mode:
+        name: Bedroom AC protocol mode
+      too_short_frames:
+        name: Bedroom AC too-short frames
+      frame_timeouts:
+        name: Bedroom AC frame timeouts
+```
+
+If ESPHome reports any of these keys as invalid (especially suggesting
+`protocol_state` for `diagnostics.protocol_mode`), it has loaded a pre-mode
+revision of this external component. Update the external-component source to a
+revision containing the mode support, or remove the cached external component
+and run validation again. Do not move the keys to a different indentation level:
+the layout above is the supported schema.
+
+For local development the examples use `type: local` sources. Real installations should pin the revision being tested, for example `source: github://OWNER/esphome_gree_ac@BRANCH_OR_TAG`, rather than demonstrating an unpinned upstream `main`. When using a Git source while iterating on a branch, set a short `refresh` interval or clear ESPHome's external-component cache so that the schema and C++ implementation are updated together.
 
 ## Protocol capture guide
 

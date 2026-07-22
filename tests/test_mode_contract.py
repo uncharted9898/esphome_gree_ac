@@ -3,6 +3,8 @@ from pathlib import Path
 import unittest
 ROOT = Path(__file__).parents[1]
 CNT = (ROOT / "components/sinclair_ac/esppac_cnt.cpp").read_text()
+CPP = (ROOT / "components/sinclair_ac/esppac.cpp").read_text()
+CLIMATE_PY = (ROOT / "components/sinclair_ac/climate.py").read_text()
 class ModeContractTests(unittest.TestCase):
     def test_receive_only_has_no_uart_write_path(self):
         self.assertIn("void SinclairACCNT::send_packet()\n{\n    if (this->is_receive_only()) return;", CNT)
@@ -15,4 +17,14 @@ class ModeContractTests(unittest.TestCase):
     def test_invalid_or_unknown_do_not_release_response_guard(self):
         self.assertIn("if (known && this->wait_response_) this->wait_response_ = false;", CNT)
         self.assertNotIn("this->wait_response_ = false;\n        /* log", CNT)
+    def test_mode_and_diagnostics_schema_accept_documented_keys(self):
+        self.assertIn('cv.Optional(CONF_PROTOCOL_MODE)', CLIMATE_PY)
+        for key in ("too_short_frames", "frame_timeouts", "poll_only", "protocol_mode"):
+            self.assertIn(f'cv.Optional("{key}")', CLIMATE_PY)
+    def test_custom_fan_modes_use_the_climate_entity_api(self):
+        self.assertIn("this->set_supported_custom_fan_modes(", CPP)
+        self.assertNotIn("traits.set_supported_custom_fan_modes(", CPP)
+    def test_power_off_mode_fallback_handles_every_climate_mode(self):
+        self.assertIn("case climate::CLIMATE_MODE_HEAT_COOL:", CNT)
+        self.assertIn("case climate::CLIMATE_MODE_OFF:", CNT)
 if __name__ == "__main__": unittest.main()

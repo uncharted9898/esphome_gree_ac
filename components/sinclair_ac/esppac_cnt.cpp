@@ -231,6 +231,11 @@ void SinclairACCNT::send_packet()
                 case climate::CLIMATE_MODE_HEAT:
                     mode = protocol::REPORT_MODE_HEAT;
                     break;
+                case climate::CLIMATE_MODE_HEAT_COOL:
+                case climate::CLIMATE_MODE_OFF:
+                    // Neither value is reported by the unit; retain a safe AUTO mode while powered off.
+                    mode = protocol::REPORT_MODE_AUTO;
+                    break;
             }
             power = false;
             break;
