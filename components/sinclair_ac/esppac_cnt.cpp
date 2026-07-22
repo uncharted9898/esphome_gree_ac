@@ -3,6 +3,7 @@
 #include "protocol_frame.h"
 
 #include <cassert>
+#include <cmath>
 
 namespace esphome {
 namespace sinclair_ac {
@@ -27,6 +28,8 @@ void SinclairACCNT::begin_pending_control()
     pending.retries = 0;
     pending.mode = this->mode;
     pending.target_temperature = this->target_temperature;
+    pending.target_temperature_requested = this->target_temperature;
+    pending.target_temperature_field = encode_target_temperature_field(this->target_temperature);
     pending.custom_fan_mode = fan_modes::FAN_AUTO;
     if (this->has_custom_fan_mode()) {
         pending.custom_fan_mode = this->get_custom_fan_mode();
@@ -51,12 +54,19 @@ void SinclairACCNT::restart_pending_control(uint16_t fields)
 
 bool SinclairACCNT::pending_control_matches_report(const std::vector<uint8_t> &payload) const
 {
-    (void) payload;
     const auto &pending = this->pending_control_;
     if (!pending.active) return true;
     if ((pending.requested_fields & PENDING_MODE) &&
         (this->mode != pending.mode || (pending.mode != climate::CLIMATE_MODE_OFF && !this->power_internal_))) return false;
-    if ((pending.requested_fields & PENDING_TARGET_TEMPERATURE) && this->target_temperature != pending.target_temperature) return false;
+    if (pending.requested_fields & PENDING_TARGET_TEMPERATURE) {
+        const uint8_t observed = payload[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK;
+        if (observed != pending.target_temperature_field) {
+            ESP_LOGD(TAG, "Target mismatch: requested_original=%.3fC normalized=%.1fC expected_field=0x%02X observed_field=0x%02X decoded_observed=%.1fC",
+                     pending.target_temperature_requested, pending.target_temperature,
+                     pending.target_temperature_field, observed, decode_target_temperature_field(observed));
+            return false;
+        }
+    }
     if ((pending.requested_fields & PENDING_FAN) && (!this->has_custom_fan_mode() || this->get_custom_fan_mode() != pending.custom_fan_mode)) return false;
     if ((pending.requested_fields & PENDING_VERTICAL_SWING) && this->vertical_swing_state_ != pending.vertical_swing) return false;
     if ((pending.requested_fields & PENDING_HORIZONTAL_SWING) && this->horizontal_swing_state_ != pending.horizontal_swing) return false;
@@ -227,15 +237,34 @@ void SinclairACCNT::control(const climate::ClimateCall &call)
     if (call.get_target_temperature().has_value())
     {
         ESP_LOGV(TAG, "Requested target teperature change");
-        this->restart_pending_control(PENDING_TARGET_TEMPERATURE);
-        this->pending_control_.target_temperature = *call.get_target_temperature();
-        if (this->pending_control_.target_temperature < MIN_TEMPERATURE)
-        {
-            this->pending_control_.target_temperature = MIN_TEMPERATURE;
-        }
-        else if (this->pending_control_.target_temperature > MAX_TEMPERATURE)
-        {
-            this->pending_control_.target_temperature = MAX_TEMPERATURE;
+        const float requested = *call.get_target_temperature();
+        const float normalized = normalize_target_temperature(requested);
+        if (!std::isfinite(normalized)) {
+            ESP_LOGW(TAG, "Ignoring non-finite target temperature request");
+        } else {
+            const uint8_t field = encode_target_temperature_field(normalized);
+            if (this->pending_control_.active &&
+                (this->pending_control_.requested_fields & PENDING_TARGET_TEMPERATURE) &&
+                this->pending_control_.target_temperature_field == field) {
+                ESP_LOGD(TAG, "Target request coalesced: requested=%.3fC normalized=%.1fC field=0x%02X", requested, normalized, field);
+            } else if (!this->pending_control_.active &&
+                       this->last_report_payload_.size() > protocol::REPORT_TEMP_SET_BYTE &&
+                       (this->last_report_payload_[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK) == field) {
+                this->update_target_temperature(normalized);
+                this->publish_state();
+                this->last_command_result_ = "already_matched";
+                this->last_command_failure_reason_ = "none";
+                this->update_ = ACUpdate::NoUpdate;
+                ESP_LOGD(TAG, "Target request already matched: requested=%.3fC normalized=%.1fC field=0x%02X", requested, normalized, field);
+                this->publish_protocol_state("ready");
+                this->publish_request_diagnostics();
+            } else {
+                this->restart_pending_control(PENDING_TARGET_TEMPERATURE);
+                this->pending_control_.target_temperature_requested = requested;
+                this->pending_control_.target_temperature = normalized;
+                this->pending_control_.target_temperature_field = field;
+                ESP_LOGD(TAG, "Target request: requested=%.3fC normalized=%.1fC field=0x%02X", requested, normalized, field);
+            }
         }
     }
 
@@ -343,8 +372,7 @@ void SinclairACCNT::apply_requested_field_patches(std::vector<uint8_t> &packet) 
             (power ? protocol::REPORT_PWR_MASK : 0) | (mode << protocol::REPORT_MODE_POS));
     }
     if (fields & PENDING_TARGET_TEMPERATURE) {
-        const uint8_t temp = (static_cast<uint8_t>(this->pending_control_.target_temperature) - protocol::REPORT_TEMP_SET_OFF) << protocol::REPORT_TEMP_SET_POS;
-        put(protocol::REPORT_TEMP_SET_BYTE, protocol::REPORT_TEMP_SET_MASK, temp);
+        put(protocol::REPORT_TEMP_SET_BYTE, protocol::REPORT_TEMP_SET_MASK, this->pending_control_.target_temperature_field);
     }
     if (fields & PENDING_FAN) {
         uint8_t speed1 = 0, speed2 = 0;
@@ -607,8 +635,7 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
     }
     this->set_custom_fan_mode_(newFanMode);
     
-    float newTargetTemperature = (float)((((*this->report_payload_)[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK) >> protocol::REPORT_TEMP_SET_POS)
-        + protocol::REPORT_TEMP_SET_OFF);
+    float newTargetTemperature = decode_target_temperature_field((*this->report_payload_)[protocol::REPORT_TEMP_SET_BYTE]);
     if (this->target_temperature != newTargetTemperature) hasChanged = true;
     this->update_target_temperature(newTargetTemperature);
     

@@ -4,6 +4,7 @@
 #include "esppac.h"
 #include "protocol_state.h"
 #include "request_lifecycle.h"
+#include "target_temperature.h"
 
 namespace esphome {
 namespace sinclair_ac {
@@ -182,6 +183,8 @@ class SinclairACCNT : public SinclairAC {
             uint16_t requested_fields{0};
             climate::ClimateMode mode{climate::CLIMATE_MODE_OFF};
             float target_temperature{MIN_TEMPERATURE};
+            float target_temperature_requested{MIN_TEMPERATURE};
+            uint8_t target_temperature_field{0};
             std::string custom_fan_mode{fan_modes::FAN_AUTO};
             std::string vertical_swing, horizontal_swing, display_mode, display_unit;
             bool plasma{false}, sleep{false}, xfan{false}, save{false};
