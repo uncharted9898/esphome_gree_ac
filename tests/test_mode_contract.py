@@ -16,9 +16,10 @@ class ModeContractTests(unittest.TestCase):
     def test_control_callbacks_are_guarded(self):
         self.assertGreaterEqual(CNT.count("if (!this->can_control()) return;"), 8)
     def test_invalid_or_unknown_do_not_release_response_guard(self):
-        self.assertIn("if (this->wait_response_) {\n            this->wait_response_ = false;", CNT)
-        self.assertIn("if (this->update_ == ACUpdate::UpdateStart)", CNT)
-        self.assertNotIn("this->wait_response_ = false;\n        /* log", CNT)
+        self.assertIn("handle_packet(); /* Reports are acknowledgements as well as state updates. */", CNT)
+        self.assertIn("this->handle_pending_control_response(payload); /* Verify after decoded state has been updated. */", CNT)
+        self.assertIn("if (!this->wait_response_ || !this->pending_control_.active) return;", CNT)
+        self.assertIn("const bool matches = this->pending_control_matches_report(payload);", CNT)
     def test_mode_and_diagnostics_schema_accept_documented_keys(self):
         self.assertIn('cv.Optional(CONF_PROTOCOL_MODE)', CLIMATE_PY)
         for key in ("too_short_frames", "frame_timeouts", "poll_only", "protocol_mode"):
@@ -48,14 +49,30 @@ class ModeContractTests(unittest.TestCase):
         self.assertIn("record_fan_diagnostics", CPP)
     def test_gree_profile_uses_combined_mode_fan_low_bits(self):
         self.assertIn("FanProfile::GREE_4_SPEED", CNT)
-        self.assertIn("switch (fanSpeed2)", CNT)
+        self.assertIn("REPORT_GREE_FAN_MASK", CNT)
+        self.assertIn("switch (gree_fan)", CNT)
         self.assertIn('"gree_4_speed:medium"', CNT)
-        self.assertIn("Byte 18=0x08 is not a fan request", CNT)
+        self.assertNotIn("fan_speed1_raw == 0x08", CNT)
+        self.assertIn("packet[protocol::REPORT_FAN_SPD2_BYTE] |= fanSpeed2 & protocol::REPORT_GREE_FAN_MASK;", CNT)
+    def test_temperature_byte_42_is_excluded_from_discovery_changes(self):
+        self.assertIn("command == 0x31", CPP)
+        self.assertIn("payload.size() > 42", CPP)
+        self.assertIn("i != 42", CPP)
+        self.assertIn("REPORT_TEMP_ACT_BYTE  = 42", (ROOT / "components/sinclair_ac/esppac_cnt.h").read_text())
     def test_polling_waits_for_response_and_uses_report_baseline(self):
         self.assertIn("if (this->wait_response_)", CNT)
         self.assertIn("Poll/command response timed out", CNT)
         self.assertIn("this->last_report_payload_ = payload", CNT)
         self.assertIn("std::copy_n(this->last_report_payload_", CNT)
+    def test_pending_command_snapshot_isolated_from_reports_and_verified_semantically(self):
+        self.assertIn("struct PendingControlState", (ROOT / "components/sinclair_ac/esppac_cnt.h").read_text())
+        self.assertIn("this->pending_control_.mode = *call.get_mode();", CNT)
+        self.assertIn("const auto command_mode = encode_pending ? this->pending_control_.mode : this->mode;", CNT)
+        self.assertIn("const std::string command_fan_mode = encode_pending ? this->pending_control_.custom_fan_mode", CNT)
+        self.assertIn("if (++this->pending_control_.retries >= 3)", CNT)
+        self.assertIn('"command_failed_mismatch"', CNT)
+        self.assertIn('"Command applied: requested fields match report"', CNT)
+        self.assertIn('"Command clear verified"', CNT)
     def test_protocol_state_transitions_do_not_flood_healthy_polls(self):
         # Poll-only startup reports initialization, then waiting, then the first valid RX restores ready.
         self.assertIn('this->publish_protocol_state("initializing");', CPP)

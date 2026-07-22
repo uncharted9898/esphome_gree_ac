@@ -149,18 +149,23 @@ Label captures with startup, power, mode, setpoint, fan, horizontal and vertical
 ## Livo fan profile, telemetry discovery, and local API
 
 For a Livo four-speed unit, set `fan_profile: gree_4_speed`. It decodes the low
-two bits of report payload byte 4 as Auto, Low, Medium, and High; byte 18 is
-retained only as a diagnostic field because it is not a fan-speed field on this
-profile. `fan_profile: auto` detects the observed Livo `byte 18 == 0x08`
-signature and otherwise preserves the legacy mapping; `sinclair_extended` always
-uses the legacy dual-field seven-speed mapping.
+four bits of report payload byte 4 as its packed fan field: Auto, Low, Medium,
+and High currently use values 0 through 3. Byte 18 is retained only as a
+diagnostic field because it is not a fan-speed field on this profile. The same
+byte's mode field is independently decoded by the existing common mode decoder.
+`fan_profile: auto` and `sinclair_extended` use the legacy dual-field
+seven-speed mapping; select `gree_4_speed` explicitly for a confirmed Livo
+profile.
 Quiet and Turbo remain independent overlay flags.
 
 Set `telemetry_discovery.enabled: true` to retain the most recent valid payload
 for commands `0x31`, `0x33`, `0x44`, `0x40`, and other valid unknown commands.
 The optional text diagnostics expose raw payloads without assigning physical
-meanings to unverified bytes. Discovery is deliberately observational: it does
-not create guessed temperature, pressure, electrical, or compressor entities.
+meanings to unverified bytes. Changes only at `0x31` payload byte 42 are
+suppressed from discovery updates because that byte is the known indoor
+temperature telemetry, decoded as `(raw - 0x10) / 2.0` °C. Discovery is
+deliberately observational: it does not create guessed pressure, electrical, or
+compressor entities.
 Capture repeated labelled transitions before adding a decoded sensor.
 
 The Livo poll-only example enables encrypted ESPHome native API access and the
