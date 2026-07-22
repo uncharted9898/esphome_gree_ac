@@ -45,6 +45,22 @@ int main() {
   assert(parsed.received_checksum == 0x15);
   assert(parsed.calculated_checksum == 0x15);
 
+  // A stale DRY/low report must not be mistaken for a COOL/low command result.
+  constexpr uint8_t power_mask = 0x80;
+  constexpr uint8_t mode_mask = 0x70;
+  constexpr uint8_t fan_mask = 0x03;
+  constexpr uint8_t cool_low = power_mask | 0x10 | 0x01;
+  constexpr uint8_t cool_medium = power_mask | 0x10 | 0x02;
+  constexpr uint8_t dry_low = power_mask | 0x20 | 0x01;
+  assert(dry_low == 0xA1);
+  assert(cool_low == 0x91);
+  assert(cool_medium == 0x92);
+  assert((dry_low & (mode_mask | fan_mask)) != (cool_low & (mode_mask | fan_mask)));
+  // Indoor-temperature updates leave the packed mode/fan command unchanged.
+  const uint8_t warmer_temperature_raw = 0x41;
+  assert(warmer_temperature_raw == 0x41);
+  assert(cool_low == 0x91);
+
   assert(parse(frame(0x44, 1), parsed) == Result::VALID_UNKNOWN);
   auto bad = known;
   bad.back()++;

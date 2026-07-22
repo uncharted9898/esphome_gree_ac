@@ -40,6 +40,12 @@ namespace protocol {
     static const uint8_t REPORT_FAN_SPD2_BYTE  = 4;
     static const uint8_t REPORT_FAN_SPD2_MASK  = 0b00000011;
     static const uint8_t REPORT_FAN_SPD2_POS   = 0;
+    /* Gree four-speed units pack mode and fan into byte 4: 1MMM FFFF. */
+    static const uint8_t REPORT_GREE_FAN_MASK  = 0b00001111;
+    static const uint8_t REPORT_GREE_FAN_AUTO  = 0;
+    static const uint8_t REPORT_GREE_FAN_LOW   = 1;
+    static const uint8_t REPORT_GREE_FAN_MED   = 2;
+    static const uint8_t REPORT_GREE_FAN_HIGH  = 3;
     static const uint8_t REPORT_FAN_QUIET_BYTE = 16;
     static const uint8_t REPORT_FAN_QUIET_MASK = 0b00001000;
     static const uint8_t REPORT_FAN_TURBO_BYTE = 6;
@@ -152,8 +158,26 @@ class SinclairACCNT : public SinclairAC {
         void loop() override;
 
     protected:
+        enum PendingField : uint16_t {
+            PENDING_MODE = 1 << 0, PENDING_TARGET_TEMPERATURE = 1 << 1,
+            PENDING_FAN = 1 << 2, PENDING_VERTICAL_SWING = 1 << 3,
+            PENDING_HORIZONTAL_SWING = 1 << 4, PENDING_DISPLAY = 1 << 5,
+            PENDING_DISPLAY_UNIT = 1 << 6, PENDING_PLASMA = 1 << 7,
+            PENDING_SLEEP = 1 << 8, PENDING_XFAN = 1 << 9, PENDING_SAVE = 1 << 10,
+        };
+        struct PendingControlState {
+            bool active{false};
+            uint16_t requested_fields{0};
+            climate::ClimateMode mode{climate::CLIMATE_MODE_OFF};
+            float target_temperature{MIN_TEMPERATURE};
+            std::string custom_fan_mode{fan_modes::FAN_AUTO};
+            std::string vertical_swing, horizontal_swing, display_mode, display_unit;
+            bool plasma{false}, sleep{false}, xfan{false}, save{false};
+            uint8_t retries{0};
+        };
         ACState state_ = ACState::Initializing; /* Stores if the AC is responsive or not */
         ACUpdate update_ = ACUpdate::NoUpdate;  /* Stores if we need tu send update to AC or no */
+        PendingControlState pending_control_;
 
         climate::ClimateMode mode_internal_{climate::CLIMATE_MODE_OFF};
         bool power_internal_{false};
@@ -162,6 +186,10 @@ class SinclairACCNT : public SinclairAC {
         bool display_power_internal_{false};
 
         bool processUnitReport(const std::vector<uint8_t> &payload);
+        void begin_pending_control();
+        void restart_pending_control(uint16_t fields);
+        bool pending_control_matches_report(const std::vector<uint8_t> &payload) const;
+        void handle_pending_control_response(const std::vector<uint8_t> &payload);
 
         void send_packet();
 

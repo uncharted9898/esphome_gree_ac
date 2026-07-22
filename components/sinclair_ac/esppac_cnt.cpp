@@ -15,6 +15,99 @@ void SinclairACCNT::setup()
     ESP_LOGD(TAG, "Using serial protocol for Sinclair AC");
 }
 
+void SinclairACCNT::begin_pending_control()
+{
+    if (this->pending_control_.active) return;
+    auto &pending = this->pending_control_;
+    pending.active = true;
+    pending.requested_fields = 0;
+    pending.retries = 0;
+    pending.mode = this->mode;
+    pending.target_temperature = this->target_temperature;
+    pending.custom_fan_mode = fan_modes::FAN_AUTO;
+    if (this->has_custom_fan_mode()) pending.custom_fan_mode = this->get_custom_fan_mode().c_str();
+    pending.vertical_swing = this->vertical_swing_state_;
+    pending.horizontal_swing = this->horizontal_swing_state_;
+    pending.display_mode = this->display_state_;
+    pending.display_unit = this->display_unit_state_;
+    pending.plasma = this->plasma_state_; pending.sleep = this->sleep_state_;
+    pending.xfan = this->xfan_state_; pending.save = this->save_state_;
+}
+
+void SinclairACCNT::restart_pending_control(uint16_t fields)
+{
+    this->begin_pending_control();
+    this->pending_control_.requested_fields |= fields;
+    this->pending_control_.retries = 0;
+    this->update_ = ACUpdate::UpdateStart;
+    this->wait_response_ = false;
+}
+
+bool SinclairACCNT::pending_control_matches_report(const std::vector<uint8_t> &payload) const
+{
+    (void) payload;
+    const auto &pending = this->pending_control_;
+    if (!pending.active) return true;
+    if ((pending.requested_fields & PENDING_MODE) &&
+        (this->mode != pending.mode || (pending.mode != climate::CLIMATE_MODE_OFF && !this->power_internal_))) return false;
+    if ((pending.requested_fields & PENDING_TARGET_TEMPERATURE) && this->target_temperature != pending.target_temperature) return false;
+    if ((pending.requested_fields & PENDING_FAN) && (!this->has_custom_fan_mode() || this->get_custom_fan_mode() != pending.custom_fan_mode)) return false;
+    if ((pending.requested_fields & PENDING_VERTICAL_SWING) && this->vertical_swing_state_ != pending.vertical_swing) return false;
+    if ((pending.requested_fields & PENDING_HORIZONTAL_SWING) && this->horizontal_swing_state_ != pending.horizontal_swing) return false;
+    if ((pending.requested_fields & PENDING_DISPLAY) && this->display_state_ != pending.display_mode) return false;
+    if ((pending.requested_fields & PENDING_DISPLAY_UNIT) && this->display_unit_state_ != pending.display_unit) return false;
+    if ((pending.requested_fields & PENDING_PLASMA) && this->plasma_state_ != pending.plasma) return false;
+    if ((pending.requested_fields & PENDING_SLEEP) && this->sleep_state_ != pending.sleep) return false;
+    if ((pending.requested_fields & PENDING_XFAN) && this->xfan_state_ != pending.xfan) return false;
+    if ((pending.requested_fields & PENDING_SAVE) && this->save_state_ != pending.save) return false;
+    return true;
+}
+
+void SinclairACCNT::handle_pending_control_response(const std::vector<uint8_t> &payload)
+{
+    if (!this->wait_response_ || !this->pending_control_.active) return;
+    const bool matches = this->pending_control_matches_report(payload);
+    if (!matches) {
+        this->wait_response_ = false;
+        if (this->pending_control_.requested_fields & PENDING_MODE) {
+            ESP_LOGD(TAG, "Command mismatch: requested mode=%u observed mode=%u", static_cast<unsigned>(this->pending_control_.mode), static_cast<unsigned>(this->mode));
+        }
+        if ((this->pending_control_.requested_fields & (PENDING_MODE | PENDING_FAN)) && payload.size() > protocol::REPORT_FAN_SPD2_BYTE) {
+            const uint8_t requested_mode = this->pending_control_.mode == climate::CLIMATE_MODE_COOL ? protocol::REPORT_MODE_COOL :
+                                           this->pending_control_.mode == climate::CLIMATE_MODE_DRY ? protocol::REPORT_MODE_DRY : protocol::REPORT_MODE_AUTO;
+            const uint8_t requested_fan = this->pending_control_.custom_fan_mode == fan_modes::FAN_LOW ? protocol::REPORT_GREE_FAN_LOW :
+                                          this->pending_control_.custom_fan_mode == fan_modes::FAN_MED ? protocol::REPORT_GREE_FAN_MED :
+                                          this->pending_control_.custom_fan_mode == fan_modes::FAN_HIGH ? protocol::REPORT_GREE_FAN_HIGH : protocol::REPORT_GREE_FAN_AUTO;
+            ESP_LOGD(TAG, "requested payload[4] masked=0x%02X observed=0x%02X retry=%u/3",
+                     (requested_mode << protocol::REPORT_MODE_POS) | requested_fan,
+                     payload[protocol::REPORT_FAN_SPD2_BYTE] & (protocol::REPORT_MODE_MASK | protocol::REPORT_GREE_FAN_MASK),
+                     this->pending_control_.retries + 1);
+        }
+        if (++this->pending_control_.retries >= 3) {
+            ESP_LOGW(TAG, "Command mismatch after 3 attempts; accepting reported state");
+            this->pending_control_.active = false;
+            this->update_ = ACUpdate::NoUpdate;
+            this->publish_protocol_state("command_failed_mismatch");
+            return;
+        }
+        ESP_LOGD(TAG, "Command mismatch: retry=%u/3", this->pending_control_.retries);
+        this->update_ = ACUpdate::UpdateStart;
+        this->publish_protocol_state("command_mismatch_retry");
+        return;
+    }
+    this->wait_response_ = false;
+    if (this->update_ == ACUpdate::UpdateStart) {
+        ESP_LOGD(TAG, "Command applied: requested fields match report");
+        this->update_ = ACUpdate::UpdateClear;
+        this->publish_protocol_state("command_clear_pending");
+    } else if (this->update_ == ACUpdate::UpdateClear) {
+        ESP_LOGD(TAG, "Command clear verified");
+        this->pending_control_.active = false;
+        this->update_ = ACUpdate::NoUpdate;
+        this->publish_protocol_state("command_verified");
+    }
+}
+
 void SinclairACCNT::loop()
 {
     /* this reads data from UART */
@@ -54,17 +147,9 @@ void SinclairACCNT::loop()
             this->last_packet_sent_ = millis();
         }
 
-        if (this->wait_response_) {
-            this->wait_response_ = false;
-            if (this->update_ == ACUpdate::UpdateStart) {
-                this->update_ = ACUpdate::UpdateClear;
-                this->publish_protocol_state("command_clear_pending");
-            } else if (this->update_ == ACUpdate::UpdateClear) {
-                this->update_ = ACUpdate::NoUpdate;
-                this->publish_protocol_state("command_verified");
-            }
-        }
         handle_packet(); /* Reports are acknowledgements as well as state updates. */
+        const std::vector<uint8_t> payload(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1);
+        this->handle_pending_control_response(payload); /* Verify after decoded state has been updated. */
         }
         this->reset_parser();
     }  // closes validation else
@@ -103,61 +188,62 @@ void SinclairACCNT::control(const climate::ClimateCall &call)
     if (call.get_mode().has_value())
     {
         ESP_LOGV(TAG, "Requested mode change");
-        this->update_ = ACUpdate::UpdateStart;
-        this->mode = *call.get_mode();
+        this->restart_pending_control(PENDING_MODE);
+        ESP_LOGD(TAG, "Control request: mode=%u -> %u", static_cast<unsigned>(this->mode), static_cast<unsigned>(*call.get_mode()));
+        this->pending_control_.mode = *call.get_mode();
     }
 
     if (call.get_target_temperature().has_value())
     {
         ESP_LOGV(TAG, "Requested target teperature change");
-        this->update_ = ACUpdate::UpdateStart;
-        this->target_temperature = *call.get_target_temperature();
-        if (this->target_temperature < MIN_TEMPERATURE)
+        this->restart_pending_control(PENDING_TARGET_TEMPERATURE);
+        this->pending_control_.target_temperature = *call.get_target_temperature();
+        if (this->pending_control_.target_temperature < MIN_TEMPERATURE)
         {
-            this->target_temperature = MIN_TEMPERATURE;
+            this->pending_control_.target_temperature = MIN_TEMPERATURE;
         }
-        else if (this->target_temperature > MAX_TEMPERATURE)
+        else if (this->pending_control_.target_temperature > MAX_TEMPERATURE)
         {
-            this->target_temperature = MAX_TEMPERATURE;
+            this->pending_control_.target_temperature = MAX_TEMPERATURE;
         }
     }
 
     if (call.has_custom_fan_mode())
     {
         ESP_LOGV(TAG, "Requested fan mode change");
-        this->update_ = ACUpdate::UpdateStart;
-        this->set_custom_fan_mode_(call.get_custom_fan_mode());
+        this->restart_pending_control(PENDING_FAN);
+        this->pending_control_.custom_fan_mode = call.get_custom_fan_mode();
     }
 
     if (call.get_swing_mode().has_value())
     {
         ESP_LOGV(TAG, "Requested swing mode change");
-        this->update_ = ACUpdate::UpdateStart;
+        this->restart_pending_control(PENDING_VERTICAL_SWING | PENDING_HORIZONTAL_SWING);
         switch (*call.get_swing_mode()) {
             case climate::CLIMATE_SWING_BOTH:
-                this->vertical_swing_state_   =   vertical_swing_options::FULL;
-                this->horizontal_swing_state_ = horizontal_swing_options::FULL;
+                this->pending_control_.vertical_swing = vertical_swing_options::FULL;
+                this->pending_control_.horizontal_swing = horizontal_swing_options::FULL;
                 break;
             case climate::CLIMATE_SWING_OFF:
                 /* both center */
-                this->vertical_swing_state_   =   vertical_swing_options::CMID;
-                this->horizontal_swing_state_ = horizontal_swing_options::CMID;
+                this->pending_control_.vertical_swing = vertical_swing_options::CMID;
+                this->pending_control_.horizontal_swing = horizontal_swing_options::CMID;
                 break;
             case climate::CLIMATE_SWING_VERTICAL:
                 /* vertical full, horizontal center */
-                this->vertical_swing_state_   =   vertical_swing_options::FULL;
-                this->horizontal_swing_state_ = horizontal_swing_options::CMID;
+                this->pending_control_.vertical_swing = vertical_swing_options::FULL;
+                this->pending_control_.horizontal_swing = horizontal_swing_options::CMID;
                 break;
             case climate::CLIMATE_SWING_HORIZONTAL:
                 /* horizontal full, vertical center */
-                this->vertical_swing_state_   =   vertical_swing_options::CMID;
-                this->horizontal_swing_state_ = horizontal_swing_options::FULL;
+                this->pending_control_.vertical_swing = vertical_swing_options::CMID;
+                this->pending_control_.horizontal_swing = horizontal_swing_options::FULL;
                 break;
             default:
                 ESP_LOGV(TAG, "Unsupported swing mode requested");
                 /* both center */
-                this->vertical_swing_state_   =   vertical_swing_options::CMID;
-                this->horizontal_swing_state_ = horizontal_swing_options::CMID;
+                this->pending_control_.vertical_swing = vertical_swing_options::CMID;
+                this->pending_control_.horizontal_swing = horizontal_swing_options::CMID;
                 break;
         }
     }
@@ -187,6 +273,9 @@ void SinclairACCNT::send_packet()
     packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL;
     /* Clear only fields this component owns before writing requested state. */
     packet[protocol::REPORT_MODE_BYTE] &= ~(protocol::REPORT_PWR_MASK | protocol::REPORT_MODE_MASK | protocol::REPORT_FAN_SPD2_MASK | protocol::REPORT_SLEEP_MASK);
+    if (this->fan_profile_ == FanProfile::GREE_4_SPEED) {
+        packet[protocol::REPORT_MODE_BYTE] &= ~protocol::REPORT_GREE_FAN_MASK;
+    }
     packet[protocol::REPORT_TEMP_SET_BYTE] &= ~protocol::REPORT_TEMP_SET_MASK;
     packet[protocol::REPORT_FAN_SPD1_BYTE] &= ~protocol::REPORT_FAN_SPD1_MASK;
     packet[protocol::REPORT_FAN_QUIET_BYTE] &= ~protocol::REPORT_FAN_QUIET_MASK;
@@ -213,10 +302,29 @@ void SinclairACCNT::send_packet()
             break;
     }
 
+    const bool encode_pending = this->pending_control_.active && this->update_ != ACUpdate::NoUpdate;
+    const auto command_mode = encode_pending ? this->pending_control_.mode : this->mode;
+    const float command_target_temperature = encode_pending ? this->pending_control_.target_temperature : this->target_temperature;
+    std::string command_fan_mode = fan_modes::FAN_AUTO;
+    if (encode_pending) {
+        command_fan_mode = this->pending_control_.custom_fan_mode;
+    } else if (this->has_custom_fan_mode()) {
+        command_fan_mode = this->get_custom_fan_mode().c_str();
+    }
+    const std::string &command_vertical_swing = encode_pending ? this->pending_control_.vertical_swing : this->vertical_swing_state_;
+    const std::string &command_horizontal_swing = encode_pending ? this->pending_control_.horizontal_swing : this->horizontal_swing_state_;
+    const std::string &command_display = encode_pending ? this->pending_control_.display_mode : this->display_state_;
+    const std::string &command_display_unit = encode_pending ? this->pending_control_.display_unit : this->display_unit_state_;
+    const bool command_plasma = encode_pending ? this->pending_control_.plasma : this->plasma_state_;
+    const bool command_sleep = encode_pending ? this->pending_control_.sleep : this->sleep_state_;
+    const bool command_xfan = encode_pending ? this->pending_control_.xfan : this->xfan_state_;
+    const bool command_save = encode_pending ? this->pending_control_.save : this->save_state_;
+    if (encode_pending && this->update_ == ACUpdate::UpdateStart) ESP_LOGD(TAG, "Command snapshot: mode=%u fan=%s target=%.1f", static_cast<unsigned>(command_mode), command_fan_mode.c_str(), command_target_temperature);
+
     /* MODE and POWER --------------------------------------------------------------------------- */
     uint8_t mode = protocol::REPORT_MODE_AUTO;
     bool power = false;
-    switch (this->mode)
+    switch (command_mode)
     {
         case climate::CLIMATE_MODE_AUTO:
             mode = protocol::REPORT_MODE_AUTO;
@@ -275,7 +383,7 @@ void SinclairACCNT::send_packet()
     }
 
     /* TARGET TEMPERATURE --------------------------------------------------------------------------- */
-    uint8_t target_temperature = ((((uint8_t)this->target_temperature) - protocol::REPORT_TEMP_SET_OFF) << protocol::REPORT_TEMP_SET_POS);
+    uint8_t target_temperature = ((((uint8_t)command_target_temperature) - protocol::REPORT_TEMP_SET_OFF) << protocol::REPORT_TEMP_SET_POS);
     packet[protocol::REPORT_TEMP_SET_BYTE] |= (target_temperature & protocol::REPORT_TEMP_SET_MASK);
 
     /* FAN SPEED --------------------------------------------------------------------------- */
@@ -284,9 +392,9 @@ void SinclairACCNT::send_packet()
     uint8_t fanSpeed2 = 0;
     bool    fanQuiet  = false;
     bool    fanTurbo  = false;
-    if (this->has_custom_fan_mode())
+    if (!command_fan_mode.empty())
     {
-        const char* custom_fan_mode = this->get_custom_fan_mode().c_str();
+        const char* custom_fan_mode = command_fan_mode.c_str();
 
         if (strcmp(custom_fan_mode, fan_modes::FAN_AUTO) == 0)
         {
@@ -353,8 +461,12 @@ void SinclairACCNT::send_packet()
         }
     }
 
-    packet[protocol::REPORT_FAN_SPD1_BYTE] |= (fanSpeed1 << protocol::REPORT_FAN_SPD1_POS);
-    packet[protocol::REPORT_FAN_SPD2_BYTE] |= (fanSpeed2 << protocol::REPORT_FAN_SPD2_POS);
+    if (this->fan_profile_ == FanProfile::GREE_4_SPEED) {
+        packet[protocol::REPORT_FAN_SPD2_BYTE] |= fanSpeed2 & protocol::REPORT_GREE_FAN_MASK;
+    } else {
+        packet[protocol::REPORT_FAN_SPD1_BYTE] |= (fanSpeed1 << protocol::REPORT_FAN_SPD1_POS);
+        packet[protocol::REPORT_FAN_SPD2_BYTE] |= (fanSpeed2 << protocol::REPORT_FAN_SPD2_POS);
+    }
     if (fanTurbo)
     {
         packet[protocol::REPORT_FAN_TURBO_BYTE] |= protocol::REPORT_FAN_TURBO_MASK;
@@ -366,51 +478,51 @@ void SinclairACCNT::send_packet()
 
     /* VERTICAL SWING --------------------------------------------------------------------------- */
     uint8_t mode_vertical_swing = protocol::REPORT_VSWING_OFF;
-    if (this->vertical_swing_state_ == vertical_swing_options::OFF)
+    if (command_vertical_swing == vertical_swing_options::OFF)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_OFF;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::FULL)
+    else if (command_vertical_swing == vertical_swing_options::FULL)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_FULL;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::DOWN)
+    else if (command_vertical_swing == vertical_swing_options::DOWN)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_DOWN;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::MIDD)
+    else if (command_vertical_swing == vertical_swing_options::MIDD)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_MIDD;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::MID)
+    else if (command_vertical_swing == vertical_swing_options::MID)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_MID;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::MIDU)
+    else if (command_vertical_swing == vertical_swing_options::MIDU)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_MIDU;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::UP)
+    else if (command_vertical_swing == vertical_swing_options::UP)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_UP;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::CDOWN)
+    else if (command_vertical_swing == vertical_swing_options::CDOWN)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_CDOWN;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::CMIDD)
+    else if (command_vertical_swing == vertical_swing_options::CMIDD)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_CMIDD;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::CMID)
+    else if (command_vertical_swing == vertical_swing_options::CMID)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_CMID;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::CMIDU)
+    else if (command_vertical_swing == vertical_swing_options::CMIDU)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_CMIDU;
     }
-    else if (this->vertical_swing_state_ == vertical_swing_options::CUP)
+    else if (command_vertical_swing == vertical_swing_options::CUP)
     {
         mode_vertical_swing = protocol::REPORT_VSWING_CUP;
     }
@@ -422,31 +534,31 @@ void SinclairACCNT::send_packet()
 
     /* HORIZONTAL SWING --------------------------------------------------------------------------- */
     uint8_t mode_horizontal_swing = protocol::REPORT_HSWING_OFF;
-    if (this->horizontal_swing_state_ == horizontal_swing_options::OFF)
+    if (command_horizontal_swing == horizontal_swing_options::OFF)
     {
         mode_horizontal_swing = protocol::REPORT_HSWING_OFF;
     }
-    else if (this->horizontal_swing_state_ == horizontal_swing_options::FULL)
+    else if (command_horizontal_swing == horizontal_swing_options::FULL)
     {
         mode_horizontal_swing = protocol::REPORT_HSWING_FULL;
     }
-    else if (this->horizontal_swing_state_ == horizontal_swing_options::CLEFT)
+    else if (command_horizontal_swing == horizontal_swing_options::CLEFT)
     {
         mode_horizontal_swing = protocol::REPORT_HSWING_CLEFT;
     }
-    else if (this->horizontal_swing_state_ == horizontal_swing_options::CMIDL)
+    else if (command_horizontal_swing == horizontal_swing_options::CMIDL)
     {
         mode_horizontal_swing = protocol::REPORT_HSWING_CMIDL;
     }
-    else if (this->horizontal_swing_state_ == horizontal_swing_options::CMID)
+    else if (command_horizontal_swing == horizontal_swing_options::CMID)
     {
         mode_horizontal_swing = protocol::REPORT_HSWING_CMID;
     }
-    else if (this->horizontal_swing_state_ == horizontal_swing_options::CMIDR)
+    else if (command_horizontal_swing == horizontal_swing_options::CMIDR)
     {
         mode_horizontal_swing = protocol::REPORT_HSWING_CMIDR;
     }
-    else if (this->horizontal_swing_state_ == horizontal_swing_options::CRIGHT)
+    else if (command_horizontal_swing == horizontal_swing_options::CRIGHT)
     {
         mode_horizontal_swing = protocol::REPORT_HSWING_CRIGHT;
     }
@@ -458,30 +570,31 @@ void SinclairACCNT::send_packet()
 
     /* DISPLAY --------------------------------------------------------------------------- */
     uint8_t display_mode = protocol::REPORT_DISP_MODE_AUTO;
-    if (this->display_state_ == display_options::AUTO)
+    bool display_power = this->display_power_internal_;
+    if (command_display == display_options::AUTO)
     {
         display_mode = protocol::REPORT_DISP_MODE_AUTO;
-        this->display_power_internal_ = true;
+        display_power = true;
     }
-    else if (this->display_state_ == display_options::SET)
+    else if (command_display == display_options::SET)
     {
         display_mode = protocol::REPORT_DISP_MODE_SET;
-        this->display_power_internal_ = true;
+        display_power = true;
     }
-    else if (this->display_state_ == display_options::ACT)
+    else if (command_display == display_options::ACT)
     {
         display_mode = protocol::REPORT_DISP_MODE_ACT;
-        this->display_power_internal_ = true;
+        display_power = true;
     }
-    else if (this->display_state_ == display_options::OUT)
+    else if (command_display == display_options::OUT)
     {
         display_mode = protocol::REPORT_DISP_MODE_OUT;
-        this->display_power_internal_ = true;
+        display_power = true;
     }
-    else if (this->display_state_ == display_options::OFF)
+    else if (command_display == display_options::OFF)
     {
         /* we do not want to alter display setting - only turn it off */
-        this->display_power_internal_ = false;
+        display_power = false;
         if (this->display_mode_internal_ == display_options::AUTO)
         {
             display_mode = protocol::REPORT_DISP_MODE_AUTO;
@@ -506,45 +619,48 @@ void SinclairACCNT::send_packet()
     else
     {
         display_mode = protocol::REPORT_DISP_MODE_AUTO;
-        this->display_power_internal_ = true;
+        display_power = true;
     }
 
     packet[protocol::REPORT_DISP_MODE_BYTE] |= (display_mode << protocol::REPORT_DISP_MODE_POS);
 
-    if (this->display_power_internal_)
+    if (display_power)
     {
         packet[protocol::REPORT_DISP_ON_BYTE] |= protocol::REPORT_DISP_ON_MASK;
     }
 
     /* DISPLAY UNIT --------------------------------------------------------------------------- */
-    if (this->display_unit_state_ == display_unit_options::DEGF)
+    if (command_display_unit == display_unit_options::DEGF)
     {
         packet[protocol::REPORT_DISP_F_BYTE] |= protocol::REPORT_DISP_F_MASK;
     }
 
     /* PLASMA --------------------------------------------------------------------------- */
-    if (this->plasma_state_)
+    if (command_plasma)
     {
         packet[protocol::REPORT_PLASMA1_BYTE] |= protocol::REPORT_PLASMA1_MASK;
         packet[protocol::REPORT_PLASMA2_BYTE] |= protocol::REPORT_PLASMA2_MASK;
     }
 
     /* SLEEP --------------------------------------------------------------------------- */
-    if (this->sleep_state_)
+    if (command_sleep)
     {
         packet[protocol::REPORT_SLEEP_BYTE] |= protocol::REPORT_SLEEP_MASK;
     }
 
     /* XFAN --------------------------------------------------------------------------- */
-    if (this->xfan_state_)
+    if (command_xfan)
     {
         packet[protocol::REPORT_XFAN_BYTE] |= protocol::REPORT_XFAN_MASK;
     }
 
     /* SAVE --------------------------------------------------------------------------- */
-    if (this->save_state_)
+    if (command_save)
     {
         packet[protocol::REPORT_SAVE_BYTE] |= protocol::REPORT_SAVE_MASK;
+    }
+    if (encode_pending && this->update_ == ACUpdate::UpdateStart && !this->last_report_payload_.empty()) {
+        ESP_LOGD(TAG, "Encoding payload[4]: current=0x%02X command=0x%02X", this->last_report_payload_[protocol::REPORT_MODE_BYTE], packet[protocol::REPORT_MODE_BYTE]);
     }
     
     /* Do the command, length */
@@ -749,15 +865,16 @@ const char* SinclairACCNT::determine_fan_mode()
     const bool fanTurbo = ((*this->report_payload_)[protocol::REPORT_FAN_TURBO_BYTE] & protocol::REPORT_FAN_TURBO_MASK) != 0;
     const char *fan_mode = fan_modes::FAN_AUTO;
     const char *decode_status = "unknown";
-    const bool gree_profile = this->fan_profile_ == FanProfile::GREE_4_SPEED ||
-                              (this->fan_profile_ == FanProfile::AUTO && fan_speed1_raw == 0x08);
-    /* Gree Livo uses byte 4 low bits. Byte 18=0x08 is not a fan request. */
+    const bool gree_profile = this->fan_profile_ == FanProfile::GREE_4_SPEED;
+    const uint8_t gree_fan = fan_speed2_raw & protocol::REPORT_GREE_FAN_MASK;
+    /* Gree Livo packs its active fan setting in byte 4's full low nibble. */
     if (gree_profile) {
-        switch (fanSpeed2) {
-            case 0: fan_mode = fan_modes::FAN_AUTO; decode_status = "gree_4_speed:auto"; break;
-            case 1: fan_mode = fan_modes::FAN_LOW; decode_status = "gree_4_speed:low"; break;
-            case 2: fan_mode = fan_modes::FAN_MED; decode_status = "gree_4_speed:medium"; break;
-            case 3: fan_mode = fan_modes::FAN_HIGH; decode_status = "gree_4_speed:high"; break;
+        switch (gree_fan) {
+            case protocol::REPORT_GREE_FAN_AUTO: fan_mode = fan_modes::FAN_AUTO; decode_status = "gree_4_speed:auto"; break;
+            case protocol::REPORT_GREE_FAN_LOW: fan_mode = fan_modes::FAN_LOW; decode_status = "gree_4_speed:low"; break;
+            case protocol::REPORT_GREE_FAN_MED: fan_mode = fan_modes::FAN_MED; decode_status = "gree_4_speed:medium"; break;
+            case protocol::REPORT_GREE_FAN_HIGH: fan_mode = fan_modes::FAN_HIGH; decode_status = "gree_4_speed:high"; break;
+            default: decode_status = "gree_4_speed:unknown"; break;
         }
         if (fanQuiet) { fan_mode = fan_modes::FAN_QUIET; decode_status = "gree_4_speed:quiet"; }
         if (fanTurbo) { fan_mode = fan_modes::FAN_TURBO; decode_status = "gree_4_speed:turbo"; }
@@ -962,8 +1079,8 @@ void SinclairACCNT::on_vertical_swing_change(const std::string &swing)
 
     ESP_LOGD(TAG, "Setting vertical swing position");
 
-    this->update_ = ACUpdate::UpdateStart;
-    this->vertical_swing_state_ = swing;
+    this->restart_pending_control(PENDING_VERTICAL_SWING);
+    this->pending_control_.vertical_swing = swing;
 }
 
 void SinclairACCNT::on_horizontal_swing_change(const std::string &swing)
@@ -974,8 +1091,8 @@ void SinclairACCNT::on_horizontal_swing_change(const std::string &swing)
 
     ESP_LOGD(TAG, "Setting horizontal swing position");
 
-    this->update_ = ACUpdate::UpdateStart;
-    this->horizontal_swing_state_ = swing;
+    this->restart_pending_control(PENDING_HORIZONTAL_SWING);
+    this->pending_control_.horizontal_swing = swing;
 }
 
 void SinclairACCNT::on_display_change(const std::string &display)
@@ -986,8 +1103,8 @@ void SinclairACCNT::on_display_change(const std::string &display)
 
     ESP_LOGD(TAG, "Setting display mode");
 
-    this->update_ = ACUpdate::UpdateStart;
-    this->display_state_ = display;
+    this->restart_pending_control(PENDING_DISPLAY);
+    this->pending_control_.display_mode = display;
 }
 
 void SinclairACCNT::on_display_unit_change(const std::string &display_unit)
@@ -998,8 +1115,8 @@ void SinclairACCNT::on_display_unit_change(const std::string &display_unit)
 
     ESP_LOGD(TAG, "Setting display unit");
 
-    this->update_ = ACUpdate::UpdateStart;
-    this->display_unit_state_ = display_unit;
+    this->restart_pending_control(PENDING_DISPLAY_UNIT);
+    this->pending_control_.display_unit = display_unit;
 }
 
 void SinclairACCNT::on_plasma_change(bool plasma)
@@ -1010,8 +1127,8 @@ void SinclairACCNT::on_plasma_change(bool plasma)
 
     ESP_LOGD(TAG, "Setting plasma");
 
-    this->update_ = ACUpdate::UpdateStart;
-    this->plasma_state_ = plasma;
+    this->restart_pending_control(PENDING_PLASMA);
+    this->pending_control_.plasma = plasma;
 }
 
 void SinclairACCNT::on_sleep_change(bool sleep)
@@ -1022,8 +1139,8 @@ void SinclairACCNT::on_sleep_change(bool sleep)
 
     ESP_LOGD(TAG, "Setting sleep");
 
-    this->update_ = ACUpdate::UpdateStart;
-    this->sleep_state_ = sleep;
+    this->restart_pending_control(PENDING_SLEEP);
+    this->pending_control_.sleep = sleep;
 }
 
 void SinclairACCNT::on_xfan_change(bool xfan)
@@ -1034,8 +1151,8 @@ void SinclairACCNT::on_xfan_change(bool xfan)
 
     ESP_LOGD(TAG, "Setting xfan");
 
-    this->update_ = ACUpdate::UpdateStart;
-    this->xfan_state_ = xfan;
+    this->restart_pending_control(PENDING_XFAN);
+    this->pending_control_.xfan = xfan;
 }
 
 void SinclairACCNT::on_save_change(bool save)
@@ -1046,8 +1163,8 @@ void SinclairACCNT::on_save_change(bool save)
 
     ESP_LOGD(TAG, "Setting save");
 
-    this->update_ = ACUpdate::UpdateStart;
-    this->save_state_ = save;
+    this->restart_pending_control(PENDING_SAVE);
+    this->pending_control_.save = save;
 }
 
 }  // namespace CNT
