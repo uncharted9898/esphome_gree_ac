@@ -27,6 +27,13 @@ class ModeContractTests(unittest.TestCase):
     def test_custom_fan_modes_use_the_climate_entity_api(self):
         self.assertIn("this->set_supported_custom_fan_modes(", CPP)
         self.assertNotIn("traits.set_supported_custom_fan_modes(", CPP)
+
+    def test_custom_fan_mode_fallback_is_compatible_with_stringref(self):
+        self.assertIn(
+            "this->has_custom_fan_mode() ? std::string(this->get_custom_fan_mode()) : std::string(fan_modes::FAN_AUTO)",
+            CNT,
+        )
+
     def test_uart_frame_length_includes_sync_bytes_and_length_byte(self):
         self.assertIn("c < 3 || c > DATA_MAX - 3", CPP)
         self.assertIn("frame_size = static_cast<size_t>(c) + 3", CPP)
