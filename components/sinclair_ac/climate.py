@@ -7,7 +7,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import uart, climate, sensor, select, switch, binary_sensor, text_sensor
 
-AUTO_LOAD = ["switch", "sensor", "select"]
+AUTO_LOAD = ["switch", "sensor", "select", "binary_sensor", "text_sensor"]
 DEPENDENCIES = ["uart"]
 
 sinclair_ac_ns = cg.esphome_ns.namespace("sinclair_ac")
@@ -37,6 +37,7 @@ CONF_SAVE_SWITCH                = "save_switch"
 
 CONF_CURRENT_TEMPERATURE_SENSOR = "current_temperature_sensor"
 CONF_TRANSMIT_ENABLED = "transmit_enabled"
+CONF_PROTOCOL_MODE = "protocol_mode"
 CONF_DEBUG = "debug"
 CONF_DIAGNOSTICS = "diagnostics"
 
@@ -50,10 +51,14 @@ diagnostics_schema = cv.Schema({
     cv.Optional("checksum_failures"): diagnostic_sensor_schema,
     cv.Optional("invalid_length_packets"): diagnostic_sensor_schema,
     cv.Optional("parser_resynchronizations"): diagnostic_sensor_schema,
+    cv.Optional("too_short_frames"): diagnostic_sensor_schema,
+    cv.Optional("frame_timeouts"): diagnostic_sensor_schema,
     cv.Optional("last_packet_length"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
     cv.Optional("last_packet_type"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
     cv.Optional("communication"): binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor),
     cv.Optional("receive_only"): binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor),
+    cv.Optional("poll_only"): binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor),
+    cv.Optional("protocol_mode"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("protocol_state"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("last_packet"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("last_unknown_packet"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
@@ -122,11 +127,23 @@ SCHEMA = climate.climate_schema(climate.Climate).extend(
         cv.Optional(CONF_SLEEP_SWITCH): switch_schema,
         cv.Optional(CONF_XFAN_SWITCH): switch_schema,
         cv.Optional(CONF_SAVE_SWITCH): switch_schema,
-        cv.Optional(CONF_TRANSMIT_ENABLED, default=True): cv.boolean,
+        cv.Optional(CONF_TRANSMIT_ENABLED): cv.boolean,
+        cv.Optional(CONF_PROTOCOL_MODE): cv.one_of("receive_only", "poll_only", "control", lower=True),
         cv.Optional(CONF_DEBUG, default={}): debug_schema,
         cv.Optional(CONF_DIAGNOSTICS): diagnostics_schema,
     }
 ).extend(uart.UART_DEVICE_SCHEMA)
+
+def _validate_mode(config):
+    if CONF_TRANSMIT_ENABLED in config and CONF_PROTOCOL_MODE in config:
+        raise cv.Invalid("transmit_enabled and protocol_mode cannot be used together")
+    if CONF_TRANSMIT_ENABLED in config:
+        import logging
+        logging.getLogger(__name__).warning("transmit_enabled is deprecated; use protocol_mode instead")
+        config[CONF_PROTOCOL_MODE] = "control" if config[CONF_TRANSMIT_ENABLED] else "receive_only"
+    if CONF_PROTOCOL_MODE not in config:
+        config[CONF_PROTOCOL_MODE] = "control"
+    return config
 
 CONFIG_SCHEMA = cv.All(
     SCHEMA.extend(
@@ -135,6 +152,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_CURRENT_TEMPERATURE_SENSOR): cv.use_id(sensor.Sensor),
         }
     ),
+    _validate_mode,
 )
 
 
@@ -143,7 +161,7 @@ async def to_code(config):
     await climate.register_climate(var, config)
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
-    cg.add(var.set_transmit_enabled(config[CONF_TRANSMIT_ENABLED]))
+    cg.add(var.set_protocol_mode({"receive_only": cg.RawExpression("sinclair_ac::ProtocolMode::RECEIVE_ONLY"), "poll_only": cg.RawExpression("sinclair_ac::ProtocolMode::POLL_ONLY"), "control": cg.RawExpression("sinclair_ac::ProtocolMode::CONTROL")}[config[CONF_PROTOCOL_MODE]]))
     debug = config[CONF_DEBUG]
     cg.add(var.set_debug(debug["log_rx"], debug["log_tx"], debug["log_unknown_packets"], debug["log_packet_differences"], debug["maximum_hex_length"]))
 
@@ -151,17 +169,17 @@ async def to_code(config):
         for key, method in {
             "valid_rx_packets": "set_valid_rx_packets_sensor", "valid_tx_packets": "set_valid_tx_packets_sensor",
             "unknown_packets": "set_unknown_packets_sensor", "checksum_failures": "set_checksum_failures_sensor",
-            "invalid_length_packets": "set_invalid_length_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
+            "invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
             "last_packet_length": "set_last_packet_length_sensor", "last_packet_type": "set_last_packet_type_sensor",
         }.items():
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await sensor.new_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))
-        for key, method in {"communication": "set_communication_sensor", "receive_only": "set_receive_only_sensor"}.items():
+        for key, method in {"communication": "set_communication_sensor", "receive_only": "set_receive_only_sensor", "poll_only": "set_poll_only_sensor"}.items():
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await binary_sensor.new_binary_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))
-        for key, method in {"protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor"}.items():
+        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor"}.items():
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await text_sensor.new_text_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))

@@ -1,0 +1,5 @@
+#include "../components/sinclair_ac/protocol_frame.h"
+#include <cassert>
+using namespace sinclair_ac_protocol;
+static std::vector<uint8_t> frame(uint8_t cmd, size_t payload) { std::vector<uint8_t> f{0x7e,0x7e,static_cast<uint8_t>(payload+3),cmd}; f.resize(payload+4); uint8_t c=0; for(size_t i=2;i<f.size();++i)c+=f[i]; f.push_back(c); return f; }
+int main(){ ParsedFrame p; auto known=frame(0x31,43); assert(parse(known,p)==Result::VALID_KNOWN && p.payload_length==43 && p.raw==known); assert(parse(frame(0x44,1),p)==Result::VALID_UNKNOWN); auto bad=known; bad.back()++; assert(parse(bad,p)==Result::CHECKSUM); auto short31=frame(0x31,4); assert(parse(short31,p)==Result::VALID_KNOWN && p.payload_length==4); auto longer=frame(0x31,80); assert(parse(longer,p)==Result::VALID_KNOWN); auto max=frame(0x31,195); assert(max.size()==200 && parse(max,p)==Result::VALID_KNOWN); assert(parse({0x7e,0x7e,3,0x31},p)==Result::TOO_SHORT); auto length=known; length[2]--; assert(parse(length,p)==Result::LENGTH); return 0; }
