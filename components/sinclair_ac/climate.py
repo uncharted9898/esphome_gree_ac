@@ -62,6 +62,12 @@ diagnostics_schema = cv.Schema({
     cv.Optional("protocol_state"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("last_packet"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("last_unknown_packet"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("fan_speed_field_1_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("fan_speed_field_1_low_3_bits"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("fan_speed_field_2_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("fan_quiet_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("fan_turbo_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("fan_decode_status"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
 })
 debug_schema = cv.Schema({
     cv.Optional("log_rx", default=False): cv.boolean,
@@ -171,6 +177,10 @@ async def to_code(config):
             "unknown_packets": "set_unknown_packets_sensor", "checksum_failures": "set_checksum_failures_sensor",
             "invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
             "last_packet_length": "set_last_packet_length_sensor", "last_packet_type": "set_last_packet_type_sensor",
+            "fan_speed_field_1_raw": "set_fan_speed_field_1_raw_sensor",
+            "fan_speed_field_1_low_3_bits": "set_fan_speed_field_1_low_3_bits_sensor",
+            "fan_speed_field_2_raw": "set_fan_speed_field_2_raw_sensor",
+            "fan_quiet_raw": "set_fan_quiet_raw_sensor", "fan_turbo_raw": "set_fan_turbo_raw_sensor",
         }.items():
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await sensor.new_sensor(config[CONF_DIAGNOSTICS][key])
@@ -179,7 +189,7 @@ async def to_code(config):
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await binary_sensor.new_binary_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))
-        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor"}.items():
+        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor", "fan_decode_status": "set_fan_decode_status_sensor"}.items():
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await text_sensor.new_text_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))

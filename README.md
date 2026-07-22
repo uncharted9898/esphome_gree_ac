@@ -111,6 +111,18 @@ climate:
         name: Bedroom AC too-short frames
       frame_timeouts:
         name: Bedroom AC frame timeouts
+      fan_speed_field_1_raw:
+        name: Bedroom AC fan speed field 1 raw
+      fan_speed_field_1_low_3_bits:
+        name: Bedroom AC fan speed field 1 low 3 bits
+      fan_speed_field_2_raw:
+        name: Bedroom AC fan speed field 2 raw
+      fan_quiet_raw:
+        name: Bedroom AC fan quiet raw
+      fan_turbo_raw:
+        name: Bedroom AC fan turbo raw
+      fan_decode_status:
+        name: Bedroom AC fan decode status
 ```
 
 If ESPHome reports any of these keys as invalid (especially suggesting
@@ -119,6 +131,14 @@ revision of this external component. Update the external-component source to a
 revision containing the mode support, or remove the cached external component
 and run validation again. Do not move the keys to a different indentation level:
 the layout above is the supported schema.
+
+For Livo fan-field discovery, leave `protocol_mode: poll_only` enabled and use the
+IR remote to change only the fan setting. Enable `debug.log_packet_differences`
+to identify changes at payload bytes 18, 4, 16, and 6. The fan diagnostics retain
+the raw byte 18 value, its low three bits, byte 4, quiet/turbo flags, and whether
+the current decoder recognizes the combination. The component deliberately keeps
+the established four-bit fan-speed mask until labelled captures demonstrate that
+bit `0x08` has a different meaning on all affected units.
 
 For local development the examples use `type: local` sources. Real installations should pin the revision being tested, for example `source: github://OWNER/esphome_gree_ac@BRANCH_OR_TAG`, rather than demonstrating an unpinned upstream `main`. When using a Git source while iterating on a branch, set a short `refresh` interval or clear ESPHome's external-component cache so that the schema and C++ implementation are updated together.
 

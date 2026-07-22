@@ -180,6 +180,9 @@ class SinclairACCNT : public SinclairAC {
         void handle_packet();
 
         const std::vector<uint8_t> *report_payload_{nullptr};
+        uint32_t last_unknown_fan_warning_{0};
+        uint32_t last_unknown_fan_signature_{0};
+        bool has_unknown_fan_signature_{false};
 
         climate::ClimateMode determine_mode();
         const char* determine_fan_mode();

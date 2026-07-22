@@ -10,12 +10,21 @@ climate:
   - platform: sinclair_ac
     name: Gree Livo poll only
     protocol_mode: poll_only # only no-change polls; HA control calls are ignored
-    debug: {log_rx: true, log_tx: true, maximum_hex_length: 128}
+    debug: {log_rx: true, log_tx: true, log_packet_differences: true, maximum_hex_length: 128}
     diagnostics:
       communication: {name: Gree communication}
       poll_only: {name: Gree poll-only active}
       protocol_mode: {name: Gree protocol mode}
       valid_rx_packets: {name: Gree valid RX frames}
+      last_packet_length: {name: Gree last packet length}
+      last_packet_type: {name: Gree last packet command}
+      last_packet: {name: Gree last packet}
+      fan_speed_field_1_raw: {name: Gree fan speed field 1 raw}
+      fan_speed_field_1_low_3_bits: {name: Gree fan speed field 1 low 3 bits}
+      fan_speed_field_2_raw: {name: Gree fan speed field 2 raw}
+      fan_quiet_raw: {name: Gree fan quiet raw}
+      fan_turbo_raw: {name: Gree fan turbo raw}
+      fan_decode_status: {name: Gree fan decode status}
 wifi: {ssid: !secret wifi_ssid, password: !secret wifi_password}
 api: {}
 ota: {platform: esphome, password: !secret ota_password}
