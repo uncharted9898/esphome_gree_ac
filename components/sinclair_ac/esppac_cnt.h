@@ -40,8 +40,8 @@ namespace protocol {
     static const uint8_t REPORT_FAN_SPD2_BYTE  = 4;
     static const uint8_t REPORT_FAN_SPD2_MASK  = 0b00000011;
     static const uint8_t REPORT_FAN_SPD2_POS   = 0;
-    /* Gree four-speed units pack mode and fan into byte 4: 1MMM FFFF. */
-    static const uint8_t REPORT_GREE_FAN_MASK  = 0b00001111;
+    /* Gree four-speed units pack mode and fan into byte 4: 1MMM xxFF. */
+    static const uint8_t REPORT_GREE_FAN_MASK  = 0b00000011;
     static const uint8_t REPORT_GREE_FAN_AUTO  = 0;
     static const uint8_t REPORT_GREE_FAN_LOW   = 1;
     static const uint8_t REPORT_GREE_FAN_MED   = 2;
@@ -132,8 +132,9 @@ namespace protocol {
     static const uint8_t SET_CONST_BIT_MASK    = 0b00000010;
 
     /* time constraints */
-    static const unsigned long TIME_REFRESH_PERIOD_MS   =  300;
-    static const unsigned long TIME_TIMEOUT_INACTIVE_MS = 1000;
+    static const unsigned long TIME_REFRESH_PERIOD_MS       =  300;
+    static const unsigned long POLL_RESPONSE_TIMEOUT_MS     = 1500;
+    static const unsigned long COMMUNICATION_TIMEOUT_MS     = 5000;
 }
 
 /* Define packets from AC that would be processed by software */
@@ -186,6 +187,8 @@ class SinclairACCNT : public SinclairAC {
         bool display_power_internal_{false};
 
         bool processUnitReport(const std::vector<uint8_t> &payload);
+        bool uses_gree_fan_layout() const;
+        void verify_no_change_packet(const std::vector<uint8_t> &packet) const;
         void begin_pending_control();
         void restart_pending_control(uint16_t fields);
         bool pending_control_matches_report(const std::vector<uint8_t> &payload) const;
@@ -202,6 +205,7 @@ class SinclairACCNT : public SinclairAC {
         uint32_t last_unknown_fan_signature_{0};
         bool has_unknown_fan_signature_{false};
         std::vector<uint8_t> last_report_payload_;
+        bool gree_fan_layout_detected_{false};
         uint32_t poll_timeouts_{0};
 
         climate::ClimateMode determine_mode();

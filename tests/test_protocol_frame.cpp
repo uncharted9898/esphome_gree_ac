@@ -61,6 +61,26 @@ int main() {
   assert(warmer_temperature_raw == 0x41);
   assert(cool_low == 0x91);
 
+  // Gree TX owns only power, mode and the low two fan bits in byte 4.  Byte
+  // 18 is model-specific on this layout and must be passed through unchanged.
+  const auto build_gree_byte4 = [](uint8_t report, uint8_t mode, uint8_t fan, bool power) {
+    constexpr uint8_t gree_owned = 0x80 | 0x70 | 0x03;
+    return static_cast<uint8_t>((report & ~gree_owned) | (power ? 0x80 : 0) | (mode << 4) | (fan & 0x03));
+  };
+  constexpr uint8_t gree_report_byte4 = 0xA1;
+  constexpr uint8_t gree_report_byte18 = 0x08;
+  const uint8_t no_change_gree = build_gree_byte4(gree_report_byte4, 2, 1, true);
+  assert(no_change_gree == 0xA1);  // DRY, ON, Low; SET_NOCHANGE is added separately.
+  assert(gree_report_byte18 == 0x08);
+  assert(build_gree_byte4(gree_report_byte4, 1, 1, true) == 0x91);  // COOL, Low.
+  assert(build_gree_byte4(0x91, 1, 2, true) == 0x92);               // COOL, Medium.
+  assert((build_gree_byte4(0xA5, 1, 1, true) & 0x0C) == 0x04);      // Preserve unowned bits 2-3.
+
+  // Sinclair's extended layout still owns and replaces the legacy byte-18 fan field.
+  constexpr uint8_t sinclair_speed1_mask = 0x0F;
+  const uint8_t sinclair_medium_speed1 = static_cast<uint8_t>((0x08 & ~sinclair_speed1_mask) | 3);
+  assert(sinclair_medium_speed1 == 0x03);
+
   assert(parse(frame(0x44, 1), parsed) == Result::VALID_UNKNOWN);
   auto bad = known;
   bad.back()++;

@@ -2,6 +2,8 @@
 #include "esppac_cnt.h"
 #include "protocol_frame.h"
 
+#include <cassert>
+
 namespace esphome {
 namespace sinclair_ac {
 namespace CNT {
@@ -162,7 +164,7 @@ void SinclairACCNT::loop()
     send_packet();
 
     /* if there are no packets for 5 seconds - mark module as not ready */
-    if (millis() - this->last_packet_received_ >= protocol::TIME_TIMEOUT_INACTIVE_MS)
+    if (millis() - this->last_packet_received_ >= protocol::COMMUNICATION_TIMEOUT_MS)
     {
         if (this->state_ != ACState::Initializing)
         {
@@ -260,7 +262,7 @@ void SinclairACCNT::send_packet()
     if (this->is_receive_only()) return;
     if (this->is_poll_only()) this->update_ = ACUpdate::NoUpdate;
     if (this->wait_response_) {
-        if (millis() - this->last_packet_sent_ < protocol::TIME_TIMEOUT_INACTIVE_MS) return;
+        if (millis() - this->last_packet_sent_ < protocol::POLL_RESPONSE_TIMEOUT_MS) return;
         this->wait_response_ = false;
         this->poll_timeouts_++;
         ESP_LOGW(TAG, "Poll/command response timed out; retrying after one outstanding request");
@@ -272,14 +274,30 @@ void SinclairACCNT::send_packet()
     if (!this->last_report_payload_.empty()) {
         std::copy_n(this->last_report_payload_.begin(), std::min(this->last_report_payload_.size(), packet.size()), packet.begin());
     }
+    const bool encode_pending = this->pending_control_.active && this->update_ != ACUpdate::NoUpdate;
+    const bool gree_fan_layout = this->uses_gree_fan_layout();
+    const auto command_mode = encode_pending ? this->pending_control_.mode : this->mode;
+    const float command_target_temperature = encode_pending ? this->pending_control_.target_temperature : this->target_temperature;
+    const std::string command_fan_mode = encode_pending ? this->pending_control_.custom_fan_mode :
+                                         (this->has_custom_fan_mode() ? this->get_custom_fan_mode() : fan_modes::FAN_AUTO);
+    const std::string &command_vertical_swing = encode_pending ? this->pending_control_.vertical_swing : this->vertical_swing_state_;
+    const std::string &command_horizontal_swing = encode_pending ? this->pending_control_.horizontal_swing : this->horizontal_swing_state_;
+    const std::string &command_display = encode_pending ? this->pending_control_.display_mode : this->display_state_;
+    const std::string &command_display_unit = encode_pending ? this->pending_control_.display_unit : this->display_unit_state_;
+    const bool command_plasma = encode_pending ? this->pending_control_.plasma : this->plasma_state_;
+    const bool command_sleep = encode_pending ? this->pending_control_.sleep : this->sleep_state_;
+    const bool command_xfan = encode_pending ? this->pending_control_.xfan : this->xfan_state_;
+    const bool command_save = encode_pending ? this->pending_control_.save : this->save_state_;
+
     packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL;
     /* Clear only fields this component owns before writing requested state. */
-    packet[protocol::REPORT_MODE_BYTE] &= ~(protocol::REPORT_PWR_MASK | protocol::REPORT_MODE_MASK | protocol::REPORT_FAN_SPD2_MASK | protocol::REPORT_SLEEP_MASK);
-    if (this->fan_profile_ == FanProfile::GREE_4_SPEED) {
-        packet[protocol::REPORT_MODE_BYTE] &= ~protocol::REPORT_GREE_FAN_MASK;
+    uint8_t mode_fields = protocol::REPORT_PWR_MASK | protocol::REPORT_MODE_MASK | protocol::REPORT_FAN_SPD2_MASK;
+    if (!gree_fan_layout || (encode_pending && (this->pending_control_.requested_fields & PENDING_SLEEP))) {
+        mode_fields |= protocol::REPORT_SLEEP_MASK;
     }
+    packet[protocol::REPORT_MODE_BYTE] &= ~mode_fields;
     packet[protocol::REPORT_TEMP_SET_BYTE] &= ~protocol::REPORT_TEMP_SET_MASK;
-    packet[protocol::REPORT_FAN_SPD1_BYTE] &= ~protocol::REPORT_FAN_SPD1_MASK;
+    if (!gree_fan_layout) packet[protocol::REPORT_FAN_SPD1_BYTE] &= ~protocol::REPORT_FAN_SPD1_MASK;
     packet[protocol::REPORT_FAN_QUIET_BYTE] &= ~protocol::REPORT_FAN_QUIET_MASK;
     packet[protocol::REPORT_FAN_TURBO_BYTE] &= ~(protocol::REPORT_FAN_TURBO_MASK | protocol::REPORT_DISP_ON_MASK | protocol::REPORT_PLASMA1_MASK | protocol::REPORT_XFAN_MASK);
     packet[protocol::REPORT_HSWING_BYTE] &= ~(protocol::REPORT_HSWING_MASK | protocol::REPORT_VSWING_MASK);
@@ -304,21 +322,6 @@ void SinclairACCNT::send_packet()
             break;
     }
 
-    const bool encode_pending = this->pending_control_.active && this->update_ != ACUpdate::NoUpdate;
-    const auto command_mode = encode_pending ? this->pending_control_.mode : this->mode;
-    const float command_target_temperature = encode_pending ? this->pending_control_.target_temperature : this->target_temperature;
-    std::string command_fan_mode = encode_pending ? this->pending_control_.custom_fan_mode : fan_modes::FAN_AUTO;
-    if (!encode_pending && this->has_custom_fan_mode()) {
-        command_fan_mode = this->get_custom_fan_mode();
-    }
-    const std::string &command_vertical_swing = encode_pending ? this->pending_control_.vertical_swing : this->vertical_swing_state_;
-    const std::string &command_horizontal_swing = encode_pending ? this->pending_control_.horizontal_swing : this->horizontal_swing_state_;
-    const std::string &command_display = encode_pending ? this->pending_control_.display_mode : this->display_state_;
-    const std::string &command_display_unit = encode_pending ? this->pending_control_.display_unit : this->display_unit_state_;
-    const bool command_plasma = encode_pending ? this->pending_control_.plasma : this->plasma_state_;
-    const bool command_sleep = encode_pending ? this->pending_control_.sleep : this->sleep_state_;
-    const bool command_xfan = encode_pending ? this->pending_control_.xfan : this->xfan_state_;
-    const bool command_save = encode_pending ? this->pending_control_.save : this->save_state_;
     if (encode_pending && this->update_ == ACUpdate::UpdateStart) ESP_LOGD(TAG, "Command snapshot: mode=%u fan=%s target=%.1f", static_cast<unsigned>(command_mode), command_fan_mode.c_str(), command_target_temperature);
 
     /* MODE and POWER --------------------------------------------------------------------------- */
@@ -461,7 +464,7 @@ void SinclairACCNT::send_packet()
         }
     }
 
-    if (this->fan_profile_ == FanProfile::GREE_4_SPEED) {
+    if (gree_fan_layout) {
         packet[protocol::REPORT_FAN_SPD2_BYTE] |= fanSpeed2 & protocol::REPORT_GREE_FAN_MASK;
     } else {
         packet[protocol::REPORT_FAN_SPD1_BYTE] |= (fanSpeed1 << protocol::REPORT_FAN_SPD1_POS);
@@ -662,6 +665,18 @@ void SinclairACCNT::send_packet()
     if (encode_pending && this->update_ == ACUpdate::UpdateStart && !this->last_report_payload_.empty()) {
         ESP_LOGD(TAG, "Encoding payload[4]: current=0x%02X command=0x%02X", this->last_report_payload_[protocol::REPORT_MODE_BYTE], packet[protocol::REPORT_MODE_BYTE]);
     }
+
+    if (!this->last_report_payload_.empty()) {
+        for (size_t i = 0; i < packet.size() && i < this->last_report_payload_.size(); ++i) {
+            if (packet[i] != this->last_report_payload_[i]) {
+                ESP_LOGD(TAG, "TX build changed payload[%u]: 0x%02X -> 0x%02X", static_cast<unsigned>(i), this->last_report_payload_[i], packet[i]);
+            }
+        }
+        if (gree_fan_layout && this->last_report_payload_.size() > protocol::REPORT_FAN_SPD1_BYTE) {
+            ESP_LOGD(TAG, "TX build preserved payload[%u]: 0x%02X", static_cast<unsigned>(protocol::REPORT_FAN_SPD1_BYTE), packet[protocol::REPORT_FAN_SPD1_BYTE]);
+        }
+    }
+    if (this->update_ == ACUpdate::NoUpdate) this->verify_no_change_packet(packet);
     
     /* Do the command, length */
     packet.insert(packet.begin(), protocol::CMD_OUT_PARAMS_SET);
@@ -739,6 +754,55 @@ void SinclairACCNT::handle_packet()
     }
 }
 
+bool SinclairACCNT::uses_gree_fan_layout() const
+{
+    return this->fan_profile_ == FanProfile::GREE_4_SPEED ||
+           (this->fan_profile_ == FanProfile::AUTO && this->gree_fan_layout_detected_);
+}
+
+void SinclairACCNT::verify_no_change_packet(const std::vector<uint8_t> &packet) const
+{
+#ifndef NDEBUG
+    if (this->last_report_payload_.empty()) return;
+    assert((packet[protocol::SET_NOCHANGE_BYTE] & protocol::SET_NOCHANGE_MASK) != 0);
+    if (this->uses_gree_fan_layout()) {
+        assert(packet[protocol::REPORT_FAN_SPD1_BYTE] == this->last_report_payload_[protocol::REPORT_FAN_SPD1_BYTE]);
+    }
+
+    for (size_t i = 0; i < packet.size() && i < this->last_report_payload_.size(); ++i) {
+        uint8_t owned_mask = 0;
+        if (i == protocol::REPORT_MODE_BYTE) {
+            owned_mask = protocol::REPORT_PWR_MASK | protocol::REPORT_MODE_MASK | protocol::REPORT_FAN_SPD2_MASK;
+            if (!this->uses_gree_fan_layout()) owned_mask |= protocol::REPORT_SLEEP_MASK;
+        } else if (i == protocol::REPORT_TEMP_SET_BYTE) {
+            owned_mask = protocol::REPORT_TEMP_SET_MASK;
+        } else if (i == protocol::REPORT_FAN_SPD1_BYTE && !this->uses_gree_fan_layout()) {
+            owned_mask = protocol::REPORT_FAN_SPD1_MASK;
+        } else if (i == protocol::REPORT_FAN_QUIET_BYTE) {
+            owned_mask = protocol::REPORT_FAN_QUIET_MASK;
+        } else if (i == protocol::REPORT_FAN_TURBO_BYTE) {
+            owned_mask = protocol::REPORT_FAN_TURBO_MASK | protocol::REPORT_DISP_ON_MASK |
+                         protocol::REPORT_PLASMA1_MASK | protocol::REPORT_XFAN_MASK;
+        } else if (i == protocol::REPORT_HSWING_BYTE) {
+            owned_mask = protocol::REPORT_HSWING_MASK | protocol::REPORT_VSWING_MASK;
+        } else if (i == protocol::REPORT_DISP_MODE_BYTE) {
+            owned_mask = protocol::REPORT_DISP_MODE_MASK;
+        } else if (i == protocol::REPORT_DISP_F_BYTE) {
+            owned_mask = protocol::REPORT_DISP_F_MASK | protocol::SET_CONST_BIT_MASK;
+        } else if (i == protocol::REPORT_PLASMA2_BYTE) {
+            owned_mask = protocol::REPORT_PLASMA2_MASK;
+        } else if (i == protocol::REPORT_SAVE_BYTE) {
+            owned_mask = protocol::REPORT_SAVE_MASK | protocol::SET_NOCHANGE_MASK;
+        } else if (i == protocol::SET_CONST_02_BYTE) {
+            owned_mask = 0xFF;
+        }
+        assert(((packet[i] ^ this->last_report_payload_[i]) & ~owned_mask) == 0);
+    }
+#else
+    (void) packet;
+#endif
+}
+
 /*
  * This decodes frame recieved from AC Unit
  */
@@ -746,6 +810,13 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
 {
     bool hasChanged = false;
     this->last_report_payload_ = payload;
+    if (this->fan_profile_ == FanProfile::AUTO && !this->gree_fan_layout_detected_ &&
+        payload.size() > protocol::REPORT_FAN_SPD1_BYTE &&
+        payload[protocol::REPORT_FAN_SPD1_BYTE] == 0x08 &&
+        (payload[protocol::REPORT_FAN_SPD2_BYTE] & protocol::REPORT_GREE_FAN_MASK) <= protocol::REPORT_GREE_FAN_HIGH) {
+        this->gree_fan_layout_detected_ = true;
+        ESP_LOGD(TAG, "Detected persistent Gree four-speed fan layout from valid report");
+    }
     this->report_payload_ = &payload;
 
     climate::ClimateMode newMode = determine_mode();
@@ -865,9 +936,9 @@ const char* SinclairACCNT::determine_fan_mode()
     const bool fanTurbo = ((*this->report_payload_)[protocol::REPORT_FAN_TURBO_BYTE] & protocol::REPORT_FAN_TURBO_MASK) != 0;
     const char *fan_mode = fan_modes::FAN_AUTO;
     const char *decode_status = "unknown";
-    const bool gree_profile = this->fan_profile_ == FanProfile::GREE_4_SPEED;
+    const bool gree_profile = this->uses_gree_fan_layout();
     const uint8_t gree_fan = fan_speed2_raw & protocol::REPORT_GREE_FAN_MASK;
-    /* Gree Livo packs its active fan setting in byte 4's full low nibble. */
+    /* Gree Livo packs its active fan setting in byte 4's low two bits. */
     if (gree_profile) {
         switch (gree_fan) {
             case protocol::REPORT_GREE_FAN_AUTO: fan_mode = fan_modes::FAN_AUTO; decode_status = "gree_4_speed:auto"; break;
