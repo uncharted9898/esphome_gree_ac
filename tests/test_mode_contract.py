@@ -54,6 +54,25 @@ class ModeContractTests(unittest.TestCase):
         self.assertIn('"gree_4_speed:medium"', CNT)
         self.assertNotIn("fan_speed1_raw == 0x08", CNT)
         self.assertIn("packet[protocol::REPORT_FAN_SPD2_BYTE] |= fanSpeed2 & protocol::REPORT_GREE_FAN_MASK;", CNT)
+        self.assertIn("static const uint8_t REPORT_GREE_FAN_MASK  = 0b00000011;", (ROOT / "components/sinclair_ac/esppac_cnt.h").read_text())
+
+    def test_gree_packet_builder_preserves_byte_18_and_unknown_byte_4_bits(self):
+        header = (ROOT / "components/sinclair_ac/esppac_cnt.h").read_text()
+        self.assertIn("bool uses_gree_fan_layout() const;", header)
+        self.assertIn("bool gree_fan_layout_detected_{false};", header)
+        self.assertIn("if (!gree_fan_layout) packet[protocol::REPORT_FAN_SPD1_BYTE] &= ~protocol::REPORT_FAN_SPD1_MASK;", CNT)
+        self.assertNotIn("if (this->fan_profile_ == FanProfile::GREE_4_SPEED) {\n        packet[protocol::REPORT_MODE_BYTE] &= ~protocol::REPORT_GREE_FAN_MASK;", CNT)
+        self.assertIn("TX build preserved payload[%u]: 0x%02X", CNT)
+        self.assertIn("this->verify_no_change_packet(packet);", CNT)
+
+    def test_auto_gree_detection_and_timeouts_are_persistent_and_separate(self):
+        header = (ROOT / "components/sinclair_ac/esppac_cnt.h").read_text()
+        self.assertIn("POLL_RESPONSE_TIMEOUT_MS     = 1500", header)
+        self.assertIn("COMMUNICATION_TIMEOUT_MS     = 5000", header)
+        self.assertIn("this->gree_fan_layout_detected_ = true;", CNT)
+        self.assertIn("bool SinclairACCNT::uses_gree_fan_layout() const", CNT)
+        self.assertIn("protocol::POLL_RESPONSE_TIMEOUT_MS", CNT)
+        self.assertIn("protocol::COMMUNICATION_TIMEOUT_MS", CNT)
     def test_temperature_byte_42_is_excluded_from_discovery_changes(self):
         self.assertIn("command == 0x31", CPP)
         self.assertIn("payload.size() > 42", CPP)
