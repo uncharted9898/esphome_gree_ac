@@ -142,11 +142,16 @@ void SinclairAC::set_telemetry_discovery(bool enabled, bool expose_raw_payload, 
     this->telemetry_expose_raw_bytes_ = expose_raw_bytes;
     this->telemetry_log_changes_only_ = log_changes_only;
     this->telemetry_history_depth_ = history_depth;
+    this->telemetry_capture_.set_history_depth(history_depth);
 }
 const char *SinclairAC::fan_profile_name() const {
     switch (this->fan_profile_) { case FanProfile::SINCLAIR_EXTENDED: return "sinclair_extended"; case FanProfile::GREE_4_SPEED: return "gree_4_speed"; default: return "auto"; }
 }
 void SinclairAC::retain_payload(uint8_t command, const std::vector<uint8_t> &payload) {
+    // Retain every checksum-valid command, including unsupported commands.
+    // This is observational and deliberately does not acknowledge requests.
+    this->telemetry_capture_.observe(command, payload, millis());
+    this->capture_packet(false, command, payload);
     const auto previous = this->last_payloads_.find(command);
     const bool raw_changed = previous == this->last_payloads_.end() || previous->second != payload;
     bool meaningful_changed = raw_changed;
@@ -165,8 +170,23 @@ void SinclairAC::retain_payload(uint8_t command, const std::vector<uint8_t> &pay
         if (target != nullptr && (raw_changed || !this->telemetry_log_changes_only_)) target->publish_state(format_hex_pretty(payload));
     }
     if (!this->telemetry_discovery_enabled_) return;
-    if (this->telemetry_log_changes_only_ && !meaningful_changed) return;
-    if (meaningful_changed) ESP_LOGD(TAG, "Telemetry discovery: cmd=0x%02X payload changed (%u bytes)", command, payload.size());
+    if (meaningful_changed || !this->telemetry_log_changes_only_) ESP_LOGD(TAG, "Telemetry discovery: cmd=0x%02X payload changed (%u bytes)", command, payload.size());
+    this->publish_discovery_capture();
+}
+
+void SinclairAC::capture_packet(bool transmitted, uint8_t command, const std::vector<uint8_t> &payload) {
+    CaptureRecord record;
+    record.timestamp_ms = millis(); record.transmitted = transmitted; record.command = command; record.payload = payload;
+    record.decoded_mode = static_cast<uint8_t>(this->mode); record.target_temperature = this->target_temperature;
+    record.indoor_temperature = this->current_temperature; record.requested_fan = this->has_custom_fan_mode() ? this->get_custom_fan_mode() : "";
+    this->telemetry_capture_.capture(record);
+}
+
+void SinclairAC::publish_discovery_capture() {
+    if (!this->telemetry_discovery_enabled_ || (this->last_discovery_summary_publish_ != 0 && millis() - this->last_discovery_summary_publish_ < 5000)) return;
+    this->last_discovery_summary_publish_ = millis();
+    if (this->discovery_summary_sensor_) this->discovery_summary_sensor_->publish_state(this->telemetry_capture_.summary());
+    if (this->capture_export_sensor_) this->capture_export_sensor_->publish_state(this->telemetry_capture_.export_csv());
 }
 
 void SinclairAC::set_debug(bool rx, bool tx, bool unknown, bool differences, uint16_t maximum_hex_length) {
@@ -186,6 +206,10 @@ void SinclairAC::record_received_packet(bool known) {
 }
 void SinclairAC::record_transmitted_packet(const std::vector<uint8_t> &packet) {
     this->valid_tx_packets_++;
+    if (packet.size() >= 5 && packet[0] == 0x7E && packet[1] == 0x7E) {
+        this->capture_packet(true, packet[3], std::vector<uint8_t>(packet.begin() + 4, packet.end() - 1));
+        this->publish_discovery_capture();
+    }
 }
 void SinclairAC::publish_diagnostics(bool force) {
     if (!force && millis() - this->last_diagnostics_publish_ < 5000) return;

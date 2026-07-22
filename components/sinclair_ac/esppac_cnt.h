@@ -200,6 +200,12 @@ class SinclairACCNT : public SinclairAC {
 
         bool processUnitReport(const std::vector<uint8_t> &payload);
         bool uses_gree_fan_layout() const;
+        std::vector<uint8_t> build_poll_packet() const;
+        std::vector<uint8_t> build_command_packet(ACUpdate update) const;
+        void apply_requested_field_patches(std::vector<uint8_t> &packet) const;
+        uint8_t allowed_command_mask(size_t index, uint16_t requested_fields, bool gree_layout) const;
+        uint8_t allowed_envelope_mask(size_t index, ACUpdate update) const;
+        void verify_packet_changes(const std::vector<uint8_t> &packet, ACUpdate update) const;
         void verify_no_change_packet(const std::vector<uint8_t> &packet) const;
         void begin_pending_control();
         void restart_pending_control(uint16_t fields);

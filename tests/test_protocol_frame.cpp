@@ -1,6 +1,7 @@
 #include "../components/sinclair_ac/protocol_frame.h"
 #include "../components/sinclair_ac/protocol_state.h"
 #include "../components/sinclair_ac/request_lifecycle.h"
+#include "../components/sinclair_ac/telemetry_discovery.h"
 
 #include <cassert>
 #include <string>
@@ -8,6 +9,9 @@
 using namespace sinclair_ac_protocol;
 using esphome::sinclair_ac::OutstandingRequest;
 using esphome::sinclair_ac::RequestLifecycle;
+using esphome::sinclair_ac::CaptureRecord;
+using esphome::sinclair_ac::SupplementalQueryGate;
+using esphome::sinclair_ac::TelemetryDiscovery;
 
 static std::vector<uint8_t> frame(uint8_t command, size_t payload_length) {
   std::vector<uint8_t> raw{SYNC, SYNC, static_cast<uint8_t>(payload_length + 2), command};
@@ -125,9 +129,63 @@ int main() {
   assert(lifecycle.acknowledge_report(2580));
 
   // NoUpdate starts from the 45-byte report baseline and only changes its envelope.
-  std::vector<uint8_t> report{0x00,0x00,0x40,0x00,0xA1,0x80,0x02,0x82,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x40,0x00,0x46,0x00,0x00};
+  std::vector<uint8_t> report{0x00,0x00,0x40,0x00,0x90,0x80,0x06,0xC2,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x41,0x00,0x44,0x00,0x00};
   report.resize(45);
   auto poll = report; poll[3] &= ~0xAF; poll[39] = 0x02; poll[7] |= 0x02; poll[11] |= 0x08;
-  assert(poll[18] == 0x08 && poll[44] == 0x46 && poll[39] == 0x02);
+  assert(poll[18] == 0x08 && poll[44] == 0x44 && poll[4] == 0x90 && poll[8] == report[8]);
+  for (size_t i = 0; i < poll.size(); ++i) {
+    const uint8_t envelope_mask = i == 3 ? 0xAF : i == 7 ? 0x02 : i == 11 ? 0x08 : i == 39 ? 0xFF : 0;
+    assert(((poll[i] ^ report[i]) & ~envelope_mask) == 0);
+  }
+
+  // Requested-field patch regression cases use intentionally non-default
+  // unrelated bytes.  Every case must remain inside its documented mask.
+  const auto assert_masked_change = [](const std::vector<uint8_t> &before, const std::vector<uint8_t> &after,
+                                       const std::vector<uint8_t> &masks) {
+    for (size_t i = 0; i < before.size(); ++i) assert(((before[i] ^ after[i]) & ~masks[i]) == 0);
+  };
+  std::vector<uint8_t> rich(45, 0); rich[4] = 0x9C; rich[5] = 0xB7; rich[6] = 0x0F; rich[7] = 0x82;
+  rich[8] = 0xA5; rich[9] = 0x30; rich[11] = 0x48; rich[16] = 0x08; rich[18] = 0x0E;
+  std::vector<uint8_t> gree_fan = rich; gree_fan[4] = (gree_fan[4] & ~0x03) | 0x02; gree_fan[16] &= ~0x08; gree_fan[6] &= ~0x01;
+  std::vector<uint8_t> fan_masks(45, 0); fan_masks[4] = 0x03; fan_masks[16] = 0x08; fan_masks[6] = 0x01;
+  assert_masked_change(rich, gree_fan, fan_masks); assert(gree_fan[18] == rich[18]);
+  std::vector<uint8_t> vertical = rich; vertical[8] = (vertical[8] & ~0xF0) | 0x40;
+  std::vector<uint8_t> vertical_masks(45, 0); vertical_masks[8] = 0xF0;
+  assert_masked_change(rich, vertical, vertical_masks); assert((vertical[8] & 0x07) == (rich[8] & 0x07));
+  std::vector<uint8_t> horizontal = rich; horizontal[8] = (horizontal[8] & ~0x07) | 0x04;
+  std::vector<uint8_t> horizontal_masks(45, 0); horizontal_masks[8] = 0x07;
+  assert_masked_change(rich, horizontal, horizontal_masks); assert((horizontal[8] & 0xF0) == (rich[8] & 0xF0));
+  std::vector<uint8_t> mode_only = rich; mode_only[4] = (mode_only[4] & ~0xF0) | 0x90;
+  std::vector<uint8_t> mode_masks(45, 0); mode_masks[4] = 0xF0;
+  assert_masked_change(rich, mode_only, mode_masks);
+  std::vector<uint8_t> plasma_only = rich; plasma_only[6] &= ~0x04; plasma_only[0] &= ~0x04;
+  std::vector<uint8_t> plasma_masks(45, 0); plasma_masks[6] = 0x04; plasma_masks[0] = 0x04;
+  assert_masked_change(rich, plasma_only, plasma_masks);
+
+  // Discovery is raw and command-agnostic: temperature-only updates refresh
+  // the latest 0x31 payload; byte 44 remains only a byte statistic.
+  TelemetryDiscovery discovery(2);
+  discovery.observe(0x31, {0, 0, 0x40}, 100);
+  discovery.observe(0x31, {0, 0, 0x41}, 200);
+  const auto &report_stats = discovery.commands().at(0x31);
+  assert(report_stats.latest_payload[2] == 0x41 && report_stats.bytes[2].changes == 1);
+  assert(report_stats.bytes.size() == 3);  // No physical name is assigned to any byte.
+  discovery.observe(0x40, {0xAA, 0x55}, 300);  // Valid but unsupported command is retained.
+  assert(discovery.commands().at(0x40).packets == 1);
+  CaptureRecord first; first.timestamp_ms = 1; first.command = 0x31; discovery.capture(first);
+  CaptureRecord second; second.timestamp_ms = 2; second.command = 0x40; discovery.capture(second);
+  CaptureRecord third; third.timestamp_ms = 3; third.command = 0x44; discovery.capture(third);
+  assert(discovery.history().size() == 2 && discovery.history().front().command == 0x40);
+  assert(discovery.export_csv().find("RX") != std::string::npos);
+
+  SupplementalQueryGate query_gate;
+  query_gate.configure(false, 1);
+  assert(!query_gate.enabled() && !query_gate.may_send(false, false));
+  query_gate.configure(true, 1);
+  assert(!query_gate.may_send(true, false));  // Active climate traffic has priority.
+  assert(!query_gate.may_send(false, true));  // Normal polling has priority.
+  assert(query_gate.may_send(false, false));
+  query_gate.sent();
+  assert(!query_gate.may_send(false, false));
   return 0;
 }

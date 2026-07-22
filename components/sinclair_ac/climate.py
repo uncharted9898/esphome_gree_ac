@@ -42,6 +42,7 @@ CONF_DEBUG = "debug"
 CONF_DIAGNOSTICS = "diagnostics"
 CONF_FAN_PROFILE = "fan_profile"
 CONF_TELEMETRY_DISCOVERY = "telemetry_discovery"
+CONF_SUPPLEMENTAL_QUERIES = "supplemental_queries"
 
 diagnostic_sensor_schema = sensor.sensor_schema(
     sensor.Sensor, accuracy_decimals=0, state_class="total_increasing"
@@ -57,6 +58,7 @@ diagnostics_schema = cv.Schema({
     cv.Optional("frame_timeouts"): diagnostic_sensor_schema,
     # Unresolved raw candidate; intentionally unitless and diagnostic-only.
     cv.Optional("candidate_telemetry_byte_44_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("candidate_byte_44_temperature_hypothesis"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1),
     cv.Optional("polls_sent"): diagnostic_sensor_schema,
     cv.Optional("poll_responses"): diagnostic_sensor_schema,
     cv.Optional("poll_response_timeouts"): diagnostic_sensor_schema,
@@ -88,6 +90,8 @@ diagnostics_schema = cv.Schema({
     cv.Optional("last_unknown_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("last_command_result"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
     cv.Optional("last_command_failure_reason"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("discovery_summary"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("capture_export_csv"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
 })
 telemetry_discovery_schema = cv.Schema({
     cv.Optional("enabled", default=False): cv.boolean,
@@ -95,6 +99,19 @@ telemetry_discovery_schema = cv.Schema({
     cv.Optional("expose_raw_bytes", default=False): cv.boolean,
     cv.Optional("log_changes_only", default=True): cv.boolean,
     cv.Optional("history_depth", default=16): cv.int_range(min=1, max=64),
+})
+supplemental_query_schema = cv.Schema({
+    cv.Required("name"): cv.string,
+    cv.Required("request_command"): cv.int_range(min=0, max=255),
+    cv.Required("expected_response_command"): cv.int_range(min=0, max=255),
+    cv.Required("raw_payload"): cv.All(cv.ensure_list(cv.int_range(min=0, max=255)), cv.Length(min=1, max=195)),
+})
+supplemental_queries_schema = cv.Schema({
+    # Disabled by default. Templates are captured OEM requests, never invented.
+    cv.Optional("enabled", default=False): cv.boolean,
+    cv.Optional("interval", default="10s"): cv.positive_time_period_milliseconds,
+    cv.Optional("max_attempts", default=1): cv.int_range(min=1, max=3),
+    cv.Optional("queries", default=[]): cv.All(cv.ensure_list(supplemental_query_schema), cv.Length(max=8)),
 })
 
 debug_schema = cv.Schema({
@@ -165,6 +182,7 @@ SCHEMA = climate.climate_schema(climate.Climate).extend(
         cv.Optional(CONF_PROTOCOL_MODE): cv.one_of("receive_only", "poll_only", "control", lower=True),
         cv.Optional(CONF_FAN_PROFILE, default="auto"): cv.one_of("sinclair_extended", "gree_4_speed", "auto", lower=True),
         cv.Optional(CONF_TELEMETRY_DISCOVERY, default={}): telemetry_discovery_schema,
+        cv.Optional(CONF_SUPPLEMENTAL_QUERIES, default={}): supplemental_queries_schema,
         cv.Optional(CONF_DEBUG, default={}): debug_schema,
         cv.Optional(CONF_DIAGNOSTICS): diagnostics_schema,
     }
@@ -203,12 +221,14 @@ async def to_code(config):
     cg.add(var.set_fan_profile({"sinclair_extended": cg.RawExpression("sinclair_ac::FanProfile::SINCLAIR_EXTENDED"), "gree_4_speed": cg.RawExpression("sinclair_ac::FanProfile::GREE_4_SPEED"), "auto": cg.RawExpression("sinclair_ac::FanProfile::AUTO")}[config[CONF_FAN_PROFILE]]))
     discovery = config[CONF_TELEMETRY_DISCOVERY]
     cg.add(var.set_telemetry_discovery(discovery["enabled"], discovery["expose_raw_payload"], discovery["expose_raw_bytes"], discovery["log_changes_only"], discovery["history_depth"]))
+    queries = config[CONF_SUPPLEMENTAL_QUERIES]
+    cg.add(var.set_supplemental_queries(queries["enabled"], queries["max_attempts"]))
 
     if CONF_DIAGNOSTICS in config:
         for key, method in {
             "valid_rx_packets": "set_valid_rx_packets_sensor", "valid_tx_packets": "set_valid_tx_packets_sensor",
             "unknown_packets": "set_unknown_packets_sensor", "checksum_failures": "set_checksum_failures_sensor",
-            "invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "candidate_telemetry_byte_44_raw": "set_candidate_telemetry_byte_44_raw_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
+            "invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "candidate_telemetry_byte_44_raw": "set_candidate_telemetry_byte_44_raw_sensor", "candidate_byte_44_temperature_hypothesis": "set_candidate_byte_44_temperature_hypothesis_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
             "polls_sent": "set_polls_sent_sensor", "poll_responses": "set_poll_responses_sensor", "poll_response_timeouts": "set_poll_response_timeouts_sensor", "consecutive_poll_timeouts": "set_consecutive_poll_timeouts_sensor", "last_poll_response_ms": "set_last_poll_response_ms_sensor", "command_attempts": "set_command_attempts_sensor", "command_response_timeouts": "set_command_response_timeouts_sensor", "command_mismatches": "set_command_mismatches_sensor",
             "last_packet_length": "set_last_packet_length_sensor", "last_packet_type": "set_last_packet_type_sensor",
             "fan_speed_field_1_raw": "set_fan_speed_field_1_raw_sensor",
@@ -223,7 +243,7 @@ async def to_code(config):
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await binary_sensor.new_binary_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))
-        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor", "fan_decode_status": "set_fan_decode_status_sensor", "fan_decode_profile": "set_fan_decode_profile_sensor", "last_0x31_payload": "set_last_0x31_payload_sensor", "last_0x33_payload": "set_last_0x33_payload_sensor", "last_0x44_payload": "set_last_0x44_payload_sensor", "last_0x40_payload": "set_last_0x40_payload_sensor", "last_unknown_payload": "set_last_unknown_payload_sensor", "last_command_result": "set_last_command_result_sensor", "last_command_failure_reason": "set_last_command_failure_reason_sensor"}.items():
+        for key, method in {"protocol_mode": "set_protocol_mode_sensor", "protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor", "fan_decode_status": "set_fan_decode_status_sensor", "fan_decode_profile": "set_fan_decode_profile_sensor", "last_0x31_payload": "set_last_0x31_payload_sensor", "last_0x33_payload": "set_last_0x33_payload_sensor", "last_0x44_payload": "set_last_0x44_payload_sensor", "last_0x40_payload": "set_last_0x40_payload_sensor", "last_unknown_payload": "set_last_unknown_payload_sensor", "last_command_result": "set_last_command_result_sensor", "last_command_failure_reason": "set_last_command_failure_reason_sensor", "discovery_summary": "set_discovery_summary_sensor", "capture_export_csv": "set_capture_export_sensor"}.items():
             if key in config[CONF_DIAGNOSTICS]:
                 entity = await text_sensor.new_text_sensor(config[CONF_DIAGNOSTICS][key])
                 cg.add(getattr(var, method)(entity))
