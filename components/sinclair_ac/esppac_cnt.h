@@ -171,12 +171,15 @@ class SinclairACCNT : public SinclairAC {
         std::string display_mode_internal_;
         bool display_power_internal_;
 
-        bool processUnitReport();
+        bool processUnitReport(const std::vector<uint8_t> &payload);
 
         void send_packet();
 
-        bool verify_packet();
+        enum class PacketValidationResult { VALID_KNOWN, VALID_UNKNOWN, INVALID_TOO_SHORT, INVALID_LENGTH, INVALID_CHECKSUM };
+        PacketValidationResult verify_packet();
         void handle_packet();
+
+        const std::vector<uint8_t> *report_payload_{nullptr};
 
         climate::ClimateMode determine_mode();
         const char* determine_fan_mode();

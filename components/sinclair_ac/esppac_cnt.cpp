@@ -29,12 +29,20 @@ void SinclairACCNT::loop()
         /* log for ESPHome debug */
         log_packet(this->serialProcess_.data);
 
-        if (!verify_packet())  /* Verify length, header, counter and checksum */
-        {
+        const auto validation = verify_packet();
+        if (validation == PacketValidationResult::INVALID_TOO_SHORT || validation == PacketValidationResult::INVALID_LENGTH || validation == PacketValidationResult::INVALID_CHECKSUM) return;
+        const bool known = validation == PacketValidationResult::VALID_KNOWN;
+        this->record_received_packet(known, true);
+        if (this->last_packet_length_sensor_) this->last_packet_length_sensor_->publish_state(this->serialProcess_.data.size());
+        if (this->last_packet_type_sensor_) this->last_packet_type_sensor_->publish_state(this->serialProcess_.data[3]);
+        this->log_packet_difference(this->serialProcess_.data);
+        if (this->last_packet_sensor_) this->last_packet_sensor_->publish_state("RX cmd=0x" + format_hex_pretty(std::vector<uint8_t>{this->serialProcess_.data[3]}));
+        if (!known) {
+            ESP_LOGD(TAG, "RX valid unsupported command 0x%02X retained for discovery", this->serialProcess_.data[3]);
+            if (this->log_unknown_) this->log_packet(this->serialProcess_.data);
+            if (this->last_unknown_packet_sensor_) this->last_unknown_packet_sensor_->publish_state(format_hex_pretty(this->serialProcess_.data));
             return;
         }
-
-        this->last_packet_received_ = millis();  /* Set the time at which we received our last packet */
 
         /* A valid recieved packet of accepted type marks module as being ready */
         if (this->state_ != ACState::Ready)
@@ -60,6 +68,8 @@ void SinclairACCNT::loop()
         {
             this->state_ = ACState::Initializing;
             Component::status_set_error();
+            if (this->communication_sensor_) this->communication_sensor_->publish_state(false);
+            this->publish_protocol_state(this->transmit_enabled_ ? "timeout" : "receive-only");
         }
     }
 }
@@ -70,6 +80,10 @@ void SinclairACCNT::loop()
 
 void SinclairACCNT::control(const climate::ClimateCall &call)
 {
+    if (!this->transmit_enabled_) {
+        if (!this->transmit_warning_logged_) { ESP_LOGW(TAG, "Ignoring control request: transmit_enabled is false (receive-only mode)"); this->transmit_warning_logged_ = true; }
+        return;
+    }
     if (this->state_ != ACState::Ready)
         return;
 
@@ -142,6 +156,7 @@ void SinclairACCNT::control(const climate::ClimateCall &call)
 
 void SinclairACCNT::send_packet()
 {
+    if (!this->transmit_enabled_) return;
     std::vector<uint8_t> packet(protocol::SET_PACKET_LEN, 0);  /* Initialize packet contents */
 
     if (this->wait_response_ == true && (millis() - this->last_packet_sent_) < protocol::TIME_REFRESH_PERIOD_MS)
@@ -517,6 +532,7 @@ void SinclairACCNT::send_packet()
     this->last_packet_sent_ = millis();  /* Save the time when we sent the last packet */
     this->wait_response_ = true;
     write_array(packet);                 /* Sent the packet by UART */
+    this->record_transmitted_packet(packet);
     log_packet(packet, true);            /* Log uart for debug purposes */
 
     /* update setting state-machine */
@@ -540,18 +556,20 @@ void SinclairACCNT::send_packet()
  * Packet handling
  */
 
-bool SinclairACCNT::verify_packet()
+SinclairACCNT::PacketValidationResult SinclairACCNT::verify_packet()
 {
     /* At least 2 sync bytes + length + type + checksum */
     if (this->serialProcess_.data.size() < 5)
     {
         ESP_LOGW(TAG, "Dropping invalid packet (length)");
-        return false;
+        return PacketValidationResult::INVALID_TOO_SHORT;
     }
 
-    /* The header (aka sync bytes) was checked by SinclairAC::read_data() */
-
-    /* The frame len was assumed by SinclairAC::read_data() */
+    if (this->serialProcess_.data[0] != protocol::SYNC || this->serialProcess_.data[1] != protocol::SYNC || this->serialProcess_.data[2] + 2 != this->serialProcess_.data.size()) {
+        ESP_LOGW(TAG, "Dropping invalid packet (declared length %u, received %u)", this->serialProcess_.data[2], this->serialProcess_.data.size());
+        this->invalid_lengths_++; if (this->invalid_length_sensor_) this->invalid_length_sensor_->publish_state(this->invalid_lengths_);
+        return PacketValidationResult::INVALID_LENGTH;
+    }
 
     /* Check if this packet type sould be processed */
     bool commandAllowed = false;
@@ -562,11 +580,6 @@ bool SinclairACCNT::verify_packet()
             commandAllowed = true;
             break;
         }
-    }
-    if (!commandAllowed)
-    {
-        ESP_LOGW(TAG, "Dropping invalid packet (command [%02X] not allowed)", this->serialProcess_.data[3]);
-        return false;
     }
 
     /* Check checksum - sum of all bytes except sync and checksum itself% 0x100 
@@ -579,21 +592,24 @@ bool SinclairACCNT::verify_packet()
     if (checksum != this->serialProcess_.data[this->serialProcess_.data.size()-1])
     {
         ESP_LOGD(TAG, "Dropping invalid packet (checksum)");
-        return false;
+        this->checksum_failures_++; if (this->checksum_failures_sensor_) this->checksum_failures_sensor_->publish_state(this->checksum_failures_);
+        return PacketValidationResult::INVALID_CHECKSUM;
     }
 
-    return true;
+    return commandAllowed ? PacketValidationResult::VALID_KNOWN : PacketValidationResult::VALID_UNKNOWN;
 }
 
 void SinclairACCNT::handle_packet()
 {
     if (this->serialProcess_.data[3] == protocol::CMD_IN_UNIT_REPORT)
     {
-        /* here we will remove unnecessary elements - header and checksum */
-        this->serialProcess_.data.erase(this->serialProcess_.data.begin(), this->serialProcess_.data.begin() + 4); /* remove header */
-        this->serialProcess_.data.pop_back();  /* remove checksum */
-        /* now process the data */
-        this->processUnitReport();
+        const size_t payload_size = this->serialProcess_.data.size() - 5;
+        if (payload_size <= protocol::REPORT_TEMP_ACT_BYTE) {
+            ESP_LOGW(TAG, "Ignoring unsupported short 0x31 report (payload %u; need at least %u)", payload_size, protocol::REPORT_TEMP_ACT_BYTE + 1);
+            return;
+        }
+        std::vector<uint8_t> payload(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1);
+        this->processUnitReport(payload);
         this->publish_state();
     }
     else 
@@ -605,9 +621,10 @@ void SinclairACCNT::handle_packet()
 /*
  * This decodes frame recieved from AC Unit
  */
-bool SinclairACCNT::processUnitReport()
+bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
 {
     bool hasChanged = false;
+    this->report_payload_ = &payload;
 
     climate::ClimateMode newMode = determine_mode();
     if (this->mode != newMode) hasChanged = true;
@@ -624,7 +641,7 @@ bool SinclairACCNT::processUnitReport()
     }
     this->set_custom_fan_mode_(newFanMode);
     
-    float newTargetTemperature = (float)(((this->serialProcess_.data[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK) >> protocol::REPORT_TEMP_SET_POS)
+    float newTargetTemperature = (float)((((*this->report_payload_)[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK) >> protocol::REPORT_TEMP_SET_POS)
         + protocol::REPORT_TEMP_SET_OFF);
     if (this->target_temperature != newTargetTemperature) hasChanged = true;
     this->update_target_temperature(newTargetTemperature);
@@ -632,7 +649,7 @@ bool SinclairACCNT::processUnitReport()
     /* if there is no external sensor mapped to represent current temperature we will get data from AC unit */
     if (this->current_temperature_sensor_ == nullptr)
     {
-        float newCurrentTemperature = (float)(((this->serialProcess_.data[protocol::REPORT_TEMP_ACT_BYTE] & protocol::REPORT_TEMP_ACT_MASK) >> protocol::REPORT_TEMP_ACT_POS)
+        float newCurrentTemperature = (float)((((*this->report_payload_)[protocol::REPORT_TEMP_ACT_BYTE] & protocol::REPORT_TEMP_ACT_MASK) >> protocol::REPORT_TEMP_ACT_POS)
             - protocol::REPORT_TEMP_ACT_OFF) / protocol::REPORT_TEMP_ACT_DIV;
         if (this->current_temperature != newCurrentTemperature) hasChanged = true;
         this->update_current_temperature(newCurrentTemperature);
@@ -667,17 +684,18 @@ bool SinclairACCNT::processUnitReport()
     this->update_xfan(determine_xfan());
     this->update_save(determine_save());
 
+    this->report_payload_ = nullptr;
     return hasChanged;
 }
 
 climate::ClimateMode SinclairACCNT::determine_mode()
 {
-    uint8_t mode = (this->serialProcess_.data[protocol::REPORT_MODE_BYTE] & protocol::REPORT_MODE_MASK) >> protocol::REPORT_MODE_POS;
+    uint8_t mode = ((*this->report_payload_)[protocol::REPORT_MODE_BYTE] & protocol::REPORT_MODE_MASK) >> protocol::REPORT_MODE_POS;
 
     /* as mode presented by climate component incorporates both power and mode we will store this separately for Sinclair
        in _internal_ fields */
     /* check unit power flag */
-    this->power_internal_ = (this->serialProcess_.data[protocol::REPORT_PWR_BYTE] & protocol::REPORT_PWR_MASK) != 0;
+    this->power_internal_ = ((*this->report_payload_)[protocol::REPORT_PWR_BYTE] & protocol::REPORT_PWR_MASK) != 0;
 
     /* check unit mode */
     switch (mode)
@@ -717,10 +735,10 @@ climate::ClimateMode SinclairACCNT::determine_mode()
 const char* SinclairACCNT::determine_fan_mode()
 {
     /* fan setting has quite complex representation in the packet, brace for it */
-    uint8_t fanSpeed1 = (this->serialProcess_.data[protocol::REPORT_FAN_SPD1_BYTE]  & protocol::REPORT_FAN_SPD1_MASK) >> protocol::REPORT_FAN_SPD1_POS;
-    uint8_t fanSpeed2 = (this->serialProcess_.data[protocol::REPORT_FAN_SPD2_BYTE]  & protocol::REPORT_FAN_SPD2_MASK) >> protocol::REPORT_FAN_SPD2_POS;
-    bool    fanQuiet  = (this->serialProcess_.data[protocol::REPORT_FAN_QUIET_BYTE] & protocol::REPORT_FAN_QUIET_MASK) != 0;
-    bool    fanTurbo  = (this->serialProcess_.data[protocol::REPORT_FAN_TURBO_BYTE] & protocol::REPORT_FAN_TURBO_MASK) != 0;
+    uint8_t fanSpeed1 = ((*this->report_payload_)[protocol::REPORT_FAN_SPD1_BYTE]  & protocol::REPORT_FAN_SPD1_MASK) >> protocol::REPORT_FAN_SPD1_POS;
+    uint8_t fanSpeed2 = ((*this->report_payload_)[protocol::REPORT_FAN_SPD2_BYTE]  & protocol::REPORT_FAN_SPD2_MASK) >> protocol::REPORT_FAN_SPD2_POS;
+    bool    fanQuiet  = ((*this->report_payload_)[protocol::REPORT_FAN_QUIET_BYTE] & protocol::REPORT_FAN_QUIET_MASK) != 0;
+    bool    fanTurbo  = ((*this->report_payload_)[protocol::REPORT_FAN_TURBO_BYTE] & protocol::REPORT_FAN_TURBO_MASK) != 0;
     /* we have extracted all the data, let's do the processing */
     if      (fanSpeed1 == 0 && fanSpeed2 == 0 && fanQuiet == false && fanTurbo == false)
     {
@@ -763,7 +781,7 @@ const char* SinclairACCNT::determine_fan_mode()
 
 std::string SinclairACCNT::determine_vertical_swing()
 {
-    uint8_t mode = (this->serialProcess_.data[protocol::REPORT_VSWING_BYTE]  & protocol::REPORT_VSWING_MASK) >> protocol::REPORT_VSWING_POS;
+    uint8_t mode = ((*this->report_payload_)[protocol::REPORT_VSWING_BYTE]  & protocol::REPORT_VSWING_MASK) >> protocol::REPORT_VSWING_POS;
 
     switch (mode) {
         case protocol::REPORT_VSWING_OFF:
@@ -798,7 +816,7 @@ std::string SinclairACCNT::determine_vertical_swing()
 
 std::string SinclairACCNT::determine_horizontal_swing()
 {
-    uint8_t mode = (this->serialProcess_.data[protocol::REPORT_HSWING_BYTE]  & protocol::REPORT_HSWING_MASK) >> protocol::REPORT_HSWING_POS;
+    uint8_t mode = ((*this->report_payload_)[protocol::REPORT_HSWING_BYTE]  & protocol::REPORT_HSWING_MASK) >> protocol::REPORT_HSWING_POS;
 
     switch (mode) {
         case protocol::REPORT_HSWING_OFF:
@@ -823,9 +841,9 @@ std::string SinclairACCNT::determine_horizontal_swing()
 
 std::string SinclairACCNT::determine_display()
 {
-    uint8_t mode = (this->serialProcess_.data[protocol::REPORT_DISP_MODE_BYTE] & protocol::REPORT_DISP_MODE_MASK) >> protocol::REPORT_DISP_MODE_POS;
+    uint8_t mode = ((*this->report_payload_)[protocol::REPORT_DISP_MODE_BYTE] & protocol::REPORT_DISP_MODE_MASK) >> protocol::REPORT_DISP_MODE_POS;
 
-    this->display_power_internal_ = (this->serialProcess_.data[protocol::REPORT_DISP_ON_BYTE] & protocol::REPORT_DISP_ON_MASK);
+    this->display_power_internal_ = ((*this->report_payload_)[protocol::REPORT_DISP_ON_BYTE] & protocol::REPORT_DISP_ON_MASK);
 
     switch (mode) {
         case protocol::REPORT_DISP_MODE_AUTO:
@@ -858,7 +876,7 @@ std::string SinclairACCNT::determine_display()
 
 std::string SinclairACCNT::determine_display_unit()
 {
-    if (this->serialProcess_.data[protocol::REPORT_DISP_F_BYTE] & protocol::REPORT_DISP_F_MASK)
+    if ((*this->report_payload_)[protocol::REPORT_DISP_F_BYTE] & protocol::REPORT_DISP_F_MASK)
     {
         return display_unit_options::DEGF;
     }
@@ -869,21 +887,21 @@ std::string SinclairACCNT::determine_display_unit()
 }
 
 bool SinclairACCNT::determine_plasma(){
-    bool plasma1 = (this->serialProcess_.data[protocol::REPORT_PLASMA1_BYTE] & protocol::REPORT_PLASMA1_MASK) != 0;
-    bool plasma2 = (this->serialProcess_.data[protocol::REPORT_PLASMA2_BYTE] & protocol::REPORT_PLASMA2_MASK) != 0;
+    bool plasma1 = ((*this->report_payload_)[protocol::REPORT_PLASMA1_BYTE] & protocol::REPORT_PLASMA1_MASK) != 0;
+    bool plasma2 = ((*this->report_payload_)[protocol::REPORT_PLASMA2_BYTE] & protocol::REPORT_PLASMA2_MASK) != 0;
     return plasma1 || plasma2;
 }
 
 bool SinclairACCNT::determine_sleep(){
-    return (this->serialProcess_.data[protocol::REPORT_SLEEP_BYTE] & protocol::REPORT_SLEEP_MASK) != 0;
+    return ((*this->report_payload_)[protocol::REPORT_SLEEP_BYTE] & protocol::REPORT_SLEEP_MASK) != 0;
 }
 
 bool SinclairACCNT::determine_xfan(){
-    return (this->serialProcess_.data[protocol::REPORT_XFAN_BYTE] & protocol::REPORT_XFAN_MASK) != 0;
+    return ((*this->report_payload_)[protocol::REPORT_XFAN_BYTE] & protocol::REPORT_XFAN_MASK) != 0;
 }
 
 bool SinclairACCNT::determine_save(){
-    return (this->serialProcess_.data[protocol::REPORT_SAVE_BYTE] & protocol::REPORT_SAVE_MASK) != 0;
+    return ((*this->report_payload_)[protocol::REPORT_SAVE_BYTE] & protocol::REPORT_SAVE_MASK) != 0;
 }
 
 
@@ -893,6 +911,7 @@ bool SinclairACCNT::determine_save(){
 
 void SinclairACCNT::on_vertical_swing_change(const std::string &swing)
 {
+    if (!this->transmit_enabled_) return;
     if (this->state_ != ACState::Ready)
         return;
 
@@ -904,6 +923,7 @@ void SinclairACCNT::on_vertical_swing_change(const std::string &swing)
 
 void SinclairACCNT::on_horizontal_swing_change(const std::string &swing)
 {
+    if (!this->transmit_enabled_) return;
     if (this->state_ != ACState::Ready)
         return;
 
@@ -915,6 +935,7 @@ void SinclairACCNT::on_horizontal_swing_change(const std::string &swing)
 
 void SinclairACCNT::on_display_change(const std::string &display)
 {
+    if (!this->transmit_enabled_) return;
     if (this->state_ != ACState::Ready)
         return;
 
@@ -926,6 +947,7 @@ void SinclairACCNT::on_display_change(const std::string &display)
 
 void SinclairACCNT::on_display_unit_change(const std::string &display_unit)
 {
+    if (!this->transmit_enabled_) return;
     if (this->state_ != ACState::Ready)
         return;
 
@@ -937,6 +959,7 @@ void SinclairACCNT::on_display_unit_change(const std::string &display_unit)
 
 void SinclairACCNT::on_plasma_change(bool plasma)
 {
+    if (!this->transmit_enabled_) return;
     if (this->state_ != ACState::Ready)
         return;
 
@@ -948,6 +971,7 @@ void SinclairACCNT::on_plasma_change(bool plasma)
 
 void SinclairACCNT::on_sleep_change(bool sleep)
 {
+    if (!this->transmit_enabled_) return;
     if (this->state_ != ACState::Ready)
         return;
 
@@ -959,6 +983,7 @@ void SinclairACCNT::on_sleep_change(bool sleep)
 
 void SinclairACCNT::on_xfan_change(bool xfan)
 {
+    if (!this->transmit_enabled_) return;
     if (this->state_ != ACState::Ready)
         return;
 
@@ -970,6 +995,7 @@ void SinclairACCNT::on_xfan_change(bool xfan)
 
 void SinclairACCNT::on_save_change(bool save)
 {
+    if (!this->transmit_enabled_) return;
     if (this->state_ != ACState::Ready)
         return;
 

@@ -44,3 +44,28 @@ On some stock WiFi PCBs AC unit connector pins are marked on silkscreen.
 **TODO**
 * Support Timers - maybe unnecessray as timers can be managed by Home Assistant
 * Support Time sync - maybe unnecessray as timers can be managed by Home Assistant
+
+## Receive-only compatibility and protocol discovery
+
+The `sinclair_ac` component can safely observe candidate Gree Livo Gen3 and Gen4
+units before it controls them. Set `transmit_enabled: false`; this is a software
+TX lock and no UART write path (including polling or state packets) is used. Keep
+the physical TX wire disconnected during initial work as an additional safeguard.
+See [`examples/gree-livo-gen3-debug.yaml`](examples/gree-livo-gen3-debug.yaml).
+
+Known `0x31` reports decode the existing Sinclair-compatible common prefix. Valid
+frames with other command bytes are retained, counted, and optionally logged; they
+never update climate state or cause a response. Additional bytes in a longer report
+remain visible in raw packet logs, but are not assigned inferred meanings.
+
+Before connecting any revision, verify connector orientation and logic/power
+voltages. In particular, **never connect USB 5 V and HVAC 5 V simultaneously**.
+After observing stable traffic and verifying pinout/voltage, explicitly enable TX
+and reconnect it only when ready for controlled testing.
+
+Useful captures include startup, power on/off, every operating and fan mode, each
+vane position, display changes, sleep, X-Fan, save/8 °C heat, IR remote changes,
+and fault states. Submit the labelled packet logs or serial captures with all Wi-Fi
+credentials, API keys, MAC addresses, and location details removed. Climate action
+is inferred from selected mode and room/target temperatures; it is not a compressor
+running indication.

@@ -1,0 +1,69 @@
+substitutions:
+  name: gree-livo-gen3-discovery
+  rx_pin: GPIO20
+  tx_pin: GPIO21
+
+esphome:
+  name: ${name}
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+# The AC UART is shared with this component; do not send logger output on it.
+logger:
+  baud_rate: 0
+  level: VERBOSE
+
+# Start with receive-only testing. Disconnect the physical TX wire too: this is a
+# second, independent safety guard. Do not power the ESP from USB and HVAC 5 V at
+# the same time. Verify connector orientation and voltage before changing this to true.
+uart:
+  rx_pin: ${rx_pin}
+  tx_pin: ${tx_pin}
+  baud_rate: 4800
+  data_bits: 8
+  parity: EVEN
+  stop_bits: 1
+
+external_components:
+  - source: github://piotrva/esphome_gree_ac
+    components: [sinclair_ac]
+    refresh: 0s
+
+climate:
+  - platform: sinclair_ac
+    name: Gree Livo Gen3 Discovery
+    transmit_enabled: false
+    debug:
+      log_rx: true
+      log_tx: true
+      log_unknown_packets: true
+      log_packet_differences: true
+      maximum_hex_length: 128
+    diagnostics:
+      communication:
+        name: Gree Communication
+      receive_only:
+        name: Gree Receive Only
+      protocol_state:
+        name: Gree Protocol State
+      valid_rx_packets:
+        name: Gree Valid RX Packets
+      checksum_failures:
+        name: Gree Checksum Failures
+      unknown_packets:
+        name: Gree Unknown Packets
+      invalid_length_packets:
+        name: Gree Invalid Length Packets
+      parser_resynchronizations:
+        name: Gree Parser Resynchronizations
+      last_packet_type:
+        name: Gree Last Packet Type
+      last_packet_length:
+        name: Gree Last Packet Length
+      last_packet:
+        name: Gree Last Packet
+      last_unknown_packet:
+        name: Gree Last Unknown Packet

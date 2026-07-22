@@ -37,10 +37,17 @@ void SinclairAC::setup()
     this->last_packet_sent_ = millis();
 
     ESP_LOGI(TAG, "Sinclair AC component v%s starting...", VERSION);
+    this->publish_protocol_state(this->transmit_enabled_ ? "initializing" : "receive-only");
+    if (this->receive_only_sensor_ != nullptr) this->receive_only_sensor_->publish_state(!this->transmit_enabled_);
 }
 
 void SinclairAC::loop()
 {
+    if (this->serialProcess_.state == STATE_RECIEVE && millis() - this->serialProcess_.started_at > READ_TIMEOUT) {
+        ESP_LOGW(TAG, "Discarding truncated UART frame after timeout");
+        this->reset_parser(true);
+        this->publish_protocol_state(this->transmit_enabled_ ? "timeout" : "receive-only");
+    }
     read_data();  // Read data from UART (if there is any)
 }
 
@@ -48,7 +55,7 @@ void SinclairAC::read_data()
 {
     while (available())  // Read while data is available
     {
-        /* If we had a packet or a packet had not been decoded yet - do not recieve more data */
+        /* Do not overwrite a completed frame before its owner has processed it. */
         if (this->serialProcess_.state == STATE_COMPLETE)
         {
             break;
@@ -56,47 +63,30 @@ void SinclairAC::read_data()
         uint8_t c;
         this->read_byte(&c);  // Store in receive buffer
 
-        if (this->serialProcess_.state == STATE_RESTART)
-        {
-            this->serialProcess_.data.clear();
-            this->serialProcess_.state = STATE_WAIT_SYNC;
-        }
-        
-        this->serialProcess_.data.push_back(c);
-        if (this->serialProcess_.data.size() >= DATA_MAX)
-        {
-            this->serialProcess_.data.clear();
-            continue;
-        }
+        if (this->serialProcess_.state == STATE_RESTART) this->reset_parser();
         switch (this->serialProcess_.state)
         {
             case STATE_WAIT_SYNC:
-                /* Frame begins with 0x7E 0x7E LEN CMD
-                   LEN - frame length in bytes
-                   CMD - command
-                 */
-                if (c != 0x7E && 
-                    this->serialProcess_.data.size() > 2 && 
-                    this->serialProcess_.data[this->serialProcess_.data.size()-2] == 0x7E && 
-                    this->serialProcess_.data[this->serialProcess_.data.size()-3] == 0x7E)
-                {
-                    this->serialProcess_.data.clear();
-
-                    this->serialProcess_.data.push_back(0x7E);
-                    this->serialProcess_.data.push_back(0x7E);
+                if (c == 0x7E) {
+                    if (this->serialProcess_.data.size() == 1 && this->serialProcess_.data[0] == 0x7E) {
+                        this->serialProcess_.data.push_back(c);
+                    } else {
+                        this->serialProcess_.data.assign(1, c);
+                    }
+                } else if (this->serialProcess_.data.size() == 2) {
+                    if (c < 3 || c > DATA_MAX - 2) { this->reset_parser(true); break; }
                     this->serialProcess_.data.push_back(c);
-
-                    this->serialProcess_.frame_size = c;
+                    this->serialProcess_.frame_size = c + 2;  // complete frame includes sync bytes
+                    this->serialProcess_.started_at = millis();
                     this->serialProcess_.state = STATE_RECIEVE;
+                } else {
+                    this->serialProcess_.data.clear();
                 }
                 break;
             case STATE_RECIEVE:
-                this->serialProcess_.frame_size--;
-                if (this->serialProcess_.frame_size == 0)
-                {
-                    /* WE HAVE A FRAME FROM AC */
-                    this->serialProcess_.state = STATE_COMPLETE;
-                }
+                this->serialProcess_.data.push_back(c);
+                if (this->serialProcess_.data.size() > this->serialProcess_.frame_size) { this->reset_parser(true); break; }
+                if (this->serialProcess_.data.size() == this->serialProcess_.frame_size) this->serialProcess_.state = STATE_COMPLETE;
                 break;
             case STATE_RESTART:
             case STATE_COMPLETE:
@@ -108,6 +98,36 @@ void SinclairAC::read_data()
         }
 
     }
+}
+
+void SinclairAC::reset_parser(bool resynchronized) {
+    this->serialProcess_.data.clear();
+    this->serialProcess_.frame_size = 0;
+    this->serialProcess_.state = STATE_WAIT_SYNC;
+    if (resynchronized) { this->parser_resyncs_++; if (this->parser_resync_sensor_) this->parser_resync_sensor_->publish_state(this->parser_resyncs_); }
+}
+
+void SinclairAC::set_debug(bool rx, bool tx, bool unknown, bool differences, uint16_t maximum_hex_length) {
+    this->log_rx_ = rx; this->log_tx_ = tx; this->log_unknown_ = unknown; this->log_differences_ = differences; this->maximum_hex_length_ = maximum_hex_length;
+}
+void SinclairAC::publish_protocol_state(const char *state) { if (this->protocol_state_sensor_) this->protocol_state_sensor_->publish_state(state); }
+void SinclairAC::record_received_packet(bool known, bool checksum_ok) {
+    this->last_packet_received_ = millis(); this->valid_rx_packets_++;
+    if (!known) this->unknown_packets_++;
+    if (this->valid_rx_packets_sensor_) this->valid_rx_packets_sensor_->publish_state(this->valid_rx_packets_);
+    if (!known && this->unknown_packets_sensor_) this->unknown_packets_sensor_->publish_state(this->unknown_packets_);
+    if (this->communication_sensor_) this->communication_sensor_->publish_state(true);
+    this->publish_protocol_state(this->transmit_enabled_ ? "ready" : "receive-only");
+}
+void SinclairAC::record_transmitted_packet(const std::vector<uint8_t> &packet) {
+    this->valid_tx_packets_++; if (this->valid_tx_packets_sensor_) this->valid_tx_packets_sensor_->publish_state(this->valid_tx_packets_);
+}
+void SinclairAC::log_packet_difference(const std::vector<uint8_t> &packet) {
+    if (!this->log_differences_ || packet.size() < 4) return;
+    auto &old = this->previous_frames_[packet[3]];
+    if (!old.empty() && old.size() != packet.size()) ESP_LOGD(TAG, "RX cmd=0x%02X frame length changed: %u -> %u", packet[3], old.size(), packet.size());
+    for (size_t i = 0; i < old.size() && i < packet.size(); i++) if (old[i] != packet[i]) ESP_LOGD(TAG, "changed frame[%u] payload[%d]: 0x%02X -> 0x%02X mask=0x%02X", i, static_cast<int>(i) - 4, old[i], packet[i], old[i] ^ packet[i]);
+    old = packet;
 }
 
 void SinclairAC::update_current_temperature(float temperature)
@@ -347,13 +367,12 @@ void SinclairAC::set_save_switch(switch_::Switch *save_switch)
  * Debugging
  */
 
-void SinclairAC::log_packet(std::vector<uint8_t> data, bool outgoing)
+void SinclairAC::log_packet(const std::vector<uint8_t> &data, bool outgoing)
 {
-    if (outgoing) {
-        ESP_LOGV(TAG, "TX: %s", format_hex_pretty(data).c_str());
-    } else {
-        ESP_LOGV(TAG, "RX: %s", format_hex_pretty(data).c_str());
-    }
+    if ((outgoing && !this->log_tx_) || (!outgoing && !this->log_rx_)) return;
+    const size_t bytes = std::min(data.size(), static_cast<size_t>(this->maximum_hex_length_));
+    std::vector<uint8_t> display(data.begin(), data.begin() + bytes);
+    ESP_LOGD(TAG, "%s cmd=0x%02X len=%u payload=%d checksum=%s: %s%s", outgoing ? "TX" : "RX", data.size() > 3 ? data[3] : 0, data.size(), static_cast<int>(data.size()) - 5, data.size() >= 5 ? "present" : "missing", format_hex_pretty(display).c_str(), bytes < data.size() ? " ..." : "");
 }
 
 }  // namespace sinclair_ac

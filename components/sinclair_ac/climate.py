@@ -5,7 +5,7 @@ from esphome.const import (
 )
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import uart, climate, sensor, select, switch
+from esphome.components import uart, climate, sensor, select, switch, binary_sensor, text_sensor
 
 AUTO_LOAD = ["switch", "sensor", "select"]
 DEPENDENCIES = ["uart"]
@@ -36,6 +36,35 @@ CONF_XFAN_SWITCH                = "xfan_switch"
 CONF_SAVE_SWITCH                = "save_switch"
 
 CONF_CURRENT_TEMPERATURE_SENSOR = "current_temperature_sensor"
+CONF_TRANSMIT_ENABLED = "transmit_enabled"
+CONF_DEBUG = "debug"
+CONF_DIAGNOSTICS = "diagnostics"
+
+diagnostic_sensor_schema = sensor.sensor_schema(
+    sensor.Sensor, accuracy_decimals=0, state_class="total_increasing"
+)
+diagnostics_schema = cv.Schema({
+    cv.Optional("valid_rx_packets"): diagnostic_sensor_schema,
+    cv.Optional("valid_tx_packets"): diagnostic_sensor_schema,
+    cv.Optional("unknown_packets"): diagnostic_sensor_schema,
+    cv.Optional("checksum_failures"): diagnostic_sensor_schema,
+    cv.Optional("invalid_length_packets"): diagnostic_sensor_schema,
+    cv.Optional("parser_resynchronizations"): diagnostic_sensor_schema,
+    cv.Optional("last_packet_length"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("last_packet_type"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("communication"): binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor),
+    cv.Optional("receive_only"): binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor),
+    cv.Optional("protocol_state"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_packet"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_unknown_packet"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+})
+debug_schema = cv.Schema({
+    cv.Optional("log_rx", default=False): cv.boolean,
+    cv.Optional("log_tx", default=False): cv.boolean,
+    cv.Optional("log_unknown_packets", default=True): cv.boolean,
+    cv.Optional("log_packet_differences", default=False): cv.boolean,
+    cv.Optional("maximum_hex_length", default=128): cv.int_range(min=16, max=512),
+})
 
 HORIZONTAL_SWING_OPTIONS = [
     "0 - OFF",
@@ -93,6 +122,9 @@ SCHEMA = climate.climate_schema(climate.Climate).extend(
         cv.Optional(CONF_SLEEP_SWITCH): switch_schema,
         cv.Optional(CONF_XFAN_SWITCH): switch_schema,
         cv.Optional(CONF_SAVE_SWITCH): switch_schema,
+        cv.Optional(CONF_TRANSMIT_ENABLED, default=True): cv.boolean,
+        cv.Optional(CONF_DEBUG, default={}): debug_schema,
+        cv.Optional(CONF_DIAGNOSTICS): diagnostics_schema,
     }
 ).extend(uart.UART_DEVICE_SCHEMA)
 
@@ -111,6 +143,28 @@ async def to_code(config):
     await climate.register_climate(var, config)
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
+    cg.add(var.set_transmit_enabled(config[CONF_TRANSMIT_ENABLED]))
+    debug = config[CONF_DEBUG]
+    cg.add(var.set_debug(debug["log_rx"], debug["log_tx"], debug["log_unknown_packets"], debug["log_packet_differences"], debug["maximum_hex_length"]))
+
+    if CONF_DIAGNOSTICS in config:
+        for key, method in {
+            "valid_rx_packets": "set_valid_rx_packets_sensor", "valid_tx_packets": "set_valid_tx_packets_sensor",
+            "unknown_packets": "set_unknown_packets_sensor", "checksum_failures": "set_checksum_failures_sensor",
+            "invalid_length_packets": "set_invalid_length_sensor", "parser_resynchronizations": "set_parser_resync_sensor",
+            "last_packet_length": "set_last_packet_length_sensor", "last_packet_type": "set_last_packet_type_sensor",
+        }.items():
+            if key in config[CONF_DIAGNOSTICS]:
+                entity = await sensor.new_sensor(config[CONF_DIAGNOSTICS][key])
+                cg.add(getattr(var, method)(entity))
+        for key, method in {"communication": "set_communication_sensor", "receive_only": "set_receive_only_sensor"}.items():
+            if key in config[CONF_DIAGNOSTICS]:
+                entity = await binary_sensor.new_binary_sensor(config[CONF_DIAGNOSTICS][key])
+                cg.add(getattr(var, method)(entity))
+        for key, method in {"protocol_state": "set_protocol_state_sensor", "last_packet": "set_last_packet_sensor", "last_unknown_packet": "set_last_unknown_packet_sensor"}.items():
+            if key in config[CONF_DIAGNOSTICS]:
+                entity = await text_sensor.new_text_sensor(config[CONF_DIAGNOSTICS][key])
+                cg.add(getattr(var, method)(entity))
 
     if CONF_HORIZONTAL_SWING_SELECT in config:
         conf = config[CONF_HORIZONTAL_SWING_SELECT]

@@ -1,9 +1,13 @@
 // based on: https://github.com/DomiStyle/esphome-panasonic-ac
 #pragma once
 
+#include <map>
+
 #include "esphome/components/climate/climate.h"
 #include "esphome/components/select/select.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
@@ -14,7 +18,7 @@ namespace sinclair_ac {
 
 static const char *const VERSION = "0.0.1";
 
-static const uint8_t READ_TIMEOUT = 20;  // The maximum time to wait before considering a packet complete
+static const uint16_t READ_TIMEOUT = 250;  // Maximum time to wait for the remainder of a frame
 
 static const uint8_t MIN_TEMPERATURE = 16;   // Minimum temperature as reported by EWPE SMART APP
 static const uint8_t MAX_TEMPERATURE = 30;   // Maximum temperature as supported by EWPE SMART APP
@@ -86,8 +90,8 @@ static const uint8_t DATA_MAX = 200;
 
 typedef struct {
         std::vector<uint8_t> data;
-        uint8_t data_cnt;
-        uint8_t frame_size;
+        uint16_t frame_size;
+        uint32_t started_at;
         SerialProcessState_t state;
 } SerialProcess_t;
 
@@ -105,6 +109,21 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void set_save_switch(switch_::Switch *plasma_switch);
 
         void set_current_temperature_sensor(sensor::Sensor *current_temperature_sensor);
+        void set_transmit_enabled(bool transmit_enabled) { this->transmit_enabled_ = transmit_enabled; }
+        void set_debug(bool log_rx, bool log_tx, bool log_unknown, bool log_differences, uint16_t maximum_hex_length);
+        void set_valid_rx_packets_sensor(sensor::Sensor *sensor) { this->valid_rx_packets_sensor_ = sensor; }
+        void set_valid_tx_packets_sensor(sensor::Sensor *sensor) { this->valid_tx_packets_sensor_ = sensor; }
+        void set_unknown_packets_sensor(sensor::Sensor *sensor) { this->unknown_packets_sensor_ = sensor; }
+        void set_checksum_failures_sensor(sensor::Sensor *sensor) { this->checksum_failures_sensor_ = sensor; }
+        void set_invalid_length_sensor(sensor::Sensor *sensor) { this->invalid_length_sensor_ = sensor; }
+        void set_parser_resync_sensor(sensor::Sensor *sensor) { this->parser_resync_sensor_ = sensor; }
+        void set_last_packet_length_sensor(sensor::Sensor *sensor) { this->last_packet_length_sensor_ = sensor; }
+        void set_last_packet_type_sensor(sensor::Sensor *sensor) { this->last_packet_type_sensor_ = sensor; }
+        void set_communication_sensor(binary_sensor::BinarySensor *sensor) { this->communication_sensor_ = sensor; }
+        void set_receive_only_sensor(binary_sensor::BinarySensor *sensor) { this->receive_only_sensor_ = sensor; }
+        void set_protocol_state_sensor(text_sensor::TextSensor *sensor) { this->protocol_state_sensor_ = sensor; }
+        void set_last_packet_sensor(text_sensor::TextSensor *sensor) { this->last_packet_sensor_ = sensor; }
+        void set_last_unknown_packet_sensor(text_sensor::TextSensor *sensor) { this->last_unknown_packet_sensor_ = sensor; }
 
         void setup() override;
         void loop() override;
@@ -141,10 +160,24 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         uint32_t last_packet_sent_;  // Stores the time at which the last packet was sent
         uint32_t last_packet_received_;  // Stores the time at which the last packet was received
         bool wait_response_;
+        bool transmit_enabled_{true};
+        bool transmit_warning_logged_{false};
+        bool log_rx_{false}, log_tx_{false}, log_unknown_{false}, log_differences_{false};
+        uint16_t maximum_hex_length_{128};
+        uint32_t valid_rx_packets_{0}, valid_tx_packets_{0}, unknown_packets_{0}, checksum_failures_{0}, invalid_lengths_{0}, parser_resyncs_{0};
+        sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr};
+        binary_sensor::BinarySensor *communication_sensor_{nullptr}, *receive_only_sensor_{nullptr};
+        text_sensor::TextSensor *protocol_state_sensor_{nullptr}, *last_packet_sensor_{nullptr}, *last_unknown_packet_sensor_{nullptr};
+        std::map<uint8_t, std::vector<uint8_t>> previous_frames_;
 
         climate::ClimateTraits traits() override;
 
         void read_data();
+        void reset_parser(bool resynchronized = false);
+        void record_received_packet(bool known, bool checksum_ok);
+        void record_transmitted_packet(const std::vector<uint8_t> &packet);
+        void publish_protocol_state(const char *state);
+        void log_packet_difference(const std::vector<uint8_t> &packet);
 
         void update_current_temperature(float temperature);
         void update_target_temperature(float temperature);
@@ -173,7 +206,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
 
         climate::ClimateAction determine_action();
 
-        void log_packet(std::vector<uint8_t> data, bool outgoing = false);
+        void log_packet(const std::vector<uint8_t> &data, bool outgoing = false);
 };
 
 }  // namespace sinclair_ac
