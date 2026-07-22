@@ -145,3 +145,39 @@ For local development the examples use `type: local` sources. Real installations
 ## Protocol capture guide
 
 Label captures with startup, power, mode, setpoint, fan, horizontal and vertical vane positions, display, sleep, X-Fan, save/8 °C heat, IR-remote changes, and faults. Capture repeated transitions and retain raw frames. Climate action remains inferred from selected mode and temperatures; it is **not** compressor-run telemetry. Do not assign meanings to unknown bytes without repeatable evidence. COM-MANUAL remains a separate RS-485 research project.
+
+## Livo fan profile, telemetry discovery, and local API
+
+For a Livo four-speed unit, set `fan_profile: gree_4_speed`. It decodes the low
+two bits of report payload byte 4 as Auto, Low, Medium, and High; byte 18 is
+retained only as a diagnostic field because it is not a fan-speed field on this
+profile. `fan_profile: auto` detects the observed Livo `byte 18 == 0x08`
+signature and otherwise preserves the legacy mapping; `sinclair_extended` always
+uses the legacy dual-field seven-speed mapping.
+Quiet and Turbo remain independent overlay flags.
+
+Set `telemetry_discovery.enabled: true` to retain the most recent valid payload
+for commands `0x31`, `0x33`, `0x44`, `0x40`, and other valid unknown commands.
+The optional text diagnostics expose raw payloads without assigning physical
+meanings to unverified bytes. Discovery is deliberately observational: it does
+not create guessed temperature, pressure, electrical, or compressor entities.
+Capture repeated labelled transitions before adding a decoded sensor.
+
+The Livo poll-only example enables encrypted ESPHome native API access and the
+ESP-hosted authenticated web REST/SSE API. Add these values to your local
+`secrets.yaml` (do not commit real credentials):
+
+```yaml
+gree_livo_api_key: "32-BYTE-BASE64-KEY"
+gree_livo_web_username: "gree"
+gree_livo_web_password: "LONG-UNIQUE-PASSWORD"
+```
+
+Keep the web API on an isolated IoT network; it must not be exposed directly to
+the public internet. `local: true` embeds its assets so normal local operation
+does not require an external frontend host.
+
+Polling is one-request/one-response: a second poll is never written while a
+valid response is outstanding. A missing response is timed out after one second
+and then retried. Control updates preserve the latest valid `0x31` payload as a
+baseline and advance the apply/clear sequence only after a valid report arrives.

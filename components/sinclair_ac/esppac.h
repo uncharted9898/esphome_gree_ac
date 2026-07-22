@@ -100,6 +100,7 @@ typedef struct {
 } SerialProcess_t;
 
 enum class ProtocolMode : uint8_t { RECEIVE_ONLY, POLL_ONLY, CONTROL };
+enum class FanProfile : uint8_t { AUTO, SINCLAIR_EXTENDED, GREE_4_SPEED };
 
 class SinclairAC : public Component, public uart::UARTDevice, public climate::Climate {
     public:
@@ -116,6 +117,8 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
 
         void set_current_temperature_sensor(sensor::Sensor *current_temperature_sensor);
         void set_protocol_mode(ProtocolMode mode) { this->protocol_mode_ = mode; }
+        void set_fan_profile(FanProfile profile) { this->fan_profile_ = profile; }
+        void set_telemetry_discovery(bool enabled, bool expose_raw_payload, bool expose_raw_bytes, bool log_changes_only, uint8_t history_depth);
         void set_debug(bool log_rx, bool log_tx, bool log_unknown, bool log_differences, uint16_t maximum_hex_length);
         void set_valid_rx_packets_sensor(sensor::Sensor *sensor) { this->valid_rx_packets_sensor_ = sensor; }
         void set_valid_tx_packets_sensor(sensor::Sensor *sensor) { this->valid_tx_packets_sensor_ = sensor; }
@@ -140,6 +143,12 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void set_fan_quiet_raw_sensor(sensor::Sensor *sensor) { this->fan_quiet_raw_sensor_ = sensor; }
         void set_fan_turbo_raw_sensor(sensor::Sensor *sensor) { this->fan_turbo_raw_sensor_ = sensor; }
         void set_fan_decode_status_sensor(text_sensor::TextSensor *sensor) { this->fan_decode_status_sensor_ = sensor; }
+        void set_fan_decode_profile_sensor(text_sensor::TextSensor *sensor) { this->fan_decode_profile_sensor_ = sensor; }
+        void set_last_0x31_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x31_payload_sensor_ = sensor; }
+        void set_last_0x33_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x33_payload_sensor_ = sensor; }
+        void set_last_0x44_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x44_payload_sensor_ = sensor; }
+        void set_last_0x40_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x40_payload_sensor_ = sensor; }
+        void set_last_unknown_payload_sensor(text_sensor::TextSensor *sensor) { this->last_unknown_payload_sensor_ = sensor; }
 
         void setup() override;
         void loop() override;
@@ -175,6 +184,9 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         std::string protocol_state_;
         bool wait_response_{false};
         ProtocolMode protocol_mode_{ProtocolMode::CONTROL};
+        FanProfile fan_profile_{FanProfile::AUTO};
+        bool telemetry_discovery_enabled_{false}, telemetry_expose_raw_payload_{true}, telemetry_expose_raw_bytes_{false}, telemetry_log_changes_only_{true};
+        uint8_t telemetry_history_depth_{16};
         bool transmit_warning_logged_{false};
         bool log_rx_{false}, log_tx_{false}, log_unknown_{false}, log_differences_{false};
         uint16_t maximum_hex_length_{128};
@@ -184,7 +196,9 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *too_short_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *frame_timeout_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr};
         sensor::Sensor *fan_speed_field_1_raw_sensor_{nullptr}, *fan_speed_field_1_low_3_bits_sensor_{nullptr}, *fan_speed_field_2_raw_sensor_{nullptr}, *fan_quiet_raw_sensor_{nullptr}, *fan_turbo_raw_sensor_{nullptr};
         binary_sensor::BinarySensor *communication_sensor_{nullptr}, *receive_only_sensor_{nullptr}, *poll_only_sensor_{nullptr};
-        text_sensor::TextSensor *protocol_mode_sensor_{nullptr}, *protocol_state_sensor_{nullptr}, *last_packet_sensor_{nullptr}, *last_unknown_packet_sensor_{nullptr}, *fan_decode_status_sensor_{nullptr};
+        text_sensor::TextSensor *protocol_mode_sensor_{nullptr}, *protocol_state_sensor_{nullptr}, *last_packet_sensor_{nullptr}, *last_unknown_packet_sensor_{nullptr}, *fan_decode_status_sensor_{nullptr}, *fan_decode_profile_sensor_{nullptr};
+        text_sensor::TextSensor *last_0x31_payload_sensor_{nullptr}, *last_0x33_payload_sensor_{nullptr}, *last_0x44_payload_sensor_{nullptr}, *last_0x40_payload_sensor_{nullptr}, *last_unknown_payload_sensor_{nullptr};
+        std::map<uint8_t, std::vector<uint8_t>> last_payloads_;
         std::map<uint8_t, std::vector<uint8_t>> previous_frames_;
         bool has_last_packet_diagnostics_{false};
         uint32_t last_packet_length_{0}, last_packet_type_{0};
@@ -210,6 +224,8 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void record_fan_diagnostics(uint8_t speed_field_1_raw, uint8_t speed_field_1_low_3_bits, uint8_t speed_field_2_raw, bool quiet, bool turbo, const char *decode_status);
         void publish_protocol_state(const char *state);
         void log_packet_difference(const std::vector<uint8_t> &packet);
+        const char *fan_profile_name() const;
+        void retain_payload(uint8_t command, const std::vector<uint8_t> &payload);
 
         void update_current_temperature(float temperature);
         void update_target_temperature(float temperature);

@@ -34,8 +34,8 @@ void SinclairACCNT::loop()
         } else {
         const bool known = validation == PacketValidationResult::VALID_KNOWN;
         this->record_received_packet(known);
-        if (known && this->wait_response_) this->wait_response_ = false;
         this->log_packet_difference(this->serialProcess_.data);
+        this->retain_payload(this->serialProcess_.data[3], std::vector<uint8_t>(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1));
         const std::string packet_description = "RX cmd=0x" + format_hex_pretty(std::vector<uint8_t>{this->serialProcess_.data[3]});
         if (!known) {
             ESP_LOGD(TAG, "RX valid unsupported command 0x%02X retained for discovery", this->serialProcess_.data[3]);
@@ -54,10 +54,17 @@ void SinclairACCNT::loop()
             this->last_packet_sent_ = millis();
         }
 
-        if (this->update_ == ACUpdate::NoUpdate)
-        {
-            handle_packet(); /* this will update state of components in HA as well as internal settings */
+        if (this->wait_response_) {
+            this->wait_response_ = false;
+            if (this->update_ == ACUpdate::UpdateStart) {
+                this->update_ = ACUpdate::UpdateClear;
+                this->publish_protocol_state("command_clear_pending");
+            } else if (this->update_ == ACUpdate::UpdateClear) {
+                this->update_ = ACUpdate::NoUpdate;
+                this->publish_protocol_state("command_verified");
+            }
         }
+        handle_packet(); /* Reports are acknowledgements as well as state updates. */
         }
         this->reset_parser();
     }  // closes validation else
@@ -164,16 +171,32 @@ void SinclairACCNT::send_packet()
 {
     if (this->is_receive_only()) return;
     if (this->is_poll_only()) this->update_ = ACUpdate::NoUpdate;
-    std::vector<uint8_t> packet(protocol::SET_PACKET_LEN, 0);  /* Initialize packet contents */
-
-    if (this->wait_response_ == true && (millis() - this->last_packet_sent_) < protocol::TIME_REFRESH_PERIOD_MS)
-    {
-        /* do net send packet too often or when we are waiting for report to come */
-        return;
+    if (this->wait_response_) {
+        if (millis() - this->last_packet_sent_ < protocol::TIME_TIMEOUT_INACTIVE_MS) return;
+        this->wait_response_ = false;
+        this->poll_timeouts_++;
+        ESP_LOGW(TAG, "Poll/command response timed out; retrying after one outstanding request");
+        this->publish_protocol_state("response_timeout");
     }
-    
-    packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL; /* Some always 0x02 byte... */
-    packet[protocol::SET_CONST_BIT_BYTE] = protocol::SET_CONST_BIT_MASK; /* Some always true bit */
+    if (millis() - this->last_packet_sent_ < protocol::TIME_REFRESH_PERIOD_MS) return;
+    /* Preserve model-specific fields from the last valid report; patch only owned fields below. */
+    std::vector<uint8_t> packet(protocol::SET_PACKET_LEN, 0);
+    if (!this->last_report_payload_.empty()) {
+        std::copy_n(this->last_report_payload_.begin(), std::min(this->last_report_payload_.size(), packet.size()), packet.begin());
+    }
+    packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL;
+    /* Clear only fields this component owns before writing requested state. */
+    packet[protocol::REPORT_MODE_BYTE] &= ~(protocol::REPORT_PWR_MASK | protocol::REPORT_MODE_MASK | protocol::REPORT_FAN_SPD2_MASK | protocol::REPORT_SLEEP_MASK);
+    packet[protocol::REPORT_TEMP_SET_BYTE] &= ~protocol::REPORT_TEMP_SET_MASK;
+    packet[protocol::REPORT_FAN_SPD1_BYTE] &= ~protocol::REPORT_FAN_SPD1_MASK;
+    packet[protocol::REPORT_FAN_QUIET_BYTE] &= ~protocol::REPORT_FAN_QUIET_MASK;
+    packet[protocol::REPORT_FAN_TURBO_BYTE] &= ~(protocol::REPORT_FAN_TURBO_MASK | protocol::REPORT_DISP_ON_MASK | protocol::REPORT_PLASMA1_MASK | protocol::REPORT_XFAN_MASK);
+    packet[protocol::REPORT_HSWING_BYTE] &= ~(protocol::REPORT_HSWING_MASK | protocol::REPORT_VSWING_MASK);
+    packet[protocol::REPORT_DISP_MODE_BYTE] &= ~protocol::REPORT_DISP_MODE_MASK;
+    packet[protocol::REPORT_DISP_F_BYTE] &= ~protocol::REPORT_DISP_F_MASK;
+    packet[protocol::REPORT_PLASMA2_BYTE] &= ~protocol::REPORT_PLASMA2_MASK;
+    packet[protocol::REPORT_SAVE_BYTE] &= ~(protocol::REPORT_SAVE_MASK | protocol::SET_NOCHANGE_MASK);
+    packet[protocol::SET_CONST_BIT_BYTE] |= protocol::SET_CONST_BIT_MASK;
 
     /* Prepare the rest of the frame */
     /* this handles tricky part of 0xAF value and flag marking that WiFi does not apply any changes */
@@ -547,21 +570,9 @@ void SinclairACCNT::send_packet()
     this->record_transmitted_packet(packet);
     log_packet(packet, true);            /* Log uart for debug purposes */
 
-    /* update setting state-machine */
-    switch(this->update_)
-    {
-        case ACUpdate::NoUpdate:
-            break;
-        case ACUpdate::UpdateStart:
-            this->update_ = ACUpdate::UpdateClear;
-            break;
-        case ACUpdate::UpdateClear:
-            this->update_ = ACUpdate::NoUpdate;
-            break;
-        default:
-            this->update_ = ACUpdate::NoUpdate;
-            break;
-    }
+    if (this->update_ == ACUpdate::UpdateStart) this->publish_protocol_state("command_apply_waiting");
+    else if (this->update_ == ACUpdate::UpdateClear) this->publish_protocol_state("command_clear_waiting");
+    else this->publish_protocol_state("waiting_for_poll_response");
 }
 
 /*
@@ -615,6 +626,7 @@ void SinclairACCNT::handle_packet()
 bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
 {
     bool hasChanged = false;
+    this->last_report_payload_ = payload;
     this->report_payload_ = &payload;
 
     climate::ClimateMode newMode = determine_mode();
@@ -734,7 +746,22 @@ const char* SinclairACCNT::determine_fan_mode()
     const bool fanTurbo = ((*this->report_payload_)[protocol::REPORT_FAN_TURBO_BYTE] & protocol::REPORT_FAN_TURBO_MASK) != 0;
     const char *fan_mode = fan_modes::FAN_AUTO;
     const char *decode_status = "unknown";
-    /* we have extracted all the data, let's do the processing */
+    const bool gree_profile = this->fan_profile_ == FanProfile::GREE_4_SPEED ||
+                              (this->fan_profile_ == FanProfile::AUTO && fan_speed1_raw == 0x08);
+    /* Gree Livo uses byte 4 low bits. Byte 18=0x08 is not a fan request. */
+    if (gree_profile) {
+        switch (fanSpeed2) {
+            case 0: fan_mode = fan_modes::FAN_AUTO; decode_status = "gree_4_speed:auto"; break;
+            case 1: fan_mode = fan_modes::FAN_LOW; decode_status = "gree_4_speed:low"; break;
+            case 2: fan_mode = fan_modes::FAN_MED; decode_status = "gree_4_speed:medium"; break;
+            case 3: fan_mode = fan_modes::FAN_HIGH; decode_status = "gree_4_speed:high"; break;
+        }
+        if (fanQuiet) { fan_mode = fan_modes::FAN_QUIET; decode_status = "gree_4_speed:quiet"; }
+        if (fanTurbo) { fan_mode = fan_modes::FAN_TURBO; decode_status = "gree_4_speed:turbo"; }
+        this->record_fan_diagnostics(fan_speed1_raw, fan_speed1_raw & 0x07, fan_speed2_raw, fanQuiet, fanTurbo, decode_status);
+        return fan_mode;
+    }
+    /* Sinclair extended dual-field mapping. */
     if      (fanSpeed1 == 0 && fanSpeed2 == 0 && fanQuiet == false && fanTurbo == false)
     {
         fan_mode = fan_modes::FAN_AUTO;
