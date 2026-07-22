@@ -207,6 +207,9 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         TelemetryDiscovery telemetry_capture_{16};
         SupplementalQueryGate supplemental_query_gate_;
         uint32_t last_discovery_summary_publish_{0};
+        bool discovery_capture_dirty_{false};
+        bool has_published_discovery_capture_{false};
+        std::string published_discovery_summary_, published_capture_export_;
         std::map<uint8_t, std::vector<uint8_t>> last_payloads_;
         std::map<uint8_t, std::vector<uint8_t>> previous_frames_;
         bool has_last_packet_diagnostics_{false};

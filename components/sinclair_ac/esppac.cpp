@@ -67,6 +67,7 @@ void SinclairAC::loop()
         this->publish_protocol_state("timeout");
     }
     read_data();  // Read data from UART (if there is any)
+    this->publish_discovery_capture();
 }
 
 void SinclairAC::read_data()
@@ -182,13 +183,25 @@ void SinclairAC::capture_packet(bool transmitted, uint8_t command, const std::ve
     record.requested_fan.clear();
     if (this->has_custom_fan_mode()) record.requested_fan = this->get_custom_fan_mode();
     this->telemetry_capture_.capture(record);
+    this->discovery_capture_dirty_ = true;
 }
 
 void SinclairAC::publish_discovery_capture() {
-    if (!this->telemetry_discovery_enabled_ || (this->last_discovery_summary_publish_ != 0 && millis() - this->last_discovery_summary_publish_ < 5000)) return;
+    if (!this->telemetry_discovery_enabled_ || !this->discovery_capture_dirty_ ||
+        (this->last_discovery_summary_publish_ != 0 && millis() - this->last_discovery_summary_publish_ < 5000)) return;
     this->last_discovery_summary_publish_ = millis();
-    if (this->discovery_summary_sensor_) this->discovery_summary_sensor_->publish_state(this->telemetry_capture_.summary());
-    if (this->capture_export_sensor_) this->capture_export_sensor_->publish_state(this->telemetry_capture_.export_csv());
+    const std::string summary = this->telemetry_capture_.summary();
+    const std::string capture_export = this->telemetry_capture_.export_csv();
+    if (this->discovery_summary_sensor_ && (!this->has_published_discovery_capture_ || summary != this->published_discovery_summary_)) {
+        this->discovery_summary_sensor_->publish_state(summary);
+    }
+    if (this->capture_export_sensor_ && (!this->has_published_discovery_capture_ || capture_export != this->published_capture_export_)) {
+        this->capture_export_sensor_->publish_state(capture_export);
+    }
+    this->published_discovery_summary_ = summary;
+    this->published_capture_export_ = capture_export;
+    this->has_published_discovery_capture_ = true;
+    this->discovery_capture_dirty_ = false;
 }
 
 void SinclairAC::set_debug(bool rx, bool tx, bool unknown, bool differences, uint16_t maximum_hex_length) {

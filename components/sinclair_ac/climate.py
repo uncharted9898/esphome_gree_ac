@@ -47,6 +47,9 @@ CONF_SUPPLEMENTAL_QUERIES = "supplemental_queries"
 diagnostic_sensor_schema = sensor.sensor_schema(
     sensor.Sensor, accuracy_decimals=0, state_class="total_increasing"
 )
+measurement_diagnostic_sensor_schema = sensor.sensor_schema(
+    sensor.Sensor, accuracy_decimals=0
+)
 diagnostics_schema = cv.Schema({
     cv.Optional("valid_rx_packets"): diagnostic_sensor_schema,
     cv.Optional("valid_tx_packets"): diagnostic_sensor_schema,
@@ -62,8 +65,9 @@ diagnostics_schema = cv.Schema({
     cv.Optional("polls_sent"): diagnostic_sensor_schema,
     cv.Optional("poll_responses"): diagnostic_sensor_schema,
     cv.Optional("poll_response_timeouts"): diagnostic_sensor_schema,
-    cv.Optional("consecutive_poll_timeouts"): diagnostic_sensor_schema,
-    cv.Optional("last_poll_response_ms"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    # This value is reset after a successful poll, so it is not a total.
+    cv.Optional("consecutive_poll_timeouts"): measurement_diagnostic_sensor_schema,
+    cv.Optional("last_poll_response_ms"): measurement_diagnostic_sensor_schema,
     cv.Optional("command_attempts"): diagnostic_sensor_schema,
     cv.Optional("command_response_timeouts"): diagnostic_sensor_schema,
     cv.Optional("command_mismatches"): diagnostic_sensor_schema,

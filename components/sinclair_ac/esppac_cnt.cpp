@@ -15,6 +15,7 @@ void SinclairACCNT::setup()
     SinclairAC::setup();
 
     ESP_LOGD(TAG, "Using serial protocol for Sinclair AC");
+    this->publish_request_diagnostics(true);
 }
 
 void SinclairACCNT::begin_pending_control()
@@ -108,19 +109,32 @@ void SinclairACCNT::handle_pending_control_response(const std::vector<uint8_t> &
     }
 }
 
-void SinclairACCNT::publish_request_diagnostics()
+void SinclairACCNT::publish_request_diagnostics(bool force)
 {
     const auto &d = this->request_lifecycle_;
-    if (this->polls_sent_sensor_) this->polls_sent_sensor_->publish_state(d.polls_sent);
-    if (this->poll_responses_sensor_) this->poll_responses_sensor_->publish_state(d.poll_responses);
-    if (this->poll_response_timeouts_sensor_) this->poll_response_timeouts_sensor_->publish_state(d.poll_response_timeouts);
-    if (this->consecutive_poll_timeouts_sensor_) this->consecutive_poll_timeouts_sensor_->publish_state(d.consecutive_poll_timeouts);
-    if (this->last_poll_response_ms_sensor_) this->last_poll_response_ms_sensor_->publish_state(d.last_poll_response_ms);
-    if (this->command_attempts_sensor_) this->command_attempts_sensor_->publish_state(d.command_attempts);
-    if (this->command_response_timeouts_sensor_) this->command_response_timeouts_sensor_->publish_state(d.command_response_timeouts);
-    if (this->command_mismatches_sensor_) this->command_mismatches_sensor_->publish_state(d.command_mismatches);
-    if (this->last_command_result_sensor_) this->last_command_result_sensor_->publish_state(this->last_command_result_);
-    if (this->last_command_failure_reason_sensor_) this->last_command_failure_reason_sensor_->publish_state(this->last_command_failure_reason_);
+    const bool initial = !this->has_published_request_diagnostics_;
+    if (this->polls_sent_sensor_ && (force || initial || d.polls_sent != this->published_polls_sent_)) this->polls_sent_sensor_->publish_state(d.polls_sent);
+    if (this->poll_responses_sensor_ && (force || initial || d.poll_responses != this->published_poll_responses_)) this->poll_responses_sensor_->publish_state(d.poll_responses);
+    if (this->poll_response_timeouts_sensor_ && (force || initial || d.poll_response_timeouts != this->published_poll_response_timeouts_)) this->poll_response_timeouts_sensor_->publish_state(d.poll_response_timeouts);
+    if (this->consecutive_poll_timeouts_sensor_ && (force || initial || d.consecutive_poll_timeouts != this->published_consecutive_poll_timeouts_)) this->consecutive_poll_timeouts_sensor_->publish_state(d.consecutive_poll_timeouts);
+    if (this->last_poll_response_ms_sensor_ && (force || initial || d.last_poll_response_ms != this->published_last_poll_response_ms_)) this->last_poll_response_ms_sensor_->publish_state(d.last_poll_response_ms);
+    if (this->command_attempts_sensor_ && (force || initial || d.command_attempts != this->published_command_attempts_)) this->command_attempts_sensor_->publish_state(d.command_attempts);
+    if (this->command_response_timeouts_sensor_ && (force || initial || d.command_response_timeouts != this->published_command_response_timeouts_)) this->command_response_timeouts_sensor_->publish_state(d.command_response_timeouts);
+    if (this->command_mismatches_sensor_ && (force || initial || d.command_mismatches != this->published_command_mismatches_)) this->command_mismatches_sensor_->publish_state(d.command_mismatches);
+    if (this->last_command_result_sensor_ && (force || initial || this->last_command_result_ != this->published_last_command_result_)) this->last_command_result_sensor_->publish_state(this->last_command_result_);
+    if (this->last_command_failure_reason_sensor_ && (force || initial || this->last_command_failure_reason_ != this->published_last_command_failure_reason_)) this->last_command_failure_reason_sensor_->publish_state(this->last_command_failure_reason_);
+    this->published_polls_sent_ = d.polls_sent;
+    this->published_poll_responses_ = d.poll_responses;
+    this->published_poll_response_timeouts_ = d.poll_response_timeouts;
+    this->published_consecutive_poll_timeouts_ = d.consecutive_poll_timeouts;
+    this->published_last_poll_response_ms_ = d.last_poll_response_ms;
+    this->published_command_attempts_ = d.command_attempts;
+    this->published_command_response_timeouts_ = d.command_response_timeouts;
+    this->published_command_mismatches_ = d.command_mismatches;
+    this->published_last_command_result_ = this->last_command_result_;
+    this->published_last_command_failure_reason_ = this->last_command_failure_reason_;
+    this->has_published_request_diagnostics_ = true;
+    this->last_request_diagnostics_publish_ = millis();
 }
 
 void SinclairACCNT::loop()
@@ -165,13 +179,14 @@ void SinclairACCNT::loop()
         handle_packet(); /* Reports are acknowledgements as well as state updates. */
         const std::vector<uint8_t> payload(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1);
         this->handle_pending_control_response(payload); /* Verify after decoded state has been updated. */
+        this->publish_request_diagnostics();
         }
         this->reset_parser();
     }  // closes validation else
     }  // closes: if (serialProcess_.state == STATE_COMPLETE)
 
     this->publish_diagnostics();
-    this->publish_request_diagnostics();
+    if (millis() - this->last_request_diagnostics_publish_ >= 60000) this->publish_request_diagnostics(true);
     /* we will send a packet to the AC as a reponse to indicate changes */
     send_packet();
 
@@ -452,6 +467,7 @@ void SinclairACCNT::send_packet()
         if (expired == OutstandingRequest::POLL) { ESP_LOGW(TAG, "Poll response timed out"); this->publish_protocol_state("response_timeout"); }
         else if (++this->pending_control_.retries >= 3) { this->pending_control_.active = false; this->update_ = ACUpdate::NoUpdate; this->last_command_result_ = "failed"; this->last_command_failure_reason_ = "timeout"; this->publish_protocol_state("command_failed_timeout"); }
         else { this->update_ = expired == OutstandingRequest::COMMAND_CLEAR ? ACUpdate::UpdateClear : ACUpdate::UpdateStart; this->last_command_result_ = "retrying"; }
+        this->publish_request_diagnostics();
     }
     if (!this->request_lifecycle_.may_send() || millis() - this->last_packet_sent_ < protocol::TIME_REFRESH_PERIOD_MS) return;
 
@@ -474,6 +490,7 @@ void SinclairACCNT::send_packet()
     this->last_packet_sent_ = millis();
     const OutstandingRequest request = update == ACUpdate::NoUpdate ? OutstandingRequest::POLL : update == ACUpdate::UpdateStart ? OutstandingRequest::COMMAND_APPLY : OutstandingRequest::COMMAND_CLEAR;
     this->request_lifecycle_.sent(request, this->last_packet_sent_);
+    this->publish_request_diagnostics();
     this->wait_response_ = true;
     write_array(packet);
     this->record_transmitted_packet(packet);
@@ -555,9 +572,16 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
     bool hasChanged = false;
     this->last_report_payload_ = payload;
     if (payload.size() > 44) {
-        if (this->candidate_telemetry_byte_44_raw_sensor_) this->candidate_telemetry_byte_44_raw_sensor_->publish_state(payload[44]);
+        const bool refresh_due = millis() - this->last_candidate_telemetry_byte_44_publish_ >= 60000;
+        const bool changed = !this->has_published_candidate_telemetry_byte_44_ || payload[44] != this->published_candidate_telemetry_byte_44_;
+        if (changed || refresh_due) {
+            if (this->candidate_telemetry_byte_44_raw_sensor_) this->candidate_telemetry_byte_44_raw_sensor_->publish_state(payload[44]);
         // Diagnostic-only and opt-in.  Byte 44 has no assigned physical meaning.
-        if (this->candidate_byte_44_temperature_hypothesis_sensor_) this->candidate_byte_44_temperature_hypothesis_sensor_->publish_state((payload[44] - 16) / 2.0f);
+            if (this->candidate_byte_44_temperature_hypothesis_sensor_) this->candidate_byte_44_temperature_hypothesis_sensor_->publish_state((payload[44] - 16) / 2.0f);
+            this->published_candidate_telemetry_byte_44_ = payload[44];
+            this->has_published_candidate_telemetry_byte_44_ = true;
+            this->last_candidate_telemetry_byte_44_publish_ = millis();
+        }
     }
     if (this->fan_profile_ == FanProfile::AUTO && !this->gree_fan_layout_detected_ &&
         payload.size() > protocol::REPORT_FAN_SPD1_BYTE &&
