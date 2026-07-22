@@ -35,15 +35,16 @@ void SinclairACCNT::loop()
         const bool known = validation == PacketValidationResult::VALID_KNOWN;
         this->record_received_packet(known);
         if (known && this->wait_response_) this->wait_response_ = false;
-        if (this->last_packet_length_sensor_) this->last_packet_length_sensor_->publish_state(this->serialProcess_.data.size());
-        if (this->last_packet_type_sensor_) this->last_packet_type_sensor_->publish_state(this->serialProcess_.data[3]);
         this->log_packet_difference(this->serialProcess_.data);
-        if (this->last_packet_sensor_) this->last_packet_sensor_->publish_state("RX cmd=0x" + format_hex_pretty(std::vector<uint8_t>{this->serialProcess_.data[3]}));
+        const std::string packet_description = "RX cmd=0x" + format_hex_pretty(std::vector<uint8_t>{this->serialProcess_.data[3]});
         if (!known) {
             ESP_LOGD(TAG, "RX valid unsupported command 0x%02X retained for discovery", this->serialProcess_.data[3]);
             if (this->log_unknown_ && !this->log_rx_) this->log_packet(this->serialProcess_.data);
-            if (this->last_unknown_packet_sensor_) { const size_t n = std::min(this->serialProcess_.data.size(), static_cast<size_t>(this->maximum_hex_length_)); this->last_unknown_packet_sensor_->publish_state(format_hex_pretty(std::vector<uint8_t>(this->serialProcess_.data.begin(), this->serialProcess_.data.begin() + n))); }
+            const size_t n = std::min(this->serialProcess_.data.size(), static_cast<size_t>(this->maximum_hex_length_));
+            const std::string unknown_packet_description = format_hex_pretty(std::vector<uint8_t>(this->serialProcess_.data.begin(), this->serialProcess_.data.begin() + n));
+            this->record_last_packet_diagnostics(this->serialProcess_.data.size(), this->serialProcess_.data[3], packet_description, &unknown_packet_description);
         } else {
+        this->record_last_packet_diagnostics(this->serialProcess_.data.size(), this->serialProcess_.data[3], packet_description);
 
         /* A valid recieved packet of accepted type marks module as being ready */
         if (this->state_ != ACState::Ready)
@@ -600,8 +601,7 @@ void SinclairACCNT::handle_packet()
             return;
         }
         std::vector<uint8_t> payload(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1);
-        this->processUnitReport(payload);
-        this->publish_state();
+        if (this->processUnitReport(payload)) this->publish_state();
     }
     else 
     {
@@ -726,48 +726,72 @@ climate::ClimateMode SinclairACCNT::determine_mode()
 const char* SinclairACCNT::determine_fan_mode()
 {
     /* fan setting has quite complex representation in the packet, brace for it */
-    uint8_t fanSpeed1 = ((*this->report_payload_)[protocol::REPORT_FAN_SPD1_BYTE]  & protocol::REPORT_FAN_SPD1_MASK) >> protocol::REPORT_FAN_SPD1_POS;
-    uint8_t fanSpeed2 = ((*this->report_payload_)[protocol::REPORT_FAN_SPD2_BYTE]  & protocol::REPORT_FAN_SPD2_MASK) >> protocol::REPORT_FAN_SPD2_POS;
-    bool    fanQuiet  = ((*this->report_payload_)[protocol::REPORT_FAN_QUIET_BYTE] & protocol::REPORT_FAN_QUIET_MASK) != 0;
-    bool    fanTurbo  = ((*this->report_payload_)[protocol::REPORT_FAN_TURBO_BYTE] & protocol::REPORT_FAN_TURBO_MASK) != 0;
+    const uint8_t fan_speed1_raw = (*this->report_payload_)[protocol::REPORT_FAN_SPD1_BYTE];
+    const uint8_t fan_speed2_raw = (*this->report_payload_)[protocol::REPORT_FAN_SPD2_BYTE];
+    const uint8_t fanSpeed1 = (fan_speed1_raw & protocol::REPORT_FAN_SPD1_MASK) >> protocol::REPORT_FAN_SPD1_POS;
+    const uint8_t fanSpeed2 = (fan_speed2_raw & protocol::REPORT_FAN_SPD2_MASK) >> protocol::REPORT_FAN_SPD2_POS;
+    const bool fanQuiet = ((*this->report_payload_)[protocol::REPORT_FAN_QUIET_BYTE] & protocol::REPORT_FAN_QUIET_MASK) != 0;
+    const bool fanTurbo = ((*this->report_payload_)[protocol::REPORT_FAN_TURBO_BYTE] & protocol::REPORT_FAN_TURBO_MASK) != 0;
+    const char *fan_mode = fan_modes::FAN_AUTO;
+    const char *decode_status = "unknown";
     /* we have extracted all the data, let's do the processing */
     if      (fanSpeed1 == 0 && fanSpeed2 == 0 && fanQuiet == false && fanTurbo == false)
     {
-        return fan_modes::FAN_AUTO;
+        fan_mode = fan_modes::FAN_AUTO;
+        decode_status = "auto";
     }
     else if (fanSpeed1 == 1 && fanSpeed2 == 1 && fanQuiet == false && fanTurbo == false)
     {
-        return fan_modes::FAN_LOW;
+        fan_mode = fan_modes::FAN_LOW;
+        decode_status = "low";
     }
     else if (fanSpeed1 == 1 && fanSpeed2 == 1 && fanQuiet == true  && fanTurbo == false)
     {
-        return fan_modes::FAN_QUIET;
+        fan_mode = fan_modes::FAN_QUIET;
+        decode_status = "quiet";
     }
     else if (fanSpeed1 == 2 && fanSpeed2 == 2 && fanQuiet == false && fanTurbo == false)
     {
-        return fan_modes::FAN_MEDL;
+        fan_mode = fan_modes::FAN_MEDL;
+        decode_status = "medium_low";
     }
     else if (fanSpeed1 == 3 && fanSpeed2 == 2 && fanQuiet == false && fanTurbo == false)
     {
-        return fan_modes::FAN_MED;
+        fan_mode = fan_modes::FAN_MED;
+        decode_status = "medium";
     }
     else if (fanSpeed1 == 4 && fanSpeed2 == 3 && fanQuiet == false && fanTurbo == false)
     {
-        return fan_modes::FAN_MEDH;
+        fan_mode = fan_modes::FAN_MEDH;
+        decode_status = "medium_high";
     }
     else if (fanSpeed1 == 5 && fanSpeed2 == 3 && fanQuiet == false && fanTurbo == false)
     {
-        return fan_modes::FAN_HIGH;
+        fan_mode = fan_modes::FAN_HIGH;
+        decode_status = "high";
     }
     else if (fanSpeed1 == 5 && fanSpeed2 == 3 && fanQuiet == false && fanTurbo == true )
     {
-        return fan_modes::FAN_TURBO;
+        fan_mode = fan_modes::FAN_TURBO;
+        decode_status = "turbo";
     }
     else 
     {
-        ESP_LOGW(TAG, "Received unknown fan mode");
-        return fan_modes::FAN_AUTO;
+        const uint32_t signature = (static_cast<uint32_t>(fan_speed1_raw) << 24) |
+                                   (static_cast<uint32_t>(fan_speed2_raw) << 16) |
+                                   (static_cast<uint32_t>(fanQuiet) << 8) | static_cast<uint32_t>(fanTurbo);
+        if (!this->has_unknown_fan_signature_ || this->last_unknown_fan_signature_ != signature ||
+            millis() - this->last_unknown_fan_warning_ >= 5000) {
+            ESP_LOGW(TAG, "Unknown fan mode: speed1_raw=0x%02X speed1_4bit=%u speed1_3bit=%u speed2_raw=0x%02X speed2=%u quiet=%s turbo=%s",
+                     fan_speed1_raw, fanSpeed1, fan_speed1_raw & 0x07, fan_speed2_raw, fanSpeed2,
+                     fanQuiet ? "true" : "false", fanTurbo ? "true" : "false");
+            this->last_unknown_fan_warning_ = millis();
+            this->last_unknown_fan_signature_ = signature;
+            this->has_unknown_fan_signature_ = true;
+        }
     }
+    this->record_fan_diagnostics(fan_speed1_raw, fan_speed1_raw & 0x07, fan_speed2_raw, fanQuiet, fanTurbo, decode_status);
+    return fan_mode;
 }
 
 std::string SinclairACCNT::determine_vertical_swing()

@@ -159,6 +159,57 @@ void SinclairAC::publish_diagnostics(bool force) {
     if (this->too_short_sensor_) this->too_short_sensor_->publish_state(this->too_short_frames_);
     if (this->parser_resync_sensor_) this->parser_resync_sensor_->publish_state(this->parser_resyncs_);
     if (this->frame_timeout_sensor_) this->frame_timeout_sensor_->publish_state(this->frame_timeouts_);
+    this->publish_last_packet_diagnostics(true);
+}
+
+void SinclairAC::record_last_packet_diagnostics(uint32_t length, uint32_t type, const std::string &description,
+                                                const std::string *unknown_description) {
+    const bool changed = !this->has_last_packet_diagnostics_ || this->last_packet_length_ != length ||
+                         this->last_packet_type_ != type || this->last_packet_description_ != description ||
+                         (unknown_description != nullptr && this->last_unknown_packet_description_ != *unknown_description);
+    this->has_last_packet_diagnostics_ = true;
+    this->last_packet_length_ = length;
+    this->last_packet_type_ = type;
+    this->last_packet_description_ = description;
+    if (unknown_description != nullptr) this->last_unknown_packet_description_ = *unknown_description;
+    if (changed) this->publish_last_packet_diagnostics(true);
+}
+
+void SinclairAC::publish_last_packet_diagnostics(bool force) {
+    if (!this->has_last_packet_diagnostics_) return;
+    if (!force && millis() - this->last_packet_diagnostics_publish_ < 5000) return;
+    this->last_packet_diagnostics_publish_ = millis();
+    if (this->last_packet_length_sensor_) this->last_packet_length_sensor_->publish_state(this->last_packet_length_);
+    if (this->last_packet_type_sensor_) this->last_packet_type_sensor_->publish_state(this->last_packet_type_);
+    if (this->last_packet_sensor_) this->last_packet_sensor_->publish_state(this->last_packet_description_);
+    if (this->last_unknown_packet_sensor_ && !this->last_unknown_packet_description_.empty()) {
+        this->last_unknown_packet_sensor_->publish_state(this->last_unknown_packet_description_);
+    }
+}
+
+void SinclairAC::record_fan_diagnostics(uint8_t speed_field_1_raw, uint8_t speed_field_1_low_3_bits,
+                                        uint8_t speed_field_2_raw, bool quiet, bool turbo, const char *decode_status) {
+    const uint8_t quiet_raw = quiet ? 1 : 0;
+    const uint8_t turbo_raw = turbo ? 1 : 0;
+    const std::string status(decode_status);
+    const bool changed = !this->has_fan_diagnostics_ || this->fan_speed_field_1_raw_ != speed_field_1_raw ||
+                         this->fan_speed_field_1_low_3_bits_ != speed_field_1_low_3_bits ||
+                         this->fan_speed_field_2_raw_ != speed_field_2_raw || this->fan_quiet_raw_ != quiet_raw ||
+                         this->fan_turbo_raw_ != turbo_raw || this->fan_decode_status_ != status;
+    this->has_fan_diagnostics_ = true;
+    this->fan_speed_field_1_raw_ = speed_field_1_raw;
+    this->fan_speed_field_1_low_3_bits_ = speed_field_1_low_3_bits;
+    this->fan_speed_field_2_raw_ = speed_field_2_raw;
+    this->fan_quiet_raw_ = quiet_raw;
+    this->fan_turbo_raw_ = turbo_raw;
+    this->fan_decode_status_ = status;
+    if (!changed) return;
+    if (this->fan_speed_field_1_raw_sensor_) this->fan_speed_field_1_raw_sensor_->publish_state(speed_field_1_raw);
+    if (this->fan_speed_field_1_low_3_bits_sensor_) this->fan_speed_field_1_low_3_bits_sensor_->publish_state(speed_field_1_low_3_bits);
+    if (this->fan_speed_field_2_raw_sensor_) this->fan_speed_field_2_raw_sensor_->publish_state(speed_field_2_raw);
+    if (this->fan_quiet_raw_sensor_) this->fan_quiet_raw_sensor_->publish_state(quiet_raw);
+    if (this->fan_turbo_raw_sensor_) this->fan_turbo_raw_sensor_->publish_state(turbo_raw);
+    if (this->fan_decode_status_sensor_) this->fan_decode_status_sensor_->publish_state(status);
 }
 
 void SinclairAC::log_packet_difference(const std::vector<uint8_t> &packet) {
