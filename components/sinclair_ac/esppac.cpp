@@ -1,5 +1,6 @@
 // based on: https://github.com/DomiStyle/esphome-panasonic-ac
 #include "esppac.h"
+#include <cmath>
 
 #include "esphome/core/log.h"
 
@@ -33,20 +34,31 @@ climate::ClimateTraits SinclairAC::traits()
 void SinclairAC::setup()
 {
   // Initialize times
+    this->reset_parser();
     this->init_time_ = millis();
-    this->last_packet_sent_ = millis();
+    this->last_packet_sent_ = this->init_time_;
+    this->last_packet_received_ = this->init_time_;
+    this->wait_response_ = false;
+    this->mode = climate::CLIMATE_MODE_OFF;
+    this->target_temperature = MIN_TEMPERATURE;
+    this->current_temperature = NAN;
 
     ESP_LOGI(TAG, "Sinclair AC component v%s starting...", VERSION);
-    this->publish_protocol_state(this->transmit_enabled_ ? "initializing" : "receive-only");
-    if (this->receive_only_sensor_ != nullptr) this->receive_only_sensor_->publish_state(!this->transmit_enabled_);
+    this->publish_protocol_state("initializing");
+    if (this->protocol_mode_sensor_) this->protocol_mode_sensor_->publish_state(this->protocol_mode_name());
+    if (this->receive_only_sensor_) this->receive_only_sensor_->publish_state(this->is_receive_only());
+    if (this->poll_only_sensor_) this->poll_only_sensor_->publish_state(this->is_poll_only());
+    if (this->communication_sensor_) this->communication_sensor_->publish_state(false);
+    this->publish_diagnostics(true);
 }
 
 void SinclairAC::loop()
 {
-    if (this->serialProcess_.state == STATE_RECIEVE && millis() - this->serialProcess_.started_at > READ_TIMEOUT) {
+    if (this->serialProcess_.state == STATE_RECIEVE && millis() - this->serialProcess_.started_at > this->frame_timeout_ms()) {
         ESP_LOGW(TAG, "Discarding truncated UART frame after timeout");
         this->reset_parser(true);
-        this->publish_protocol_state(this->transmit_enabled_ ? "timeout" : "receive-only");
+        this->frame_timeouts_++;
+        this->publish_protocol_state("timeout");
     }
     read_data();  // Read data from UART (if there is any)
 }
@@ -100,33 +112,52 @@ void SinclairAC::read_data()
     }
 }
 
+uint32_t SinclairAC::frame_timeout_ms() const {
+    const uint32_t bytes = this->serialProcess_.frame_size == 0 ? DATA_MAX : this->serialProcess_.frame_size;
+    return (bytes * UART_BITS_PER_CHARACTER * 1000UL + UART_BAUD - 1) / UART_BAUD + FRAME_TIMEOUT_MARGIN_MS;
+}
+const char *SinclairAC::protocol_mode_name() const {
+    switch (this->protocol_mode_) { case ProtocolMode::RECEIVE_ONLY: return "receive_only"; case ProtocolMode::POLL_ONLY: return "poll_only"; default: return "control"; }
+}
 void SinclairAC::reset_parser(bool resynchronized) {
     this->serialProcess_.data.clear();
     this->serialProcess_.frame_size = 0;
+    this->serialProcess_.started_at = 0;
     this->serialProcess_.state = STATE_WAIT_SYNC;
-    if (resynchronized) { this->parser_resyncs_++; if (this->parser_resync_sensor_) this->parser_resync_sensor_->publish_state(this->parser_resyncs_); }
+    if (resynchronized) this->parser_resyncs_++;
 }
 
 void SinclairAC::set_debug(bool rx, bool tx, bool unknown, bool differences, uint16_t maximum_hex_length) {
     this->log_rx_ = rx; this->log_tx_ = tx; this->log_unknown_ = unknown; this->log_differences_ = differences; this->maximum_hex_length_ = maximum_hex_length;
 }
 void SinclairAC::publish_protocol_state(const char *state) { if (this->protocol_state_sensor_) this->protocol_state_sensor_->publish_state(state); }
-void SinclairAC::record_received_packet(bool known, bool checksum_ok) {
+void SinclairAC::record_received_packet(bool known) {
     this->last_packet_received_ = millis(); this->valid_rx_packets_++;
     if (!known) this->unknown_packets_++;
-    if (this->valid_rx_packets_sensor_) this->valid_rx_packets_sensor_->publish_state(this->valid_rx_packets_);
-    if (!known && this->unknown_packets_sensor_) this->unknown_packets_sensor_->publish_state(this->unknown_packets_);
     if (this->communication_sensor_) this->communication_sensor_->publish_state(true);
-    this->publish_protocol_state(this->transmit_enabled_ ? "ready" : "receive-only");
+    this->publish_protocol_state("ready");
 }
 void SinclairAC::record_transmitted_packet(const std::vector<uint8_t> &packet) {
-    this->valid_tx_packets_++; if (this->valid_tx_packets_sensor_) this->valid_tx_packets_sensor_->publish_state(this->valid_tx_packets_);
+    this->valid_tx_packets_++;
 }
+void SinclairAC::publish_diagnostics(bool force) {
+    if (!force && millis() - this->last_diagnostics_publish_ < 5000) return;
+    this->last_diagnostics_publish_ = millis();
+    if (this->valid_rx_packets_sensor_) this->valid_rx_packets_sensor_->publish_state(this->valid_rx_packets_);
+    if (this->valid_tx_packets_sensor_) this->valid_tx_packets_sensor_->publish_state(this->valid_tx_packets_);
+    if (this->unknown_packets_sensor_) this->unknown_packets_sensor_->publish_state(this->unknown_packets_);
+    if (this->checksum_failures_sensor_) this->checksum_failures_sensor_->publish_state(this->checksum_failures_);
+    if (this->invalid_length_sensor_) this->invalid_length_sensor_->publish_state(this->invalid_lengths_);
+    if (this->too_short_sensor_) this->too_short_sensor_->publish_state(this->too_short_frames_);
+    if (this->parser_resync_sensor_) this->parser_resync_sensor_->publish_state(this->parser_resyncs_);
+    if (this->frame_timeout_sensor_) this->frame_timeout_sensor_->publish_state(this->frame_timeouts_);
+}
+
 void SinclairAC::log_packet_difference(const std::vector<uint8_t> &packet) {
     if (!this->log_differences_ || packet.size() < 4) return;
     auto &old = this->previous_frames_[packet[3]];
     if (!old.empty() && old.size() != packet.size()) ESP_LOGD(TAG, "RX cmd=0x%02X frame length changed: %u -> %u", packet[3], old.size(), packet.size());
-    for (size_t i = 0; i < old.size() && i < packet.size(); i++) if (old[i] != packet[i]) ESP_LOGD(TAG, "changed frame[%u] payload[%d]: 0x%02X -> 0x%02X mask=0x%02X", i, static_cast<int>(i) - 4, old[i], packet[i], old[i] ^ packet[i]);
+    for (size_t i = 0; i < old.size() && i < packet.size(); i++) if (old[i] != packet[i]) { const char *field = i < 2 ? "sync" : i == 2 ? "length" : i == 3 ? "command" : i + 1 == packet.size() ? "checksum" : "payload"; ESP_LOGD(TAG, "changed %s%s%u: 0x%02X -> 0x%02X xor=0x%02X", field, std::string(field) == "payload" ? "[" : "", std::string(field) == "payload" ? static_cast<unsigned>(i - 4) : static_cast<unsigned>(i), old[i], packet[i], old[i] ^ packet[i]); }
     old = packet;
 }
 
@@ -372,7 +403,9 @@ void SinclairAC::log_packet(const std::vector<uint8_t> &data, bool outgoing)
     if ((outgoing && !this->log_tx_) || (!outgoing && !this->log_rx_)) return;
     const size_t bytes = std::min(data.size(), static_cast<size_t>(this->maximum_hex_length_));
     std::vector<uint8_t> display(data.begin(), data.begin() + bytes);
-    ESP_LOGD(TAG, "%s cmd=0x%02X len=%u payload=%d checksum=%s: %s%s", outgoing ? "TX" : "RX", data.size() > 3 ? data[3] : 0, data.size(), static_cast<int>(data.size()) - 5, data.size() >= 5 ? "present" : "missing", format_hex_pretty(display).c_str(), bytes < data.size() ? " ..." : "");
+    const uint8_t calculated = data.size() >= 5 ? [&data](){ uint8_t sum=0; for (size_t i=2;i+1<data.size();++i) sum += data[i]; return sum; }() : 0;
+    const uint8_t received = data.size() >= 5 ? data.back() : 0;
+    ESP_LOGD(TAG, "%s command=0x%02X declared=%u actual=%u payload=%u calculated_checksum=0x%02X received_checksum=0x%02X checksum=%s: %s%s", outgoing ? "TX" : "RX", data.size()>3 ? data[3] : 0, data.size()>2 ? data[2] : 0, data.size(), data.size()>=5 ? data.size()-5 : 0, calculated, received, calculated==received ? "OK" : "FAIL", format_hex_pretty(display).c_str(), bytes<data.size()?" ...":"");
 }
 
 }  // namespace sinclair_ac

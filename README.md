@@ -69,3 +69,27 @@ and fault states. Submit the labelled packet logs or serial captures with all Wi
 credentials, API keys, MAC addresses, and location details removed. Climate action
 is inferred from selected mode and room/target temperatures; it is not a compressor
 running indication.
+
+## Connector safety and staged compatibility process
+
+This component is for the **blue Gree `WIFI` connector only**: it is a TTL UART (normally 4800 baud, 8E1) used by the factory Wi-Fi module. The red **`COM-MANUAL` connector is a separate RS-485 wired-controller bus**. The ports share neither electrical signaling nor packet format; do not connect this component to COM-MANUAL or treat it as compatible.
+
+Use the following staged process on a live unit:
+
+1. Meter and confirm connector orientation.
+2. Confirm ground, supply, indoor RX, and indoor TX.
+3. Confirm indoor-TX voltage and fit the required divider before connecting ESP RX.
+4. Start with `protocol_mode: receive_only` and the physical TX wire disconnected.
+5. Move to `poll_only` only after voltage verification.
+6. Confirm repeated valid reports and stable checksums.
+7. Move to `control` only after poll-only validation.
+8. Power down before changing any wiring.
+9. Never connect USB 5 V and HVAC 5 V simultaneously unless a verified power-selection circuit is present.
+
+`receive_only` never calls a UART write method and ignores every Home Assistant control request. `poll_only` sends only the established no-change poll (never the `0xAF` apply marker) and ignores Home Assistant controls. `control` is the backward-compatible default. The old `transmit_enabled` option is deprecated (`false` maps to receive-only and `true` to control); it cannot be combined with `protocol_mode`.
+
+For local development the examples use `type: local` sources. Real installations should pin the revision being tested, for example `source: github://OWNER/esphome_gree_ac@BRANCH_OR_TAG`, rather than demonstrating an unpinned upstream `main`.
+
+## Protocol capture guide
+
+Label captures with startup, power, mode, setpoint, fan, horizontal and vertical vane positions, display, sleep, X-Fan, save/8 °C heat, IR-remote changes, and faults. Capture repeated transitions and retain raw frames. Climate action remains inferred from selected mode and temperatures; it is **not** compressor-run telemetry. Do not assign meanings to unknown bytes without repeatable evidence. COM-MANUAL remains a separate RS-485 research project.

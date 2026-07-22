@@ -1,7 +1,9 @@
 // based on: https://github.com/DomiStyle/esphome-panasonic-ac
 #pragma once
 
+#include <algorithm>
 #include <map>
+#include <vector>
 
 #include "esphome/components/climate/climate.h"
 #include "esphome/components/select/select.h"
@@ -18,7 +20,9 @@ namespace sinclair_ac {
 
 static const char *const VERSION = "0.0.1";
 
-static const uint16_t READ_TIMEOUT = 250;  // Maximum time to wait for the remainder of a frame
+static const uint32_t UART_BAUD = 4800;
+static const uint8_t UART_BITS_PER_CHARACTER = 11;  // 8E1
+static const uint32_t FRAME_TIMEOUT_MARGIN_MS = 150;
 
 static const uint8_t MIN_TEMPERATURE = 16;   // Minimum temperature as reported by EWPE SMART APP
 static const uint8_t MAX_TEMPERATURE = 30;   // Maximum temperature as supported by EWPE SMART APP
@@ -90,10 +94,12 @@ static const uint8_t DATA_MAX = 200;
 
 typedef struct {
         std::vector<uint8_t> data;
-        uint16_t frame_size;
-        uint32_t started_at;
-        SerialProcessState_t state;
+        uint16_t frame_size{0};
+        uint32_t started_at{0};
+        SerialProcessState_t state{STATE_WAIT_SYNC};
 } SerialProcess_t;
+
+enum class ProtocolMode : uint8_t { RECEIVE_ONLY, POLL_ONLY, CONTROL };
 
 class SinclairAC : public Component, public uart::UARTDevice, public climate::Climate {
     public:
@@ -109,18 +115,22 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void set_save_switch(switch_::Switch *plasma_switch);
 
         void set_current_temperature_sensor(sensor::Sensor *current_temperature_sensor);
-        void set_transmit_enabled(bool transmit_enabled) { this->transmit_enabled_ = transmit_enabled; }
+        void set_protocol_mode(ProtocolMode mode) { this->protocol_mode_ = mode; }
         void set_debug(bool log_rx, bool log_tx, bool log_unknown, bool log_differences, uint16_t maximum_hex_length);
         void set_valid_rx_packets_sensor(sensor::Sensor *sensor) { this->valid_rx_packets_sensor_ = sensor; }
         void set_valid_tx_packets_sensor(sensor::Sensor *sensor) { this->valid_tx_packets_sensor_ = sensor; }
         void set_unknown_packets_sensor(sensor::Sensor *sensor) { this->unknown_packets_sensor_ = sensor; }
         void set_checksum_failures_sensor(sensor::Sensor *sensor) { this->checksum_failures_sensor_ = sensor; }
         void set_invalid_length_sensor(sensor::Sensor *sensor) { this->invalid_length_sensor_ = sensor; }
+        void set_too_short_sensor(sensor::Sensor *sensor) { this->too_short_sensor_ = sensor; }
+        void set_frame_timeout_sensor(sensor::Sensor *sensor) { this->frame_timeout_sensor_ = sensor; }
         void set_parser_resync_sensor(sensor::Sensor *sensor) { this->parser_resync_sensor_ = sensor; }
         void set_last_packet_length_sensor(sensor::Sensor *sensor) { this->last_packet_length_sensor_ = sensor; }
         void set_last_packet_type_sensor(sensor::Sensor *sensor) { this->last_packet_type_sensor_ = sensor; }
         void set_communication_sensor(binary_sensor::BinarySensor *sensor) { this->communication_sensor_ = sensor; }
         void set_receive_only_sensor(binary_sensor::BinarySensor *sensor) { this->receive_only_sensor_ = sensor; }
+        void set_poll_only_sensor(binary_sensor::BinarySensor *sensor) { this->poll_only_sensor_ = sensor; }
+        void set_protocol_mode_sensor(text_sensor::TextSensor *sensor) { this->protocol_mode_sensor_ = sensor; }
         void set_protocol_state_sensor(text_sensor::TextSensor *sensor) { this->protocol_state_sensor_ = sensor; }
         void set_last_packet_sensor(text_sensor::TextSensor *sensor) { this->last_packet_sensor_ = sensor; }
         void set_last_unknown_packet_sensor(text_sensor::TextSensor *sensor) { this->last_unknown_packet_sensor_ = sensor; }
@@ -148,34 +158,38 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         std::string display_state_;
         std::string display_unit_state_;
 
-        bool plasma_state_;
-        bool sleep_state_;
-        bool xfan_state_;
-        bool save_state_;
+        bool plasma_state_{false}; bool sleep_state_{false}; bool xfan_state_{false}; bool save_state_{false};
 
         SerialProcess_t serialProcess_;
 
-        uint32_t init_time_;   // Stores the current time
+        uint32_t init_time_{0};   // Stores the current time
         // uint32_t last_read_;   // Stores the time at which the last read was done
-        uint32_t last_packet_sent_;  // Stores the time at which the last packet was sent
-        uint32_t last_packet_received_;  // Stores the time at which the last packet was received
-        bool wait_response_;
-        bool transmit_enabled_{true};
+        uint32_t last_packet_sent_{0};
+        uint32_t last_packet_received_{0};
+        bool wait_response_{false};
+        ProtocolMode protocol_mode_{ProtocolMode::CONTROL};
         bool transmit_warning_logged_{false};
         bool log_rx_{false}, log_tx_{false}, log_unknown_{false}, log_differences_{false};
         uint16_t maximum_hex_length_{128};
-        uint32_t valid_rx_packets_{0}, valid_tx_packets_{0}, unknown_packets_{0}, checksum_failures_{0}, invalid_lengths_{0}, parser_resyncs_{0};
-        sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr};
-        binary_sensor::BinarySensor *communication_sensor_{nullptr}, *receive_only_sensor_{nullptr};
-        text_sensor::TextSensor *protocol_state_sensor_{nullptr}, *last_packet_sensor_{nullptr}, *last_unknown_packet_sensor_{nullptr};
+        uint32_t valid_rx_packets_{0}, valid_tx_packets_{0}, unknown_packets_{0}, checksum_failures_{0}, invalid_lengths_{0}, too_short_frames_{0}, parser_resyncs_{0}, frame_timeouts_{0};
+        uint32_t last_diagnostics_publish_{0};
+        sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *too_short_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *frame_timeout_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr};
+        binary_sensor::BinarySensor *communication_sensor_{nullptr}, *receive_only_sensor_{nullptr}, *poll_only_sensor_{nullptr};
+        text_sensor::TextSensor *protocol_mode_sensor_{nullptr}, *protocol_state_sensor_{nullptr}, *last_packet_sensor_{nullptr}, *last_unknown_packet_sensor_{nullptr};
         std::map<uint8_t, std::vector<uint8_t>> previous_frames_;
 
         climate::ClimateTraits traits() override;
 
         void read_data();
         void reset_parser(bool resynchronized = false);
-        void record_received_packet(bool known, bool checksum_ok);
+        uint32_t frame_timeout_ms() const;
+        bool is_receive_only() const { return this->protocol_mode_ == ProtocolMode::RECEIVE_ONLY; }
+        bool is_poll_only() const { return this->protocol_mode_ == ProtocolMode::POLL_ONLY; }
+        bool can_control() const { return this->protocol_mode_ == ProtocolMode::CONTROL; }
+        const char *protocol_mode_name() const;
+        void record_received_packet(bool known);
         void record_transmitted_packet(const std::vector<uint8_t> &packet);
+        void publish_diagnostics(bool force = false);
         void publish_protocol_state(const char *state);
         void log_packet_difference(const std::vector<uint8_t> &packet);
 
