@@ -3,6 +3,8 @@ name: firmware-protocol-recovery
 on:
   push:
     branches: [research/firmware-protocol-recovery]
+  pull_request:
+    branches: [codex/add-compatibility-and-protocol-discovery-mode]
   workflow_dispatch:
 
 jobs:
