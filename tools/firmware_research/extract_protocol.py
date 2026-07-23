@@ -2,9 +2,6 @@
 # @category Gree
 
 from ghidra.app.decompiler import DecompInterface
-from ghidra.program.model.data import StringDataInstance
-from ghidra.program.model.symbol import RefType
-from java.io import File
 
 KEYWORDS = [
     "fault", "energy", "timer", "outdoor", "inner", "outer", "time", "sync",
@@ -20,13 +17,17 @@ def emit(s=""):
 
 emit("Gree CS532AX MT7687 firmware string/xref/decompiler report")
 emit("Program: %s" % currentProgram.getName())
-emit("Image base: %s" % currentProgram.getImageBase())
-emit()
+emit("Image base property: %s" % currentProgram.getImageBase())
 
 listing = currentProgram.getListing()
 refman = currentProgram.getReferenceManager()
 fm = currentProgram.getFunctionManager()
 mem = currentProgram.getMemory()
+
+emit("Memory blocks:")
+for block in mem.getBlocks():
+    emit("  %s %s-%s" % (block.getName(), block.getStart(), block.getEnd()))
+emit()
 
 # Collect string data found by auto-analysis.
 strings = []
@@ -47,19 +48,21 @@ for addr, text in strings:
     emit("%s  %s" % (addr, text.replace("\n", "\\n")))
 emit()
 
-# Build unique functions referencing matching strings.
+# Build unique functions referencing matching strings. ARM Constant Reference
+# Analyzer creates these references for literal pools and ADR/LDR constructions.
 funcs = {}
+unowned_refs = []
 for addr, text in strings:
     refs = refman.getReferencesTo(addr)
     while refs.hasNext():
         ref = refs.next()
         src = ref.getFromAddress()
         fn = fm.getFunctionContaining(src)
-        if fn is None:
-            fn = fm.getFunctionBefore(src)
         if fn is not None:
             key = fn.getEntryPoint().toString()
             funcs.setdefault(key, {"fn": fn, "refs": []})["refs"].append((src, addr, text))
+        else:
+            unowned_refs.append((src, addr, text))
 
 emit("=== FUNCTIONS REFERENCING MATCHED STRINGS ===")
 for key in sorted(funcs.keys()):
@@ -67,6 +70,11 @@ for key in sorted(funcs.keys()):
     emit("%s  %s" % (fn.getEntryPoint(), fn.getName()))
     for src, saddr, text in funcs[key]["refs"]:
         emit("  ref %s -> %s  %s" % (src, saddr, text.replace("\n", "\\n")))
+emit()
+
+emit("=== STRING REFERENCES OUTSIDE DEFINED FUNCTIONS ===")
+for src, saddr, text in unowned_refs:
+    emit("%s -> %s  %s" % (src, saddr, text.replace("\n", "\\n")))
 emit()
 
 # Decompile each unique function.
@@ -77,7 +85,7 @@ for key in sorted(funcs.keys()):
     fn = funcs[key]["fn"]
     emit("\n----- %s %s -----" % (fn.getEntryPoint(), fn.getName()))
     try:
-        result = decomp.decompileFunction(fn, 90, monitor)
+        result = decomp.decompileFunction(fn, 120, monitor)
         if result.decompileCompleted():
             emit(result.getDecompiledFunction().getC())
         else:
@@ -87,8 +95,7 @@ for key in sorted(funcs.keys()):
 
 # Search memory for literal complete Gree frames and likely frame headers.
 emit("\n=== 7E 7E FRAME-LIKE BYTE SEQUENCES ===")
-blocks = mem.getBlocks()
-for block in blocks:
+for block in mem.getBlocks():
     if not block.isInitialized():
         continue
     start = block.getStart()
@@ -96,7 +103,7 @@ for block in blocks:
     addr = start
     while addr.compareTo(end) <= 0:
         try:
-            if mem.getByte(addr) & 0xff == 0x7e and mem.getByte(addr.add(1)) & 0xff == 0x7e:
+            if addr.add(2).compareTo(end) <= 0 and (mem.getByte(addr) & 0xff) == 0x7e and (mem.getByte(addr.add(1)) & 0xff) == 0x7e:
                 length = mem.getByte(addr.add(2)) & 0xff
                 total = length + 3
                 if 5 <= total <= 200 and addr.add(total - 1).compareTo(end) <= 0:
@@ -113,8 +120,8 @@ for block in blocks:
                         " ".join("%02X" % b for b in raw)))
                     addr = addr.add(max(1, total))
                     continue
-        except:
-            pass
+        except Exception as exc:
+            emit("scan exception at %s: %s" % (addr, exc))
         addr = addr.add(1)
 
 out.close()
