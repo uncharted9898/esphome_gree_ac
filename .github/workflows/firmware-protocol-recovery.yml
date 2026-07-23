@@ -18,7 +18,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p firmware-research/input firmware-research/output /tmp/ghidra
+          mkdir -p firmware-research/input firmware-research/output /tmp/ghidra /tmp/gree-ghidra
           curl -fL --retry 5 --retry-delay 2 \
             'https://raw.githubusercontent.com/maxim-smirnov/gree-wifimodule-firmware/main/362001000835/U-CS532AX%28MTK%29V3-5351076961300064561.bin' \
             -o firmware-research/input/cs532ax-mtk-v3.bin
