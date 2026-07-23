@@ -24,10 +24,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_CLIMATE_ID): cv.use_id(SinclairAC),
         cv.Optional(CONF_RESTORE_CONTROL, default=True): cv.boolean,
         cv.Optional(CONF_START_DELAY, default="100ms"): cv.positive_time_period_milliseconds,
-        cv.Optional(CONF_FRAME_SPACING, default="450ms"): cv.All(
-            cv.positive_time_period_milliseconds,
-            cv.Range(min=cv.TimePeriod(milliseconds=300), max=cv.TimePeriod(seconds=5)),
-        ),
+        cv.Optional(CONF_FRAME_SPACING, default="450ms"): cv.positive_time_period_milliseconds,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
