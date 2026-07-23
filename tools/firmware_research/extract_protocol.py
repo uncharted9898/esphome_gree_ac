@@ -10,6 +10,22 @@ KEYWORDS = [
 ]
 APP_STRING_START = 0x100D1800
 APP_STRING_END = 0x100D6000
+# Functions seen constructing, sending, parsing, or validating the appliance
+# UART frames. Include these even when they do not reference a diagnostic string.
+HELPER_ADDRESSES = [
+    0x1007D134, 0x100824B8, 0x100824F2,
+    0x1008271C, 0x1008273A, 0x1008274A, 0x1008275C, 0x10082778,
+    0x100827BE, 0x100827C6, 0x100827E2, 0x100827E6, 0x100827EA,
+    0x100827EE, 0x100827F2, 0x100827F6, 0x100827FA, 0x100827FE,
+    0x10082802, 0x10082806, 0x1008280A, 0x10082812, 0x1008282E,
+    0x10082834, 0x10082844, 0x10082858, 0x10082884, 0x1008289C,
+    0x100828B0, 0x100828CE, 0x100828DC, 0x100828E2,
+    0x1008291E, 0x100829AC,
+    0x100839D6, 0x100839DC, 0x100839E2, 0x100839E8,
+    0x10083A12, 0x10083A18, 0x10083A5A, 0x10083A60, 0x10083A66,
+    0x10083A96, 0x10083A9C, 0x10083B02,
+    0x100840D8, 0x1008419C, 0x10084310, 0x1008434A, 0x10084394,
+]
 
 OUT_PATH = getScriptArgs()[0] if len(getScriptArgs()) else "/tmp/gree-ghidra-report.txt"
 out = open(OUT_PATH, "w")
@@ -25,15 +41,13 @@ listing = currentProgram.getListing()
 refman = currentProgram.getReferenceManager()
 fm = currentProgram.getFunctionManager()
 mem = currentProgram.getMemory()
+space = currentProgram.getAddressFactory().getDefaultAddressSpace()
 
 emit("Memory blocks:")
 for block in mem.getBlocks():
     emit("  %s %s-%s" % (block.getName(), block.getStart(), block.getEnd()))
 emit()
 
-# Restrict decompilation to the Gree application log-string region. This avoids
-# pulling in hundreds of unrelated Wi-Fi/lwIP SDK functions containing generic
-# words such as timer, status, or device.
 strings = []
 data_it = listing.getDefinedData(True)
 while data_it.hasNext():
@@ -69,7 +83,16 @@ for addr, text in strings:
         else:
             unowned_refs.append((src, addr, text))
 
-emit("=== FUNCTIONS REFERENCING MATCHED STRINGS ===")
+for numeric in HELPER_ADDRESSES:
+    addr = space.getAddress(numeric)
+    fn = fm.getFunctionAt(addr)
+    if fn is None:
+        fn = fm.getFunctionContaining(addr)
+    if fn is not None:
+        key = fn.getEntryPoint().toString()
+        funcs.setdefault(key, {"fn": fn, "refs": []})
+
+emit("=== FUNCTIONS SELECTED FOR DECOMPILATION ===")
 for key in sorted(funcs.keys()):
     fn = funcs[key]["fn"]
     emit("%s  %s" % (fn.getEntryPoint(), fn.getName()))
@@ -82,7 +105,6 @@ for src, saddr, text in unowned_refs:
     emit("%s -> %s  %s" % (src, saddr, text.replace("\n", "\\n")))
 emit()
 
-# Decompile each unique application function referencing our protocol strings.
 decomp = DecompInterface()
 decomp.openProgram(currentProgram)
 emit("=== DECOMPILED FUNCTIONS ===")
@@ -98,7 +120,6 @@ for key in sorted(funcs.keys()):
     except Exception as exc:
         emit("DECOMPILE EXCEPTION: %s" % exc)
 
-# Search memory for literal complete Gree frames and likely frame headers.
 emit("\n=== 7E 7E FRAME-LIKE BYTE SEQUENCES ===")
 for block in mem.getBlocks():
     if not block.isInitialized():
