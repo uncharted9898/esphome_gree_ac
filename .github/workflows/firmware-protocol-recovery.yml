@@ -46,6 +46,7 @@ jobs:
           assert size == len(payload)
           assert sum(payload) & 0xffffffff == checksum
           Path('firmware-research/input/cs532ax-mtk-v3.raw').write_bytes(payload)
+          Path('firmware-research/output/cs532ax-mtk-v3.raw').write_bytes(payload)
           metadata = {
               'wrapper_magic': f'0x{magic:08X}', 'payload_size': size,
               'additive_checksum': f'0x{checksum:08X}', 'header_word_4': f'0x{word4:08X}',
