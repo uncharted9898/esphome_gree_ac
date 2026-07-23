@@ -6,8 +6,10 @@ from ghidra.app.decompiler import DecompInterface
 KEYWORDS = [
     "fault", "energy", "timer", "outdoor", "inner", "outer", "time", "sync",
     "mac", "uart", "report", "status", "device", "info", "heartbeat", "ctrl",
-    "control", "temperature", "humidity", "defrost", "elc", "kwh",
+    "control", "temperature", "humidity", "defrost", "elc", "kwh", "devinfo",
 ]
+APP_STRING_START = 0x100D1800
+APP_STRING_END = 0x100D6000
 
 OUT_PATH = getScriptArgs()[0] if len(getScriptArgs()) else "/tmp/gree-ghidra-report.txt"
 out = open(OUT_PATH, "w")
@@ -29,11 +31,16 @@ for block in mem.getBlocks():
     emit("  %s %s-%s" % (block.getName(), block.getStart(), block.getEnd()))
 emit()
 
-# Collect string data found by auto-analysis.
+# Restrict decompilation to the Gree application log-string region. This avoids
+# pulling in hundreds of unrelated Wi-Fi/lwIP SDK functions containing generic
+# words such as timer, status, or device.
 strings = []
 data_it = listing.getDefinedData(True)
 while data_it.hasNext():
     d = data_it.next()
+    numeric = d.getAddress().getOffset()
+    if numeric < APP_STRING_START or numeric >= APP_STRING_END:
+        continue
     try:
         value = d.getValue()
         text = str(value) if value is not None else ""
@@ -43,13 +50,11 @@ while data_it.hasNext():
     if text and any(k in low for k in KEYWORDS):
         strings.append((d.getAddress(), text))
 
-emit("=== MATCHED STRINGS ===")
+emit("=== MATCHED APP STRINGS ===")
 for addr, text in strings:
     emit("%s  %s" % (addr, text.replace("\n", "\\n")))
 emit()
 
-# Build unique functions referencing matching strings. ARM Constant Reference
-# Analyzer creates these references for literal pools and ADR/LDR constructions.
 funcs = {}
 unowned_refs = []
 for addr, text in strings:
@@ -77,7 +82,7 @@ for src, saddr, text in unowned_refs:
     emit("%s -> %s  %s" % (src, saddr, text.replace("\n", "\\n")))
 emit()
 
-# Decompile each unique function.
+# Decompile each unique application function referencing our protocol strings.
 decomp = DecompInterface()
 decomp.openProgram(currentProgram)
 emit("=== DECOMPILED FUNCTIONS ===")
@@ -85,7 +90,7 @@ for key in sorted(funcs.keys()):
     fn = funcs[key]["fn"]
     emit("\n----- %s %s -----" % (fn.getEntryPoint(), fn.getName()))
     try:
-        result = decomp.decompileFunction(fn, 120, monitor)
+        result = decomp.decompileFunction(fn, 60, monitor)
         if result.decompileCompleted():
             emit(result.getDecompiledFunction().getC())
         else:
