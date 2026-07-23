@@ -1,0 +1,123 @@
+name: firmware-protocol-recovery
+
+on:
+  push:
+    branches: [research/firmware-protocol-recovery]
+  workflow_dispatch:
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download OEM firmware and Ghidra
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p firmware-research/input firmware-research/output /tmp/ghidra
+          curl -fL --retry 5 --retry-delay 2 \
+            'https://raw.githubusercontent.com/maxim-smirnov/gree-wifimodule-firmware/main/362001000835/U-CS532AX%28MTK%29V3-5351076961300064561.bin' \
+            -o firmware-research/input/cs532ax-mtk-v3.bin
+          test "$(stat -c %s firmware-research/input/cs532ax-mtk-v3.bin)" = 498104
+          sha256sum firmware-research/input/cs532ax-mtk-v3.bin | tee firmware-research/output/sha256.txt
+
+          GHIDRA_VERSION=11.3.2
+          curl -fL --retry 5 --retry-delay 2 \
+            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_20250415.zip" \
+            -o /tmp/ghidra.zip
+          unzip -q /tmp/ghidra.zip -d /tmp/ghidra
+          echo "GHIDRA_HOME=$(find /tmp/ghidra -maxdepth 1 -type d -name 'ghidra_*' | head -1)" >> "$GITHUB_ENV"
+
+      - name: Strip OTA wrapper and make raw reports
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, struct, re, json
+
+          src = Path('firmware-research/input/cs532ax-mtk-v3.bin').read_bytes()
+          magic, size, checksum, word4 = struct.unpack_from('<IIII', src, 0)
+          payload = src[16:]
+          assert magic == 0xBEAF5AA5
+          assert size == len(payload)
+          assert sum(payload) & 0xffffffff == checksum
+          Path('firmware-research/input/cs532ax-mtk-v3.raw').write_bytes(payload)
+
+          metadata = {
+              'wrapper_magic': f'0x{magic:08X}',
+              'payload_size': size,
+              'additive_checksum': f'0x{checksum:08X}',
+              'header_word_4': f'0x{word4:08X}',
+              'firmware_base': '0x1007C000',
+              'sha256_full': hashlib.sha256(src).hexdigest(),
+              'sha256_payload': hashlib.sha256(payload).hexdigest(),
+          }
+          Path('firmware-research/output/metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
+
+          strings = []
+          for m in re.finditer(rb'[ -~]{4,}', payload):
+              text = m.group().decode('ascii', errors='replace')
+              strings.append((m.start(), 0x1007C000 + m.start(), text))
+          with open('firmware-research/output/strings.txt', 'w') as f:
+              for off, addr, text in strings:
+                  f.write(f'{off:08X} {addr:08X} {text}\n')
+
+          keys = ('fault','energy','timer','outdoor','inner','outer','time','sync','mac','uart','report','status','device','info','heartbeat','ctrl','control','temperature','humidity','defrost','elc','kwh')
+          with open('firmware-research/output/protocol-strings.txt', 'w') as f:
+              for off, addr, text in strings:
+                  if any(k in text.lower() for k in keys):
+                      f.write(f'{off:08X} {addr:08X} {text}\n')
+          PY
+
+      - name: Run Ghidra auto-analysis and decompiler extraction
+        shell: bash
+        run: |
+          set -euxo pipefail
+          "$GHIDRA_HOME/support/analyzeHeadless" \
+            /tmp/gree-ghidra gree-cs532ax \
+            -import firmware-research/input/cs532ax-mtk-v3.raw \
+            -overwrite \
+            -loader BinaryLoader \
+            -processor ARM:LE:32:Cortex \
+            -loader-baseAddr 0x1007C000 \
+            -analysisTimeoutPerFile 1800 \
+            -scriptPath tools/firmware_research \
+            -postScript extract_protocol.py "$GITHUB_WORKSPACE/firmware-research/output/ghidra-protocol-report.txt"
+
+      - name: Build focused protocol report
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          strings = Path('firmware-research/output/protocol-strings.txt').read_text(errors='replace')
+          ghidra = Path('firmware-research/output/ghidra-protocol-report.txt').read_text(errors='replace')
+          needles = [
+              'fault', 'energy', 'timer', 'outdoor', 'outer', 'inner', 'time', 'sync',
+              'mac', 'uart', 'report', 'status', 'device', 'info', 'heartbeat', 'ctrl',
+              'defrost', 'kwh', 'elc'
+          ]
+          sections = []
+          for needle in needles:
+              hits = []
+              for line in strings.splitlines():
+                  if needle in line.lower():
+                      hits.append(line)
+              pattern = re.compile(r'-----.*?-----.*?(?=\n-----|\Z)', re.S)
+              funcs = [m.group(0) for m in pattern.finditer(ghidra) if needle in m.group(0).lower()]
+              if hits or funcs:
+                  sections.append(f'## {needle}\n\n### Strings\n```\n' + '\n'.join(hits[:200]) + '\n```\n\n### Referencing decompilations\n```c\n' + '\n\n'.join(funcs[:30]) + '\n```\n')
+          report = '# Gree CS532AX MT7687 protocol recovery report\n\n' + '\n'.join(sections)
+          Path('firmware-research/output/focused-protocol-report.md').write_text(report)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gree-cs532ax-protocol-recovery
+          path: firmware-research/output/
+          retention-days: 30
