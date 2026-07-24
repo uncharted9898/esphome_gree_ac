@@ -48,8 +48,6 @@ def read_block(block):
 
 
 def binary_string(data):
-    # Ghidra 11.3 uses Jython 2.7. hashlib accepts a byte string, not a Python
-    # bytearray, under that runtime.
     return "".join(chr(value & 0xFF) for value in data)
 
 
@@ -192,14 +190,8 @@ keyword_strings = []
 for address, text in all_strings:
     lower = text.lower()
     matches = sorted(set(keyword for keyword in KEYWORDS if keyword in lower))
-    if not matches:
-        continue
-    keyword_strings.append((address, text, matches))
-    try:
-        if getDataAt(address) is None:
-            createAsciiString(address)
-    except Exception:
-        pass
+    if matches:
+        keyword_strings.append((address, text, matches))
 
 emit("=== KEYWORD STRINGS ===")
 for address, text, matches in keyword_strings:
@@ -288,8 +280,6 @@ for entry in sorted(metadata.keys()):
           " ".join("%02X" % value for value in small)))
 emit()
 
-# Pull in wrappers, UART writers, checksums and dispatch callees/callers that do
-# not contain protocol constants or property names themselves.
 queue = deque((selected[key]["function"], 0) for key in sorted(selected.keys()))
 visited = {}
 while queue:
