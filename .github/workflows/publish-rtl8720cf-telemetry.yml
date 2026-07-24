@@ -115,3 +115,5 @@ jobs:
           gh api --method POST \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/rtl8720cf-firmware-audit.yml/dispatches" \
             -f ref="$ref"
+
+# The second ref update registers and triggers this branch-local workflow.
