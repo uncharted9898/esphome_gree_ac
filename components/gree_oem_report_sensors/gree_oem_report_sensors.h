@@ -1,14 +1,17 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
 
+#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
 #include "../sinclair_ac/esppac.h"
+#include "report_decoder.h"
 
 namespace esphome {
 namespace gree_oem_report_sensors {
@@ -23,15 +26,74 @@ class GreeOemReportSensors : public PollingComponent {
   void set_last_0x34_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x34_payload_sensor_ = sensor; }
   void set_last_0x35_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x35_payload_sensor_ = sensor; }
 
-  void set_indoor_report_target_temperature_sensor(sensor::Sensor *sensor) { this->indoor_report_target_temperature_sensor_ = sensor; }
-  void set_indoor_report_current_temperature_sensor(sensor::Sensor *sensor) { this->indoor_report_current_temperature_sensor_ = sensor; }
-  void set_indoor_report_byte_10_temperature_hypothesis_sensor(sensor::Sensor *sensor) { this->indoor_report_byte_10_temperature_hypothesis_sensor_ = sensor; }
-  void set_indoor_report_byte_25_temperature_hypothesis_sensor(sensor::Sensor *sensor) { this->indoor_report_byte_25_temperature_hypothesis_sensor_ = sensor; }
+  void set_indoor_report_target_temperature_sensor(sensor::Sensor *sensor) {
+    this->indoor_report_target_temperature_sensor_ = sensor;
+  }
+  void set_indoor_report_current_temperature_sensor(sensor::Sensor *sensor) {
+    this->indoor_report_current_temperature_sensor_ = sensor;
+  }
+  void set_indoor_coil_temperature_candidate_sensor(sensor::Sensor *sensor) {
+    this->indoor_coil_temperature_candidate_sensor_ = sensor;
+  }
+  void set_indoor_secondary_temperature_candidate_sensor(sensor::Sensor *sensor) {
+    this->indoor_secondary_temperature_candidate_sensor_ = sensor;
+  }
 
-  void set_outdoor_report_byte_10_raw_sensor(sensor::Sensor *sensor) { this->outdoor_report_byte_10_raw_sensor_ = sensor; }
-  void set_outdoor_report_byte_13_temperature_hypothesis_sensor(sensor::Sensor *sensor) { this->outdoor_report_byte_13_temperature_hypothesis_sensor_ = sensor; }
-  void set_outdoor_report_byte_14_temperature_hypothesis_sensor(sensor::Sensor *sensor) { this->outdoor_report_byte_14_temperature_hypothesis_sensor_ = sensor; }
-  void set_outdoor_report_byte_15_temperature_hypothesis_sensor(sensor::Sensor *sensor) { this->outdoor_report_byte_15_temperature_hypothesis_sensor_ = sensor; }
+  // Backward-compatible byte-number entities from the first report-sensor revision.
+  void set_indoor_report_byte_10_temperature_hypothesis_sensor(sensor::Sensor *sensor) {
+    this->indoor_report_byte_10_temperature_hypothesis_sensor_ = sensor;
+  }
+  void set_indoor_report_byte_25_temperature_hypothesis_sensor(sensor::Sensor *sensor) {
+    this->indoor_report_byte_25_temperature_hypothesis_sensor_ = sensor;
+  }
+
+  void set_outdoor_operating_value_raw_sensor(sensor::Sensor *sensor) {
+    this->outdoor_operating_value_raw_sensor_ = sensor;
+  }
+  void set_outdoor_ambient_temperature_candidate_sensor(sensor::Sensor *sensor) {
+    this->outdoor_ambient_temperature_candidate_sensor_ = sensor;
+  }
+  void set_outdoor_coil_temperature_candidate_sensor(sensor::Sensor *sensor) {
+    this->outdoor_coil_temperature_candidate_sensor_ = sensor;
+  }
+  void set_compressor_discharge_temperature_candidate_sensor(sensor::Sensor *sensor) {
+    this->compressor_discharge_temperature_candidate_sensor_ = sensor;
+  }
+
+  // Backward-compatible byte-number entities from the first report-sensor revision.
+  void set_outdoor_report_byte_10_raw_sensor(sensor::Sensor *sensor) {
+    this->outdoor_report_byte_10_raw_sensor_ = sensor;
+  }
+  void set_outdoor_report_byte_13_temperature_hypothesis_sensor(sensor::Sensor *sensor) {
+    this->outdoor_report_byte_13_temperature_hypothesis_sensor_ = sensor;
+  }
+  void set_outdoor_report_byte_14_temperature_hypothesis_sensor(sensor::Sensor *sensor) {
+    this->outdoor_report_byte_14_temperature_hypothesis_sensor_ = sensor;
+  }
+  void set_outdoor_report_byte_15_temperature_hypothesis_sensor(sensor::Sensor *sensor) {
+    this->outdoor_report_byte_15_temperature_hypothesis_sensor_ = sensor;
+  }
+
+  void set_indoor_report_byte_14_bit_5_sensor(binary_sensor::BinarySensor *sensor) {
+    this->indoor_report_byte_14_bit_5_sensor_ = sensor;
+  }
+  void set_indoor_report_byte_20_raw_sensor(sensor::Sensor *sensor) { this->indoor_report_byte_20_raw_sensor_ = sensor; }
+  void set_indoor_report_byte_21_raw_sensor(sensor::Sensor *sensor) { this->indoor_report_byte_21_raw_sensor_ = sensor; }
+  void set_indoor_report_byte_36_raw_sensor(sensor::Sensor *sensor) { this->indoor_report_byte_36_raw_sensor_ = sensor; }
+  void set_indoor_report_byte_37_raw_sensor(sensor::Sensor *sensor) { this->indoor_report_byte_37_raw_sensor_ = sensor; }
+  void set_indoor_report_byte_38_raw_sensor(sensor::Sensor *sensor) { this->indoor_report_byte_38_raw_sensor_ = sensor; }
+
+  void set_outdoor_report_byte_17_bit_2_sensor(binary_sensor::BinarySensor *sensor) {
+    this->outdoor_report_byte_17_bit_2_sensor_ = sensor;
+  }
+  void set_outdoor_report_bytes_21_28_raw_sensor(text_sensor::TextSensor *sensor) {
+    this->outdoor_report_bytes_21_28_raw_sensor_ = sensor;
+  }
+  void set_outdoor_report_byte_30_raw_sensor(sensor::Sensor *sensor) { this->outdoor_report_byte_30_raw_sensor_ = sensor; }
+  void set_outdoor_report_byte_31_bit_6_sensor(binary_sensor::BinarySensor *sensor) {
+    this->outdoor_report_byte_31_bit_6_sensor_ = sensor;
+  }
+  void set_outdoor_report_byte_36_raw_sensor(sensor::Sensor *sensor) { this->outdoor_report_byte_36_raw_sensor_ = sensor; }
 
   void dump_config() override {
     ESP_LOGCONFIG(TAG, "Gree OEM report sensors:");
@@ -48,7 +110,13 @@ class GreeOemReportSensors : public PollingComponent {
   }
 
  protected:
-  static float raw_minus_40_(uint8_t raw) { return static_cast<float>(static_cast<int>(raw) - 40); }
+  static void publish_sensor_(sensor::Sensor *sensor, float value) {
+    if (sensor != nullptr) sensor->publish_state(value);
+  }
+
+  static void publish_binary_sensor_(binary_sensor::BinarySensor *sensor, bool value) {
+    if (sensor != nullptr) sensor->publish_state(value);
+  }
 
   static std::string format_payload_(const std::vector<uint8_t> &payload) {
     static const char digits[] = "0123456789ABCDEF";
@@ -63,6 +131,18 @@ class GreeOemReportSensors : public PollingComponent {
     return out;
   }
 
+  template<size_t N> static std::string format_bytes_(const std::array<uint8_t, N> &bytes) {
+    static const char digits[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(bytes.size() * 3);
+    for (size_t i = 0; i < bytes.size(); ++i) {
+      if (i != 0) out.push_back('.');
+      out.push_back(digits[bytes[i] >> 4]);
+      out.push_back(digits[bytes[i] & 0x0F]);
+    }
+    return out;
+  }
+
   void publish_payload_(uint8_t command, text_sensor::TextSensor *sensor, std::vector<uint8_t> &last) {
     if (sensor == nullptr) return;
     const auto *payload = this->climate_->get_retained_payload(command);
@@ -73,32 +153,55 @@ class GreeOemReportSensors : public PollingComponent {
 
   void publish_indoor_report_() {
     const auto *payload = this->climate_->get_retained_payload(0x34);
-    if (payload == nullptr || payload->size() <= 25 || *payload == this->last_indoor_decoded_payload_) return;
+    if (payload == nullptr || *payload == this->last_indoor_decoded_payload_) return;
+
+    IndoorReportFields fields;
+    if (!decode_indoor_report(*payload, fields)) return;
     this->last_indoor_decoded_payload_ = *payload;
 
-    if (this->indoor_report_target_temperature_sensor_ != nullptr)
-      this->indoor_report_target_temperature_sensor_->publish_state(raw_minus_40_((*payload)[7]));
-    if (this->indoor_report_current_temperature_sensor_ != nullptr)
-      this->indoor_report_current_temperature_sensor_->publish_state(raw_minus_40_((*payload)[8]));
-    if (this->indoor_report_byte_10_temperature_hypothesis_sensor_ != nullptr)
-      this->indoor_report_byte_10_temperature_hypothesis_sensor_->publish_state(raw_minus_40_((*payload)[10]));
-    if (this->indoor_report_byte_25_temperature_hypothesis_sensor_ != nullptr)
-      this->indoor_report_byte_25_temperature_hypothesis_sensor_->publish_state(raw_minus_40_((*payload)[25]));
+    publish_sensor_(this->indoor_report_target_temperature_sensor_, fields.target_temperature_c);
+    publish_sensor_(this->indoor_report_current_temperature_sensor_, fields.current_temperature_c);
+    publish_sensor_(this->indoor_coil_temperature_candidate_sensor_, fields.coil_temperature_candidate_c);
+    publish_sensor_(this->indoor_secondary_temperature_candidate_sensor_, fields.secondary_temperature_candidate_c);
+
+    publish_sensor_(this->indoor_report_byte_10_temperature_hypothesis_sensor_, fields.coil_temperature_candidate_c);
+    publish_sensor_(this->indoor_report_byte_25_temperature_hypothesis_sensor_, fields.secondary_temperature_candidate_c);
+
+    publish_binary_sensor_(this->indoor_report_byte_14_bit_5_sensor_, fields.byte_14_bit_5);
+    publish_sensor_(this->indoor_report_byte_20_raw_sensor_, fields.byte_20_raw);
+    publish_sensor_(this->indoor_report_byte_21_raw_sensor_, fields.byte_21_raw);
+    publish_sensor_(this->indoor_report_byte_36_raw_sensor_, fields.byte_36_raw);
+    publish_sensor_(this->indoor_report_byte_37_raw_sensor_, fields.byte_37_raw);
+    publish_sensor_(this->indoor_report_byte_38_raw_sensor_, fields.byte_38_raw);
   }
 
   void publish_outdoor_report_() {
     const auto *payload = this->climate_->get_retained_payload(0x35);
-    if (payload == nullptr || payload->size() <= 15 || *payload == this->last_outdoor_decoded_payload_) return;
+    if (payload == nullptr || *payload == this->last_outdoor_decoded_payload_) return;
+
+    OutdoorReportFields fields;
+    if (!decode_outdoor_report(*payload, fields)) return;
     this->last_outdoor_decoded_payload_ = *payload;
 
-    if (this->outdoor_report_byte_10_raw_sensor_ != nullptr)
-      this->outdoor_report_byte_10_raw_sensor_->publish_state((*payload)[10]);
-    if (this->outdoor_report_byte_13_temperature_hypothesis_sensor_ != nullptr)
-      this->outdoor_report_byte_13_temperature_hypothesis_sensor_->publish_state(raw_minus_40_((*payload)[13]));
-    if (this->outdoor_report_byte_14_temperature_hypothesis_sensor_ != nullptr)
-      this->outdoor_report_byte_14_temperature_hypothesis_sensor_->publish_state(raw_minus_40_((*payload)[14]));
-    if (this->outdoor_report_byte_15_temperature_hypothesis_sensor_ != nullptr)
-      this->outdoor_report_byte_15_temperature_hypothesis_sensor_->publish_state(raw_minus_40_((*payload)[15]));
+    publish_sensor_(this->outdoor_operating_value_raw_sensor_, fields.operating_value_raw);
+    publish_sensor_(this->outdoor_ambient_temperature_candidate_sensor_, fields.ambient_temperature_candidate_c);
+    publish_sensor_(this->outdoor_coil_temperature_candidate_sensor_, fields.coil_temperature_candidate_c);
+    publish_sensor_(this->compressor_discharge_temperature_candidate_sensor_,
+                    fields.compressor_discharge_temperature_candidate_c);
+
+    publish_sensor_(this->outdoor_report_byte_10_raw_sensor_, fields.operating_value_raw);
+    publish_sensor_(this->outdoor_report_byte_13_temperature_hypothesis_sensor_,
+                    fields.ambient_temperature_candidate_c);
+    publish_sensor_(this->outdoor_report_byte_14_temperature_hypothesis_sensor_, fields.coil_temperature_candidate_c);
+    publish_sensor_(this->outdoor_report_byte_15_temperature_hypothesis_sensor_,
+                    fields.compressor_discharge_temperature_candidate_c);
+
+    publish_binary_sensor_(this->outdoor_report_byte_17_bit_2_sensor_, fields.byte_17_bit_2);
+    if (this->outdoor_report_bytes_21_28_raw_sensor_ != nullptr)
+      this->outdoor_report_bytes_21_28_raw_sensor_->publish_state(format_bytes_(fields.bytes_21_28_raw));
+    publish_sensor_(this->outdoor_report_byte_30_raw_sensor_, fields.byte_30_raw);
+    publish_binary_sensor_(this->outdoor_report_byte_31_bit_6_sensor_, fields.byte_31_bit_6);
+    publish_sensor_(this->outdoor_report_byte_36_raw_sensor_, fields.byte_36_raw);
   }
 
   sinclair_ac::SinclairAC *climate_{nullptr};
@@ -109,12 +212,32 @@ class GreeOemReportSensors : public PollingComponent {
 
   sensor::Sensor *indoor_report_target_temperature_sensor_{nullptr};
   sensor::Sensor *indoor_report_current_temperature_sensor_{nullptr};
+  sensor::Sensor *indoor_coil_temperature_candidate_sensor_{nullptr};
+  sensor::Sensor *indoor_secondary_temperature_candidate_sensor_{nullptr};
   sensor::Sensor *indoor_report_byte_10_temperature_hypothesis_sensor_{nullptr};
   sensor::Sensor *indoor_report_byte_25_temperature_hypothesis_sensor_{nullptr};
+
+  sensor::Sensor *outdoor_operating_value_raw_sensor_{nullptr};
+  sensor::Sensor *outdoor_ambient_temperature_candidate_sensor_{nullptr};
+  sensor::Sensor *outdoor_coil_temperature_candidate_sensor_{nullptr};
+  sensor::Sensor *compressor_discharge_temperature_candidate_sensor_{nullptr};
   sensor::Sensor *outdoor_report_byte_10_raw_sensor_{nullptr};
   sensor::Sensor *outdoor_report_byte_13_temperature_hypothesis_sensor_{nullptr};
   sensor::Sensor *outdoor_report_byte_14_temperature_hypothesis_sensor_{nullptr};
   sensor::Sensor *outdoor_report_byte_15_temperature_hypothesis_sensor_{nullptr};
+
+  binary_sensor::BinarySensor *indoor_report_byte_14_bit_5_sensor_{nullptr};
+  sensor::Sensor *indoor_report_byte_20_raw_sensor_{nullptr};
+  sensor::Sensor *indoor_report_byte_21_raw_sensor_{nullptr};
+  sensor::Sensor *indoor_report_byte_36_raw_sensor_{nullptr};
+  sensor::Sensor *indoor_report_byte_37_raw_sensor_{nullptr};
+  sensor::Sensor *indoor_report_byte_38_raw_sensor_{nullptr};
+
+  binary_sensor::BinarySensor *outdoor_report_byte_17_bit_2_sensor_{nullptr};
+  text_sensor::TextSensor *outdoor_report_bytes_21_28_raw_sensor_{nullptr};
+  sensor::Sensor *outdoor_report_byte_30_raw_sensor_{nullptr};
+  binary_sensor::BinarySensor *outdoor_report_byte_31_bit_6_sensor_{nullptr};
+  sensor::Sensor *outdoor_report_byte_36_raw_sensor_{nullptr};
 
   std::vector<uint8_t> last_0x32_payload_;
   std::vector<uint8_t> last_0x34_payload_;
