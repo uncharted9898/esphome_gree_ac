@@ -1,8 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "esphome/components/sinclair_ac/esppac.h"
 #include "esphome/components/uart/uart.h"
@@ -35,171 +37,299 @@ class GreeOemBootProbe : public Component {
   }
 
   void loop() override {
-    if (this->repeat_interval_ms_ == 0 || this->sequence_active_) return;
-    if (millis() - this->last_sequence_finished_at_ < this->repeat_interval_ms_) return;
-    ESP_LOGI(TAG, "Starting scheduled recovered telemetry query cycle");
-    this->begin_query_cycle_(true);
+    const uint32_t now = millis();
+
+    if (!this->sequence_active_) {
+      if (this->repeat_interval_ms_ == 0 || now - this->last_sequence_finished_at_ < this->repeat_interval_ms_) return;
+      ESP_LOGI(TAG, "Starting scheduled serialized Wi-Fi-gated energy experiment");
+      this->begin_scheduled_sequence_();
+      return;
+    }
+
+    switch (this->phase_) {
+      case Phase::BOOT_IDENTITY:
+        if (this->due_(now)) this->send_static_and_advance_(BOOT_IDENTITY, "boot identity 0x10/0x02", Phase::BOOT_MAC_1);
+        break;
+      case Phase::BOOT_MAC_1:
+        if (this->due_(now)) this->send_static_and_advance_(MAC_REPORT, "module report 0x05/0x04 #1", Phase::BOOT_MAC_2);
+        break;
+      case Phase::BOOT_MAC_2:
+        if (this->due_(now)) this->send_static_and_advance_(MAC_REPORT, "module report 0x05/0x04 #2", Phase::BOOT_LINK_1);
+        break;
+      case Phase::BOOT_LINK_1:
+        if (this->due_(now)) this->send_static_and_advance_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #1", Phase::BOOT_LINK_2);
+        break;
+      case Phase::BOOT_LINK_2:
+        if (this->due_(now)) this->send_static_and_advance_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #2", Phase::BOOT_LINK_3);
+        break;
+      case Phase::BOOT_LINK_3:
+        if (this->due_(now)) this->send_static_and_advance_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #3", Phase::BOOT_LINK_4);
+        break;
+      case Phase::BOOT_LINK_4:
+        if (this->due_(now)) {
+          this->send_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #4");
+          if (!this->query_recovered_data_) {
+            this->finish_sequence_();
+            break;
+          }
+          this->phase_ = Phase::WAIT_FOR_STATUS;
+          this->phase_started_at_ = now;
+          this->next_action_at_ = now + this->serialized_gap_ms_();
+        }
+        break;
+      case Phase::SCHEDULED_QUIESCE:
+        if (this->due_(now)) {
+          this->send_(LINK_SYNC_CONNECTED, "scheduled connected link status assertion: byte14=0x80");
+          this->phase_ = Phase::WAIT_FOR_STATUS;
+          this->phase_started_at_ = now;
+          this->next_action_at_ = now + this->serialized_gap_ms_();
+        }
+        break;
+      case Phase::WAIT_FOR_STATUS:
+        if (this->has_live_status_() && this->due_(now)) {
+          this->start_connected_dwell_(now);
+        } else if (now - this->phase_started_at_ >= STATUS_WAIT_TIMEOUT_MS) {
+          ESP_LOGE(TAG, "No usable 0x31 payload arrived; aborting serialized energy experiment");
+          this->finish_sequence_();
+        }
+        break;
+      case Phase::CONNECTED_DWELL:
+        this->run_connected_dwell_(now);
+        break;
+      case Phase::QUIET_DRAIN:
+        if (this->due_(now)) this->send_isolated_energy_query_(now);
+        break;
+      case Phase::ENERGY_RESPONSE_WINDOW:
+        if (!this->energy_0x40_seen_ && this->climate_->get_retained_payload(0x40) != nullptr) {
+          this->energy_0x40_seen_ = true;
+          ESP_LOGI(TAG, "SERIALIZED PROBE RESULT: command 0x40 observed during isolated response window");
+        }
+        if (this->due_(now)) {
+          ESP_LOGI(TAG, "Isolated energy response window closed after %u ms; no further probe TX occurred", ENERGY_RESPONSE_WINDOW_MS);
+          this->finish_sequence_();
+        }
+        break;
+      case Phase::IDLE:
+      default:
+        break;
+    }
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG(TAG, "Gree OEM boot/telemetry probe:");
+    ESP_LOGCONFIG(TAG, "Gree OEM serialized Wi-Fi-gated energy probe:");
     ESP_LOGCONFIG(TAG, "  Start delay: %u ms", this->start_delay_ms_);
-    ESP_LOGCONFIG(TAG, "  Frame spacing: %u ms", this->frame_spacing_ms_);
-    ESP_LOGCONFIG(TAG, "  Probe response window: %u ms", this->query_spacing_ms_());
-    ESP_LOGCONFIG(TAG, "  Wi-Fi status consistency sweep: enabled");
+    ESP_LOGCONFIG(TAG, "  Serialized frame gap: %u ms", this->serialized_gap_ms_());
+    ESP_LOGCONFIG(TAG, "  Connected-state dwell: %u ms", CONNECTED_DWELL_MS);
+    ESP_LOGCONFIG(TAG, "  Quiet drain before energy request: %u ms", QUIET_DRAIN_MS);
+    ESP_LOGCONFIG(TAG, "  Isolated energy response window: %u ms", ENERGY_RESPONSE_WINDOW_MS);
+    ESP_LOGCONFIG(TAG, "  Connected normal-poll Wi-Fi field: 0x%02X", CONNECTED_WIFI_FIELD);
+    ESP_LOGCONFIG(TAG, "  Energy query module-state: %u", ENERGY_MODULE_STATE);
+    ESP_LOGCONFIG(TAG, "  Energy query RSSI magnitude fields: %u", QUERY_RSSI_MAGNITUDE);
     ESP_LOGCONFIG(TAG, "  Recovered telemetry queries: %s", YESNO(this->query_recovered_data_));
-    ESP_LOGCONFIG(TAG, "  Query quiesce delay: %u ms", this->quiesce_delay_ms_);
     ESP_LOGCONFIG(TAG, "  Repeat interval: %u ms", this->repeat_interval_ms_);
     ESP_LOGCONFIG(TAG, "  Restore control: %s", YESNO(this->restore_control_));
   }
 
  protected:
-  uint32_t query_spacing_ms_() const { return this->frame_spacing_ms_ < 900 ? 900 : this->frame_spacing_ms_; }
+  enum class Phase : uint8_t {
+    IDLE,
+    BOOT_IDENTITY,
+    BOOT_MAC_1,
+    BOOT_MAC_2,
+    BOOT_LINK_1,
+    BOOT_LINK_2,
+    BOOT_LINK_3,
+    BOOT_LINK_4,
+    SCHEDULED_QUIESCE,
+    WAIT_FOR_STATUS,
+    CONNECTED_DWELL,
+    QUIET_DRAIN,
+    ENERGY_RESPONSE_WINDOW,
+  };
+
+  static constexpr uint32_t MIN_SERIALIZED_GAP_MS = 900;
+  static constexpr uint32_t STATUS_WAIT_TIMEOUT_MS = 5000;
+  static constexpr uint32_t CONNECTED_DWELL_MS = 30000;
+  static constexpr uint32_t LINK_REFRESH_MS = 5000;
+  static constexpr uint32_t QUIET_DRAIN_MS = 2000;
+  static constexpr uint32_t ENERGY_RESPONSE_WINDOW_MS = 3000;
+  static constexpr uint8_t CONNECTED_WIFI_FIELD = 0x0C;
+  static constexpr uint8_t ENERGY_MODULE_STATE = 0x01;
+  static constexpr uint8_t QUERY_RSSI_MAGNITUDE = 0x3B;
+  static constexpr size_t OUTGOING_PAYLOAD_LEN = 45;
+  static constexpr size_t OUTGOING_WIFI_PAYLOAD_INDEX = 37;
+  static constexpr size_t SET_AF_PAYLOAD_INDEX = 3;
+  static constexpr size_t SET_CONST_BIT_PAYLOAD_INDEX = 7;
+  static constexpr size_t SET_NOCHANGE_PAYLOAD_INDEX = 11;
+  static constexpr size_t SET_CONST_02_PAYLOAD_INDEX = 39;
+
+  uint32_t serialized_gap_ms_() const {
+    return this->frame_spacing_ms_ < MIN_SERIALIZED_GAP_MS ? MIN_SERIALIZED_GAP_MS : this->frame_spacing_ms_;
+  }
+
+  bool due_(uint32_t now) const { return static_cast<int32_t>(now - this->next_action_at_) >= 0; }
 
   void begin_initial_sequence_() {
     this->sequence_active_ = true;
+    this->energy_0x40_seen_ = this->climate_->get_retained_payload(0x40) != nullptr;
+    this->tx_sequence_ = 0;
     this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
-    ESP_LOGI(TAG, "Starting captured CS532 OEM boot sequence; normal climate TX is locked");
-
-    const uint32_t t0 = this->start_delay_ms_;
-    this->set_timeout("gree_oem_boot_0", t0,
-                      [this]() { this->send_(BOOT_IDENTITY, "boot identity 0x10/0x02"); });
-    this->set_timeout("gree_oem_boot_1", t0 + this->frame_spacing_ms_,
-                      [this]() { this->send_(MAC_REPORT, "module report 0x05/0x04 #1"); });
-    this->set_timeout("gree_oem_boot_2", t0 + this->frame_spacing_ms_ * 2,
-                      [this]() { this->send_(MAC_REPORT, "module report 0x05/0x04 #2"); });
-    this->set_timeout("gree_oem_boot_3", t0 + this->frame_spacing_ms_ * 3,
-                      [this]() { this->send_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #1"); });
-    this->set_timeout("gree_oem_boot_4", t0 + this->frame_spacing_ms_ * 4,
-                      [this]() { this->send_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #2"); });
-    this->set_timeout("gree_oem_boot_5", t0 + this->frame_spacing_ms_ * 5,
-                      [this]() { this->send_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #3"); });
-    this->set_timeout("gree_oem_boot_6", t0 + this->frame_spacing_ms_ * 6,
-                      [this]() { this->send_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #4"); });
-
-    const uint32_t after_boot = t0 + this->frame_spacing_ms_ * 7;
-    if (this->query_recovered_data_) {
-      this->set_timeout("gree_oem_recovered_start", after_boot + this->quiesce_delay_ms_,
-                        [this]() { this->run_recovered_queries_(); });
-    } else {
-      this->set_timeout("gree_oem_boot_finish", after_boot + 350, [this]() { this->finish_sequence_(); });
-    }
-  }
-
-  void begin_query_cycle_(bool quiesce) {
-    if (this->sequence_active_) return;
-    this->sequence_active_ = true;
-    this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
-    const uint32_t delay = quiesce ? this->quiesce_delay_ms_ : 0;
-    this->set_timeout("gree_oem_query_cycle_start", delay, [this]() { this->run_recovered_queries_(); });
-  }
-
-  void run_recovered_queries_() {
-    const uint32_t spacing = this->query_spacing_ms_();
-    const uint32_t short_gap = 300;
-
-    ESP_LOGI(TAG, "Running Wi-Fi status/module-state consistency sweep for the extended energy page");
-    ESP_LOGI(TAG, "Raw RX logging enabled; all synthetic 0x01 frames are read-only polls (control selector 0x00)");
-
     this->climate_->set_debug(true, false, true, true, 256);
+    this->phase_ = Phase::BOOT_IDENTITY;
+    this->phase_started_at_ = millis();
+    this->next_action_at_ = this->phase_started_at_ + this->start_delay_ms_;
+    ESP_LOGI(TAG, "Starting serialized CS532 boot followed by one coherent connected-state energy experiment");
+  }
 
-    this->send_(QUERY_FAULT_COMBINED, "combined/general fault query -> 0x33");
-    this->set_timeout("gree_oem_query_indoor", spacing,
-                      [this]() { this->send_(QUERY_FAULT_INDOOR, "indoor fault/data query -> 0x34"); });
-    this->set_timeout("gree_oem_query_outdoor", spacing * 2,
-                      [this]() { this->send_(QUERY_FAULT_OUTDOOR, "outdoor-unit query -> 0x35"); });
+  void begin_scheduled_sequence_() {
+    this->sequence_active_ = true;
+    this->energy_0x40_seen_ = this->climate_->get_retained_payload(0x40) != nullptr;
+    this->tx_sequence_ = 0;
+    this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
+    this->climate_->set_debug(true, false, true, true, 256);
+    this->phase_ = Phase::SCHEDULED_QUIESCE;
+    this->phase_started_at_ = millis();
+    this->next_action_at_ = this->phase_started_at_ + this->quiesce_delay_ms_;
+  }
 
-    const uint32_t sweep = spacing * 3;
-    this->set_timeout("gree_wifi_link_connected", sweep,
-                      [this]() { this->send_(LINK_SYNC_CONNECTED, "assert connected link status: byte14=0x80"); });
+  bool has_live_status_() const {
+    const auto *status = this->climate_->get_retained_payload(0x31);
+    return status != nullptr && status->size() >= OUTGOING_PAYLOAD_LEN;
+  }
 
-    this->set_timeout("gree_wifi04_poll1", sweep + short_gap,
-                      [this]() { this->send_(READ_POLL_WIFI_04, "Wi-Fi field 0x04 read poll 1/3"); });
-    this->set_timeout("gree_wifi04_poll2", sweep + short_gap * 2,
-                      [this]() { this->send_(READ_POLL_WIFI_04, "Wi-Fi field 0x04 read poll 2/3"); });
-    this->set_timeout("gree_wifi04_poll3", sweep + short_gap * 3,
-                      [this]() { this->send_(READ_POLL_WIFI_04, "Wi-Fi field 0x04 read poll 3/3"); });
-    this->set_timeout("gree_wifi04_energy", sweep + short_gap * 4,
-                      [this]() { this->send_(QUERY_ENERGY_STATE_1, "energy query after Wi-Fi=0x04, module-state=1"); });
+  void start_connected_dwell_(uint32_t now) {
+    this->phase_ = Phase::CONNECTED_DWELL;
+    this->phase_started_at_ = now;
+    this->dwell_started_at_ = now;
+    this->last_link_refresh_at_ = now;
+    this->next_action_at_ = now;
+    ESP_LOGI(TAG, "CONNECTED EMULATION START: 30000 ms, link=0x80, poll Wi-Fi byte=0x0C, serialized gap=%u ms",
+             this->serialized_gap_ms_());
+  }
 
-    const uint32_t profile_08 = sweep + short_gap * 4 + spacing;
-    this->set_timeout("gree_wifi08_poll1", profile_08,
-                      [this]() { this->send_(READ_POLL_WIFI_08, "Wi-Fi field 0x08 read poll 1/3"); });
-    this->set_timeout("gree_wifi08_poll2", profile_08 + short_gap,
-                      [this]() { this->send_(READ_POLL_WIFI_08, "Wi-Fi field 0x08 read poll 2/3"); });
-    this->set_timeout("gree_wifi08_poll3", profile_08 + short_gap * 2,
-                      [this]() { this->send_(READ_POLL_WIFI_08, "Wi-Fi field 0x08 read poll 3/3"); });
-    this->set_timeout("gree_wifi08_energy", profile_08 + short_gap * 3,
-                      [this]() { this->send_(QUERY_ENERGY_STATE_1, "energy query after Wi-Fi=0x08, module-state=1"); });
+  void run_connected_dwell_(uint32_t now) {
+    if (now - this->dwell_started_at_ >= CONNECTED_DWELL_MS) {
+      this->phase_ = Phase::QUIET_DRAIN;
+      this->phase_started_at_ = now;
+      this->next_action_at_ = now + QUIET_DRAIN_MS;
+      ESP_LOGI(TAG, "CONNECTED EMULATION COMPLETE: entering %u ms no-transmit quiet drain", QUIET_DRAIN_MS);
+      return;
+    }
+    if (!this->due_(now)) return;
 
-    const uint32_t profile_0c = profile_08 + short_gap * 3 + spacing;
-    this->set_timeout("gree_wifi0c_poll1", profile_0c,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi field 0x0C read poll 1/3"); });
-    this->set_timeout("gree_wifi0c_poll2", profile_0c + short_gap,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi field 0x0C read poll 2/3"); });
-    this->set_timeout("gree_wifi0c_poll3", profile_0c + short_gap * 2,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi field 0x0C read poll 3/3"); });
-    this->set_timeout("gree_wifi0c_energy1", profile_0c + short_gap * 3,
-                      [this]() { this->send_(QUERY_ENERGY_STATE_1, "energy query after Wi-Fi=0x0C, module-state=1"); });
+    if (now - this->last_link_refresh_at_ >= LINK_REFRESH_MS) {
+      this->send_(LINK_SYNC_CONNECTED, "connected link refresh: byte14=0x80");
+      this->last_link_refresh_at_ = now;
+    } else if (!this->send_connected_poll_()) {
+      ESP_LOGW(TAG, "Live 0x31 payload unavailable while dwelling; sending connected link refresh instead");
+      this->send_(LINK_SYNC_CONNECTED, "connected link refresh while waiting for live status");
+      this->last_link_refresh_at_ = now;
+    }
+    this->next_action_at_ = now + this->serialized_gap_ms_();
+  }
 
-    const uint32_t state_0 = profile_0c + short_gap * 3 + spacing;
-    this->set_timeout("gree_state0_poll1", state_0,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 1/3 before module-state=0"); });
-    this->set_timeout("gree_state0_poll2", state_0 + short_gap,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 2/3 before module-state=0"); });
-    this->set_timeout("gree_state0_poll3", state_0 + short_gap * 2,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 3/3 before module-state=0"); });
-    this->set_timeout("gree_state0_energy", state_0 + short_gap * 3,
-                      [this]() { this->send_(QUERY_ENERGY_STATE_0, "energy query after Wi-Fi=0x0C, module-state=0"); });
+  bool send_connected_poll_() {
+    const auto *status = this->climate_->get_retained_payload(0x31);
+    if (status == nullptr || status->size() < OUTGOING_PAYLOAD_LEN) return false;
 
-    const uint32_t state_2 = state_0 + short_gap * 3 + spacing;
-    this->set_timeout("gree_state2_poll1", state_2,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 1/3 before module-state=2"); });
-    this->set_timeout("gree_state2_poll2", state_2 + short_gap,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 2/3 before module-state=2"); });
-    this->set_timeout("gree_state2_poll3", state_2 + short_gap * 2,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 3/3 before module-state=2"); });
-    this->set_timeout("gree_state2_energy", state_2 + short_gap * 3,
-                      [this]() { this->send_(QUERY_ENERGY_STATE_2, "energy query after Wi-Fi=0x0C, module-state=2"); });
+    std::vector<uint8_t> payload(status->begin(), status->begin() + OUTGOING_PAYLOAD_LEN);
+    payload[SET_AF_PAYLOAD_INDEX] = 0x00;
+    payload[SET_CONST_BIT_PAYLOAD_INDEX] |= 0x02;
+    payload[SET_NOCHANGE_PAYLOAD_INDEX] |= 0x08;
+    payload[SET_CONST_02_PAYLOAD_INDEX] = 0x02;
+    payload[OUTGOING_WIFI_PAYLOAD_INDEX] = CONNECTED_WIFI_FIELD;
 
-    const uint32_t state_3 = state_2 + short_gap * 3 + spacing;
-    this->set_timeout("gree_state3_poll1", state_3,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 1/3 before module-state=3"); });
-    this->set_timeout("gree_state3_poll2", state_3 + short_gap,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 2/3 before module-state=3"); });
-    this->set_timeout("gree_state3_poll3", state_3 + short_gap * 2,
-                      [this]() { this->send_(READ_POLL_WIFI_0C, "Wi-Fi 0x0C reinforcement poll 3/3 before module-state=3"); });
-    this->set_timeout("gree_state3_energy", state_3 + short_gap * 3,
-                      [this]() { this->send_(QUERY_ENERGY_STATE_3, "energy query after Wi-Fi=0x0C, module-state=3"); });
+    std::vector<uint8_t> frame;
+    frame.reserve(payload.size() + 5);
+    frame.push_back(0x7E);
+    frame.push_back(0x7E);
+    frame.push_back(static_cast<uint8_t>(payload.size() + 2));
+    frame.push_back(0x01);
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    uint8_t checksum = 0;
+    for (size_t i = 2; i < frame.size(); ++i) checksum = static_cast<uint8_t>(checksum + frame[i]);
+    frame.push_back(checksum);
+    this->send_vector_(frame, "connected read poll generated from latest 0x31; full-frame byte41=0x0C");
+    return true;
+  }
 
-    this->set_timeout("gree_oem_query_finish", state_3 + short_gap * 3 + spacing,
-                      [this]() { this->finish_sequence_(); });
+  void send_isolated_energy_query_(uint32_t now) {
+    std::array<uint8_t, 28> query = QUERY_ENERGY_TEMPLATE;
+    query[10] = QUERY_RSSI_MAGNITUDE;
+    query[13] = QUERY_RSSI_MAGNITUDE;
+    query[26] = ENERGY_MODULE_STATE;
+    query[27] = this->checksum_(query);
+
+    ESP_LOGI(TAG, "ISOLATED ENERGY TEST: UART has been probe-silent for %u ms; sending exactly one selector-8 request", QUIET_DRAIN_MS);
+    this->send_(query, "isolated monthly-energy query: Wi-Fi=0x0C dwell, RSSI=59, module-state=1");
+    this->phase_ = Phase::ENERGY_RESPONSE_WINDOW;
+    this->phase_started_at_ = now;
+    this->next_action_at_ = now + ENERGY_RESPONSE_WINDOW_MS;
+    ESP_LOGI(TAG, "ISOLATED RESPONSE WINDOW OPEN: %u ms with no additional probe transmissions", ENERGY_RESPONSE_WINDOW_MS);
   }
 
   void finish_sequence_() {
     this->climate_->set_debug(false, false, true, true, 256);
     if (this->restore_control_) {
       this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::CONTROL);
-      ESP_LOGI(TAG, "OEM probe sequence complete; raw RX logging disabled and normal climate control enabled");
+      ESP_LOGI(TAG, "Serialized Wi-Fi-gated energy experiment complete; normal climate control enabled");
     } else {
-      ESP_LOGI(TAG, "OEM probe sequence complete; raw RX logging disabled; climate remains receive-only");
+      ESP_LOGI(TAG, "Serialized Wi-Fi-gated energy experiment complete; climate remains receive-only");
     }
+    this->phase_ = Phase::IDLE;
     this->sequence_active_ = false;
     this->finished_ = true;
     this->last_sequence_finished_at_ = millis();
   }
 
-  template<size_t N> void send_(const std::array<uint8_t, N> &frame, const char *description) {
+  template<size_t N>
+  void send_static_and_advance_(const std::array<uint8_t, N> &frame, const char *description, Phase next) {
+    this->send_(frame, description);
+    this->phase_ = next;
+    this->phase_started_at_ = millis();
+    this->next_action_at_ = this->phase_started_at_ + this->serialized_gap_ms_();
+  }
+
+  template<size_t N> static uint8_t checksum_(const std::array<uint8_t, N> &frame) {
     uint8_t checksum = 0;
     for (size_t i = 2; i + 1 < N; ++i) checksum = static_cast<uint8_t>(checksum + frame[i]);
+    return checksum;
+  }
+
+  template<size_t N> void send_(const std::array<uint8_t, N> &frame, const char *description) {
     if (frame[0] != 0x7E || frame[1] != 0x7E || static_cast<size_t>(frame[2]) + 3 != N ||
-        checksum != frame[N - 1]) {
-      ESP_LOGE(TAG, "Refusing invalid recovered frame: %s", description);
+        checksum_(frame) != frame[N - 1]) {
+      ESP_LOGE(TAG, "Refusing invalid probe frame: %s", description);
       return;
     }
-    ESP_LOGI(TAG, "TX OEM request: %s", description);
+    ++this->tx_sequence_;
+    const uint32_t tx_started = millis();
+    ESP_LOGI(TAG, "PROBE TX #%u start=%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, tx_started, frame[3],
+             static_cast<unsigned>(N), description);
     this->uart_->write_array(frame.data(), frame.size());
     this->uart_->flush();
+    ESP_LOGI(TAG, "PROBE TX #%u complete=%u", this->tx_sequence_, millis());
+  }
+
+  void send_vector_(const std::vector<uint8_t> &frame, const char *description) {
+    if (frame.size() < 5 || frame[0] != 0x7E || frame[1] != 0x7E ||
+        static_cast<size_t>(frame[2]) + 3 != frame.size()) {
+      ESP_LOGE(TAG, "Refusing invalid generated probe frame: %s", description);
+      return;
+    }
+    uint8_t checksum = 0;
+    for (size_t i = 2; i + 1 < frame.size(); ++i) checksum = static_cast<uint8_t>(checksum + frame[i]);
+    if (checksum != frame.back()) {
+      ESP_LOGE(TAG, "Refusing generated probe frame with invalid checksum: %s", description);
+      return;
+    }
+    ++this->tx_sequence_;
+    const uint32_t tx_started = millis();
+    ESP_LOGI(TAG, "PROBE TX #%u start=%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, tx_started, frame[3],
+             static_cast<unsigned>(frame.size()), description);
+    this->uart_->write_array(frame.data(), frame.size());
+    this->uart_->flush();
+    ESP_LOGI(TAG, "PROBE TX #%u complete=%u", this->tx_sequence_, millis());
   }
 
   static constexpr const char *TAG = "gree.oem_boot_probe";
@@ -213,62 +343,29 @@ class GreeOemBootProbe : public Component {
       0x7E, 0x7E, 0x0E, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x7E, 0x0F};
 
-  // Captured Livo Gen3 read-only poll shape. Full-frame byte 7 is 0x00,
-  // therefore the contained climate fields are informational and not applied.
-  // Only full-frame byte 41 changes across these three vectors.
-  static constexpr std::array<uint8_t, 50> READ_POLL_WIFI_04{
-      0x7E, 0x7E, 0x2F, 0x01, 0x04, 0x00, 0x40, 0x00, 0x91, 0x90,
-      0x06, 0xC2, 0x44, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x04, 0x00, 0x02, 0x00, 0x00, 0x40, 0x00, 0x3E, 0x35};
-  static constexpr std::array<uint8_t, 50> READ_POLL_WIFI_08{
-      0x7E, 0x7E, 0x2F, 0x01, 0x04, 0x00, 0x40, 0x00, 0x91, 0x90,
-      0x06, 0xC2, 0x44, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x08, 0x00, 0x02, 0x00, 0x00, 0x40, 0x00, 0x3E, 0x39};
-  static constexpr std::array<uint8_t, 50> READ_POLL_WIFI_0C{
-      0x7E, 0x7E, 0x2F, 0x01, 0x04, 0x00, 0x40, 0x00, 0x91, 0x90,
-      0x06, 0xC2, 0x44, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x40, 0x00, 0x3E, 0x3D};
-
-  static constexpr std::array<uint8_t, 28> QUERY_FAULT_COMBINED{
-      0x7E, 0x7E, 0x19, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x94};
-  static constexpr std::array<uint8_t, 28> QUERY_FAULT_INDOOR{
-      0x7E, 0x7E, 0x19, 0x03, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x95};
-  static constexpr std::array<uint8_t, 28> QUERY_FAULT_OUTDOOR{
-      0x7E, 0x7E, 0x19, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x97};
-
-  static constexpr std::array<uint8_t, 28> QUERY_ENERGY_STATE_0{
-      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
-      0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x96};
-  static constexpr std::array<uint8_t, 28> QUERY_ENERGY_STATE_1{
-      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
-      0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x97};
-  static constexpr std::array<uint8_t, 28> QUERY_ENERGY_STATE_2{
-      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
-      0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x98};
-  static constexpr std::array<uint8_t, 28> QUERY_ENERGY_STATE_3{
-      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
-      0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x99};
+  static constexpr std::array<uint8_t, 28> QUERY_ENERGY_TEMPLATE{
+      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x3B, 0x00, 0x00, 0x3B, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x97};
 
   uart::UARTComponent *uart_{nullptr};
   sinclair_ac::SinclairAC *climate_{nullptr};
+  Phase phase_{Phase::IDLE};
   uint32_t start_delay_ms_{100};
   uint32_t frame_spacing_ms_{450};
   uint32_t quiesce_delay_ms_{1800};
   uint32_t repeat_interval_ms_{0};
   uint32_t last_sequence_finished_at_{0};
+  uint32_t phase_started_at_{0};
+  uint32_t next_action_at_{0};
+  uint32_t dwell_started_at_{0};
+  uint32_t last_link_refresh_at_{0};
+  uint32_t tx_sequence_{0};
   bool restore_control_{true};
   bool query_recovered_data_{true};
   bool sequence_active_{false};
   bool finished_{false};
+  bool energy_0x40_seen_{false};
 };
 
 }  // namespace gree_oem_probe
