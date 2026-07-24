@@ -38,7 +38,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: research/oem-boot-sequence-probe
+      ref: research/active-oem-telemetry-queries
     refresh: 5min
     components: [sinclair_ac, gree_oem_boot_probe]
 
@@ -48,9 +48,9 @@ climate:
     name: ${friendly_name}
     uart_id: gree_uart
 
-    # The boot-probe component owns TX for about 3.6 seconds, then changes this
-    # runtime mode to control. Starting receive-only prevents normal polls from
-    # colliding with the captured OEM startup sequence.
+    # The probe owns TX during the captured startup and recovered telemetry
+    # query window. Normal polling/control starts after the responses have had
+    # time to arrive.
     protocol_mode: receive_only
     fan_profile: gree_4_speed
 
@@ -101,6 +101,8 @@ climate:
         name: ${friendly_name} Last Unknown Payload
       discovery_summary:
         name: ${friendly_name} Discovery Summary
+      capture_export_csv:
+        name: ${friendly_name} Capture Export CSV
       candidate_telemetry_byte_44_raw:
         name: ${friendly_name} Candidate Byte 44 Raw
       candidate_byte_44_temperature_hypothesis:
@@ -112,4 +114,9 @@ gree_oem_boot_probe:
   climate_id: gree_ac
   start_delay: 100ms
   frame_spacing: 450ms
+  quiesce_delay: 1800ms
+  query_recovered_data: true
+  # Optional. Omit for one query cycle at boot. A conservative periodic capture
+  # can use 15min or longer while the recovered response payloads are decoded.
+  # repeat_interval: 15min
   restore_control: true
