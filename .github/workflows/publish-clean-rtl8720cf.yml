@@ -191,8 +191,14 @@ jobs:
             components/gree_oem_report_sensors/__init__.py \
             tools/firmware_research/rtl8720cf_image.py \
             tools/firmware_research/analyze_rtl8720cf.py \
-            tools/firmware_research/rtl8720cf_properties.py
-          python -m unittest tests.test_rtl8720cf_image -v
+            tools/firmware_research/rtl8720cf_properties.py \
+            tools/firmware_research/setup_rtl8720cf.py \
+            tools/firmware_research/load_rtl8720cf_companion.py \
+            tools/firmware_research/seed_rtl8720cf_functions.py \
+            tools/gree_oem_frame_generator.py
+          python -m unittest \
+            tests/test_rtl8720cf_image.py \
+            tests/test_gree_oem_frame_generator.py
 
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
@@ -207,6 +213,10 @@ jobs:
             tests/test_rtl_report_query.cpp -o "$RUNNER_TEMP/test_rtl_report_query"
           "$RUNNER_TEMP/test_rtl_report_query"
 
+          if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
+            echo 'Examples contain an unpinned or obsolete external component source' >&2
+            exit 1
+          fi
           git diff --check
           test -z "$(find . -type d -name __pycache__ -print -quit)"
           test -z "$(find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit)"
@@ -261,13 +271,53 @@ jobs:
           SECRETS
           sed -i 's/^          //' examples/secrets.yaml
 
-      - name: Run repository validation
+      - name: Prepare local telemetry validation YAMLs
         shell: bash
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/clean-source"
-          export PYTHONDONTWRITEBYTECODE=1
-          KEEP_VALIDATION_YAML=1 ./scripts_validate.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          component_path = Path('components').resolve()
+          sources = (
+              Path('examples/gree-livo-oem-boot-probe.yaml'),
+              Path('examples/gree-livo-gen3-refined-discovery.yaml'),
+              Path('examples/gree-livo-gen3-full-power-discovery.yaml'),
+          )
+          pattern = re.compile(
+              r'(?m)^  - source:\n'
+              r'      type: git\n'
+              r'      url: https://github\.com/uncharted9898/esphome_gree_ac\n'
+              r'      ref: codex/add-compatibility-and-protocol-discovery-mode\n'
+          )
+          replacement = (
+              '  - source:\n'
+              '      type: local\n'
+              f'      path: {component_path}\n'
+          )
+          for source in sources:
+              target = source.with_name(f'.validation-{source.name}')
+              localized, count = pattern.subn(replacement, source.read_text(), count=1)
+              if count != 1:
+                  raise SystemExit(f'{source}: expected one branch source, found {count}')
+              target.write_text(localized)
+              print(target)
+          PY
+
+      - name: Validate receive-only configuration
+        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/gree-livo-gen3-receive-only.yaml
+      - name: Validate poll-only configuration
+        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/gree-livo-gen3-poll-only.yaml
+      - name: Validate control configuration
+        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/gree-livo-gen3-control.yaml
+      - name: Validate refined telemetry configuration
+        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/.validation-gree-livo-gen3-refined-discovery.yaml
+      - name: Validate full telemetry configuration
+        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/.validation-gree-livo-gen3-full-power-discovery.yaml
+      - name: Validate OEM boot probe configuration
+        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/.validation-gree-livo-oem-boot-probe.yaml
 
       - name: Compile standard hardware examples
         shell: bash
