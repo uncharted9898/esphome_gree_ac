@@ -101,12 +101,16 @@ jobs:
         run: |
           set -euo pipefail
           for version in v1.21 v1.53; do
-            xip=$(find "firmware-research/sections/${version}" -type f \
-              -name '*_xip_0x9B000140.bin' -print -quit)
-            test -n "$xip"
-            arm-none-eabi-objdump -D -b binary -marm -Mforce-thumb \
-              --adjust-vma=0x9B000140 "$xip" \
-              > "firmware-research/results/${version}-thumb-objdump.txt"
+            for spec in xip0:0x9B000140 xip1:0x9B800140; do
+              label=${spec%%:*}
+              base=${spec##*:}
+              xip=$(find "firmware-research/sections/${version}" -type f \
+                -name "*_xip_${base}.bin" -print -quit)
+              test -n "$xip"
+              arm-none-eabi-objdump -D -b binary -marm -Mforce-thumb \
+                --adjust-vma="$base" "$xip" \
+                > "firmware-research/results/${version}-${label}-thumb-objdump.txt"
+            done
           done
 
       - name: Install fixed official Ghidra release
@@ -122,32 +126,51 @@ jobs:
             -print -quit > "$RUNNER_TEMP/analyze-headless.txt"
           test -s "$RUNNER_TEMP/analyze-headless.txt"
 
-      - name: Recover V2 and V3 code, call graphs, builders, and parsers
+      - name: Recover all V2 and V3 code, property paths, builders, and parsers
         shell: bash
         run: |
           set -euo pipefail
           analyze_headless=$(cat "$RUNNER_TEMP/analyze-headless.txt")
           mkdir -p "$RUNNER_TEMP/ghidra-projects" firmware-research/results/ghidra
           for version in v1.21 v1.53; do
-            xip=$(find "firmware-research/sections/${version}" -type f \
-              -name '*_xip_0x9B000140.bin' -print -quit)
-            test -n "$xip"
-            "$analyze_headless" "$RUNNER_TEMP/ghidra-projects" "rtl8720cf-${version}" \
-              -import "$xip" \
-              -overwrite \
-              -loader BinaryLoader \
-              -processor 'ARM:LE:32:Cortex' \
-              -loader-baseAddr 0x9B000140 \
-              -preScript setup_rtl8720cf.py 0x9B000140 0x9B000150 \
-              -preScript seed_rtl8720cf_functions.py 0x9B000140 \
-              -analysisTimeoutPerFile 3600 \
-              -scriptPath tools/firmware_research \
-              -postScript audit_rtl8720cf_protocol.py \
-                "$GITHUB_WORKSPACE/firmware-research/results/ghidra/${version}-audit.txt" \
-                "$version" \
-              -postScript extract_rtl8720cf_protocol.py \
-                "$GITHUB_WORKSPACE/firmware-research/results/ghidra/${version}-protocol.txt" \
-              > "firmware-research/results/ghidra/${version}-console.txt" 2>&1
+            for spec in xip0:0x9B000140:0x9B000150 xip1:0x9B800140:none; do
+              label=${spec%%:*}
+              rest=${spec#*:}
+              base=${rest%%:*}
+              entry=${rest##*:}
+              xip=$(find "firmware-research/sections/${version}" -type f \
+                -name "*_xip_${base}.bin" -print -quit)
+              test -n "$xip"
+              console="firmware-research/results/ghidra/${version}-${label}-console.txt"
+              audit="firmware-research/results/ghidra/${version}-${label}-audit.txt"
+              protocol="firmware-research/results/ghidra/${version}-${label}-protocol.txt"
+              setup_args=(setup_rtl8720cf.py "$base")
+              if [ "$entry" != none ]; then
+                setup_args+=("$entry")
+              fi
+              "$analyze_headless" "$RUNNER_TEMP/ghidra-projects" \
+                "rtl8720cf-${version}-${label}" \
+                -import "$xip" \
+                -overwrite \
+                -loader BinaryLoader \
+                -processor 'ARM:LE:32:Cortex' \
+                -loader-baseAddr "$base" \
+                -scriptPath tools/firmware_research \
+                -preScript "${setup_args[@]}" \
+                -preScript seed_rtl8720cf_functions.py "$base" \
+                -analysisTimeoutPerFile 3600 \
+                -postScript audit_rtl8720cf_protocol.py \
+                  "$GITHUB_WORKSPACE/$audit" "${version}-${label}" \
+                -postScript extract_rtl8720cf_protocol.py \
+                  "$GITHUB_WORKSPACE/$protocol" \
+                > "$console" 2>&1
+              if grep -Eq 'Traceback \(most recent call last\):|SCRIPT ERROR|TypeError:|RuntimeError:' "$console"; then
+                cat "$console"
+                exit 1
+              fi
+              test -s "$audit"
+              grep -q '^=== DECOMPILED FUNCTIONS ===$' "$audit"
+            done
           done
 
       - name: Index audit results
