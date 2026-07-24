@@ -31,14 +31,12 @@ class GreeOemBootProbe : public Component {
       this->mark_failed();
       return;
     }
-
     this->begin_initial_sequence_();
   }
 
   void loop() override {
     if (this->repeat_interval_ms_ == 0 || this->sequence_active_) return;
     if (millis() - this->last_sequence_finished_at_ < this->repeat_interval_ms_) return;
-
     ESP_LOGI(TAG, "Starting scheduled recovered telemetry query cycle");
     this->begin_query_cycle_(true);
   }
@@ -93,15 +91,17 @@ class GreeOemBootProbe : public Component {
   }
 
   void run_recovered_queries_() {
-    ESP_LOGI(TAG, "Querying recovered OEM fault, outdoor-unit, and energy reports");
+    ESP_LOGI(TAG, "Querying recovered OEM fault, status/power-path, outdoor, and monthly-energy reports");
     this->send_(QUERY_FAULT_COMBINED, "combined/general fault query -> 0x33");
     this->set_timeout("gree_oem_query_indoor", this->frame_spacing_ms_,
-                      [this]() { this->send_(QUERY_FAULT_INDOOR, "indoor fault query -> 0x34"); });
+                      [this]() { this->send_(QUERY_FAULT_INDOOR, "indoor fault/data query -> 0x34"); });
     this->set_timeout("gree_oem_query_outdoor", this->frame_spacing_ms_ * 2,
                       [this]() { this->send_(QUERY_FAULT_OUTDOOR, "outdoor-unit query -> 0x35"); });
-    this->set_timeout("gree_oem_query_energy", this->frame_spacing_ms_ * 3,
-                      [this]() { this->send_(QUERY_ENERGY_MONTH, "extended/monthly energy query -> 0x40"); });
-    this->set_timeout("gree_oem_query_finish", this->frame_spacing_ms_ * 4 + 500,
+    this->set_timeout("gree_oem_query_status", this->frame_spacing_ms_ * 3,
+                      [this]() { this->send_(QUERY_STATUS_EXTENDED, "extended status/power-upload query -> 0x31"); });
+    this->set_timeout("gree_oem_query_energy", this->frame_spacing_ms_ * 4,
+                      [this]() { this->send_(QUERY_ENERGY_MONTH, "extended/monthly energy query -> 0x40; 0x31 fallback observed on Livo Gen3"); });
+    this->set_timeout("gree_oem_query_finish", this->frame_spacing_ms_ * 5 + 500,
                       [this]() { this->finish_sequence_(); });
   }
 
@@ -135,17 +135,14 @@ class GreeOemBootProbe : public Component {
   static constexpr std::array<uint8_t, 19> BOOT_IDENTITY{
       0x7E, 0x7E, 0x10, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x01, 0x00, 0x28, 0x1E, 0x19, 0x23, 0x23, 0x00, 0xB8};
-
   static constexpr std::array<uint8_t, 8> MAC_REPORT{
       0x7E, 0x7E, 0x05, 0x04, 0x07, 0x00, 0x00, 0x10};
-
   static constexpr std::array<uint8_t, 17> LINK_SYNC{
       0x7E, 0x7E, 0x0E, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x7E, 0x0F};
 
-  // Recovered from the CS532AX/MT7687 firmware's command-0x03 builder.
-  // These neutral-state vectors request response commands 0x33, 0x34, 0x35,
-  // and 0x40 respectively. They do not alter climate settings.
+  // Recovered from the CS532AX/MT7687 command-0x03 builder. Selector zero
+  // expects 0x31; extended selector 4 is the separate monthly-energy path.
   static constexpr std::array<uint8_t, 28> QUERY_FAULT_COMBINED{
       0x7E, 0x7E, 0x19, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x94};
@@ -155,6 +152,9 @@ class GreeOemBootProbe : public Component {
   static constexpr std::array<uint8_t, 28> QUERY_FAULT_OUTDOOR{
       0x7E, 0x7E, 0x19, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x97};
+  static constexpr std::array<uint8_t, 28> QUERY_STATUS_EXTENDED{
+      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x93};
   static constexpr std::array<uint8_t, 28> QUERY_ENERGY_MONTH{
       0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
       0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x97};
