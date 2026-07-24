@@ -38,7 +38,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: codex/add-oem-report-sensors
+      ref: agent/map-oem-report-telemetry
     refresh: 5min
     components:
       - sinclair_ac
@@ -136,8 +136,8 @@ gree_oem_report_sensors:
     name: ${friendly_name} Last 0x35 Outdoor Report Payload
     entity_category: diagnostic
 
-  # Confirmed against the simultaneously reported 25 C target and 24 C room
-  # temperature in the live Livo Gen3 capture. Formula: raw - 40.
+  # Confirmed against the simultaneous 25 C target and 24 C room temperature
+  # in the live Livo Gen3 capture. Formula: raw - 40.
   indoor_report_target_temperature:
     name: ${friendly_name} Indoor Report Target Temperature
     entity_category: diagnostic
@@ -145,29 +145,86 @@ gree_oem_report_sensors:
     name: ${friendly_name} Indoor Report Current Temperature
     entity_category: diagnostic
 
-  # Physically plausible but not yet assigned to a specific thermistor.
-  indoor_report_byte_10_temperature_hypothesis:
-    name: ${friendly_name} Indoor Report Byte 10 Temperature Hypothesis
+  # Candidate thermistor assignments. The temperature encoding is strongly
+  # supported, but the exact physical sensor names still require controlled
+  # warm-up/cool-down captures.
+  indoor_coil_temperature_candidate:
+    name: ${friendly_name} Indoor Coil Temperature Candidate
     entity_category: diagnostic
     disabled_by_default: true
-  indoor_report_byte_25_temperature_hypothesis:
-    name: ${friendly_name} Indoor Report Byte 25 Temperature Hypothesis
+  indoor_secondary_temperature_candidate:
+    name: ${friendly_name} Indoor Secondary Temperature Candidate
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_ambient_temperature_candidate:
+    name: ${friendly_name} Outdoor Ambient Temperature Candidate
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_coil_temperature_candidate:
+    name: ${friendly_name} Outdoor Coil Temperature Candidate
+    entity_category: diagnostic
+    disabled_by_default: true
+  compressor_discharge_temperature_candidate:
+    name: ${friendly_name} Compressor Discharge Temperature Candidate
     entity_category: diagnostic
     disabled_by_default: true
 
-  outdoor_report_byte_10_raw:
-    name: ${friendly_name} Outdoor Report Byte 10 Raw
+  # Byte 10 is not temperature-coded in the observed report. Keep it raw until
+  # a startup/load/shutdown capture establishes whether it is frequency,
+  # current, voltage, power, or another operating scalar.
+  outdoor_operating_value_raw:
+    name: ${friendly_name} Outdoor Operating Value Raw
     entity_category: diagnostic
     disabled_by_default: true
-  outdoor_report_byte_13_temperature_hypothesis:
-    name: ${friendly_name} Outdoor Report Byte 13 Temperature Hypothesis
+
+  # The recovered OEM firmware compares these exact fields when deciding
+  # whether the indoor fault report changed. They are intentionally raw because
+  # neither active polarity nor fault-code semantics are proven yet.
+  indoor_report_byte_14_bit_5:
+    name: ${friendly_name} Indoor Report Byte 14 Bit 5
     entity_category: diagnostic
     disabled_by_default: true
-  outdoor_report_byte_14_temperature_hypothesis:
-    name: ${friendly_name} Outdoor Report Byte 14 Temperature Hypothesis
+  indoor_report_byte_20_raw:
+    name: ${friendly_name} Indoor Report Byte 20 Raw
     entity_category: diagnostic
     disabled_by_default: true
-  outdoor_report_byte_15_temperature_hypothesis:
-    name: ${friendly_name} Outdoor Report Byte 15 Temperature Hypothesis
+  indoor_report_byte_21_raw:
+    name: ${friendly_name} Indoor Report Byte 21 Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  indoor_report_byte_36_raw:
+    name: ${friendly_name} Indoor Report Byte 36 Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  indoor_report_byte_37_raw:
+    name: ${friendly_name} Indoor Report Byte 37 Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  indoor_report_byte_38_raw:
+    name: ${friendly_name} Indoor Report Byte 38 Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  # The recovered OEM firmware compares these exact fields when deciding
+  # whether the outdoor fault report changed. The 21-28 range is retained as a
+  # compact hexadecimal text entity instead of eight low-value numeric entities.
+  outdoor_report_byte_17_bit_2:
+    name: ${friendly_name} Outdoor Report Byte 17 Bit 2
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_report_bytes_21_28_raw:
+    name: ${friendly_name} Outdoor Report Bytes 21-28 Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_report_byte_30_raw:
+    name: ${friendly_name} Outdoor Report Byte 30 Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_report_byte_31_bit_6:
+    name: ${friendly_name} Outdoor Report Byte 31 Bit 6
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_report_byte_36_raw:
+    name: ${friendly_name} Outdoor Report Byte 36 Raw
     entity_category: diagnostic
     disabled_by_default: true
