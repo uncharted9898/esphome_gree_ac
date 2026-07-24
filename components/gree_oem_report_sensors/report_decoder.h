@@ -18,6 +18,8 @@ struct IndoorReportFields {
   float coil_temperature_candidate_c{0.0f};
   float secondary_temperature_candidate_c{0.0f};
 
+  uint8_t byte_6_raw{0};
+  bool byte_6_bit_5{false};
   bool byte_14_bit_5{false};
   uint8_t byte_20_raw{0};
   uint8_t byte_21_raw{0};
@@ -48,6 +50,10 @@ inline bool decode_indoor_report(const std::vector<uint8_t> &payload, IndoorRepo
   out.coil_temperature_candidate_c = decode_offset_40_temperature(payload[10]);
   out.secondary_temperature_candidate_c = decode_offset_40_temperature(payload[25]);
 
+  // Byte 6 changed from 0x20 to 0x00 between earlier idle/off captures and
+  // the July 23 active-cooling capture. Expose it without assigning semantics.
+  out.byte_6_raw = payload[6];
+  out.byte_6_bit_5 = (payload[6] & 0x20U) != 0;
   out.byte_14_bit_5 = (payload[14] & 0x20U) != 0;
   out.byte_20_raw = payload[20];
   out.byte_21_raw = payload[21];
