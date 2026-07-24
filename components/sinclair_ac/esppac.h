@@ -156,6 +156,11 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void set_discovery_summary_sensor(text_sensor::TextSensor *sensor) { this->discovery_summary_sensor_ = sensor; }
         void set_capture_export_sensor(text_sensor::TextSensor *sensor) { this->capture_export_sensor_ = sensor; }
 
+        const std::vector<uint8_t> *get_retained_payload(uint8_t command) const {
+            const auto it = this->last_payloads_.find(command);
+            return it == this->last_payloads_.end() ? nullptr : &it->second;
+        }
+
         void setup() override;
         void loop() override;
 

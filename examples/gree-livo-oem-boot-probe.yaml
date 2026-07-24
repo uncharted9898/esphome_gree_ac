@@ -38,9 +38,12 @@ external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: research/active-oem-telemetry-queries
+      ref: codex/add-oem-report-sensors
     refresh: 5min
-    components: [sinclair_ac, gree_oem_boot_probe]
+    components:
+      - sinclair_ac
+      - gree_oem_boot_probe
+      - gree_oem_report_sensors
 
 climate:
   - platform: sinclair_ac
@@ -49,8 +52,7 @@ climate:
     uart_id: gree_uart
 
     # The probe owns TX during the captured startup and recovered telemetry
-    # query window. Normal polling/control starts after the responses have had
-    # time to arrive.
+    # query window. Normal polling/control starts after the responses arrive.
     protocol_mode: receive_only
     fan_profile: gree_4_speed
 
@@ -116,7 +118,56 @@ gree_oem_boot_probe:
   frame_spacing: 450ms
   quiesce_delay: 1800ms
   query_recovered_data: true
-  # Optional. Omit for one query cycle at boot. A conservative periodic capture
-  # can use 15min or longer while the recovered response payloads are decoded.
   # repeat_interval: 15min
   restore_control: true
+
+gree_oem_report_sensors:
+  id: gree_oem_reports
+  climate_id: gree_ac
+  update_interval: 1s
+
+  last_0x32_payload:
+    name: ${friendly_name} Last 0x32 Synchronization Payload
+    entity_category: diagnostic
+  last_0x34_payload:
+    name: ${friendly_name} Last 0x34 Indoor Report Payload
+    entity_category: diagnostic
+  last_0x35_payload:
+    name: ${friendly_name} Last 0x35 Outdoor Report Payload
+    entity_category: diagnostic
+
+  # Confirmed against the simultaneously reported 25 C target and 24 C room
+  # temperature in the live Livo Gen3 capture. Formula: raw - 40.
+  indoor_report_target_temperature:
+    name: ${friendly_name} Indoor Report Target Temperature
+    entity_category: diagnostic
+  indoor_report_current_temperature:
+    name: ${friendly_name} Indoor Report Current Temperature
+    entity_category: diagnostic
+
+  # Physically plausible but not yet assigned to a specific thermistor.
+  indoor_report_byte_10_temperature_hypothesis:
+    name: ${friendly_name} Indoor Report Byte 10 Temperature Hypothesis
+    entity_category: diagnostic
+    disabled_by_default: true
+  indoor_report_byte_25_temperature_hypothesis:
+    name: ${friendly_name} Indoor Report Byte 25 Temperature Hypothesis
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  outdoor_report_byte_10_raw:
+    name: ${friendly_name} Outdoor Report Byte 10 Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_report_byte_13_temperature_hypothesis:
+    name: ${friendly_name} Outdoor Report Byte 13 Temperature Hypothesis
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_report_byte_14_temperature_hypothesis:
+    name: ${friendly_name} Outdoor Report Byte 14 Temperature Hypothesis
+    entity_category: diagnostic
+    disabled_by_default: true
+  outdoor_report_byte_15_temperature_hypothesis:
+    name: ${friendly_name} Outdoor Report Byte 15 Temperature Hypothesis
+    entity_category: diagnostic
+    disabled_by_default: true
