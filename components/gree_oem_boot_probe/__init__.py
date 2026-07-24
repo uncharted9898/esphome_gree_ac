@@ -3,7 +3,10 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID
 from esphome.components import uart
 
-DEPENDENCIES = ["uart", "sinclair_ac"]
+# sinclair_ac is a climate platform rather than a top-level ESPHome component
+# domain, so listing it in DEPENDENCIES causes a false validation failure. The
+# required climate_id use_id below already guarantees a SinclairAC instance.
+DEPENDENCIES = ["uart"]
 
 CONF_UART_ID = "uart_id"
 CONF_CLIMATE_ID = "climate_id"
