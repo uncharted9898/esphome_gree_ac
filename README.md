@@ -163,9 +163,11 @@ for commands `0x31`, `0x33`, `0x44`, `0x40`, and other valid unknown commands.
 The optional text diagnostics expose raw payloads without assigning physical
 meanings to unverified bytes. Changes only at `0x31` payload byte 42 are
 suppressed from discovery updates because that byte is the known indoor
-temperature telemetry, decoded as `(raw - 0x10) / 2.0` °C. Discovery is
-deliberately observational: it does not create guessed pressure, electrical, or
-compressor entities.
+temperature telemetry. GREE four-speed units decode it as `raw - 40`; legacy
+Sinclair layouts retain their half-degree decode. The core discovery recorder
+is deliberately observational: it does not create guessed pressure or
+electrical entities. The optional OEM report component adds only fields
+recovered from the audited RTL8720CF report parsers.
 Capture repeated labelled transitions before adding a decoded sensor.
 
 ### Read-only telemetry capture
@@ -177,11 +179,13 @@ Expose `diagnostics.discovery_summary` for a rate-limited summary and
 `diagnostics.capture_export_csv` for a copyable CSV capture through the normal
 ESPHome text-sensor interfaces. `history_depth` is bounded (1–64).
 
-Payload byte 42 is the confirmed indoor/return-air temperature using
-`(raw - 16) / 2.0` °C. Byte 44 remains unresolved. It may be exposed only as
-`candidate_telemetry_byte_44_raw`; the explicitly named
-`candidate_byte_44_temperature_hypothesis` is disabled unless configured and
-is diagnostic-only—not an outdoor or coil sensor.
+Payload byte 42 is the confirmed indoor/return-air temperature. On GREE
+four-speed units it uses `raw - 40`. Payload byte 44 is the GREE outdoor
+ambient field with the same transform; on other Sinclair layouts it remains a
+diagnostic candidate. The OEM report component additionally exposes compressor
+frequency, outdoor-fan raw value and raw expansion-valve state from command
+`0x35`. The full discovery sweep runs once; scheduled refreshes query only
+`0x35` after the normal climate UART becomes idle.
 
 `supplemental_queries` is experimental and disabled by default. It accepts
 only byte-for-byte OEM-captured query templates and is gated so an active

@@ -1,15 +1,14 @@
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
 #include "esphome/components/sinclair_ac/esppac.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
+#include "rtl_query.h"
 
 namespace esphome {
 namespace gree_oem_probe {
@@ -38,76 +37,110 @@ class GreeOemBootProbe : public Component {
 
   void loop() override {
     const uint32_t now = millis();
-
     if (!this->sequence_active_) {
-      if (this->repeat_interval_ms_ == 0 || now - this->last_sequence_finished_at_ < this->repeat_interval_ms_) return;
-      ESP_LOGI(TAG, "Starting scheduled serialized Wi-Fi-gated energy experiment");
-      this->begin_scheduled_sequence_();
+      if (!this->query_recovered_data_) return;
+      if (this->repeat_interval_ms_ == 0 ||
+          now - this->last_sequence_finished_at_ < this->repeat_interval_ms_) {
+        return;
+      }
+      if (!this->climate_->supplemental_query_may_start()) return;
+      ESP_LOGI(TAG, "Starting scheduled RTL8720CF outdoor operating query");
+      this->begin_query_sequence_(true, QueryCycle::OUTDOOR_OPERATING);
       return;
     }
 
+    if (!this->due_(now)) return;
+
     switch (this->phase_) {
       case Phase::BOOT_IDENTITY:
-        if (this->due_(now)) this->send_static_and_advance_(BOOT_IDENTITY, "boot identity 0x10/0x02", Phase::BOOT_MAC_1);
+        this->send_and_advance_(BOOT_IDENTITY, "captured boot identity 0x10/0x02",
+                                Phase::BOOT_MAC_1, this->frame_spacing_ms_);
         break;
       case Phase::BOOT_MAC_1:
-        if (this->due_(now)) this->send_static_and_advance_(MAC_REPORT, "module report 0x05/0x04 #1", Phase::BOOT_MAC_2);
+        this->send_and_advance_(MAC_REPORT, "captured module report 0x05/0x04 #1",
+                                Phase::BOOT_MAC_2, this->frame_spacing_ms_);
         break;
       case Phase::BOOT_MAC_2:
-        if (this->due_(now)) this->send_static_and_advance_(MAC_REPORT, "module report 0x05/0x04 #2", Phase::BOOT_LINK_1);
+        this->send_and_advance_(MAC_REPORT, "captured module report 0x05/0x04 #2",
+                                Phase::BOOT_LINK_1, this->frame_spacing_ms_);
         break;
       case Phase::BOOT_LINK_1:
-        if (this->due_(now)) this->send_static_and_advance_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #1", Phase::BOOT_LINK_2);
+        this->send_and_advance_(LINK_SYNC_CONNECTED, "captured link synchronization #1",
+                                Phase::BOOT_LINK_2, this->frame_spacing_ms_);
         break;
       case Phase::BOOT_LINK_2:
-        if (this->due_(now)) this->send_static_and_advance_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #2", Phase::BOOT_LINK_3);
+        this->send_and_advance_(LINK_SYNC_CONNECTED, "captured link synchronization #2",
+                                Phase::BOOT_LINK_3, this->frame_spacing_ms_);
         break;
       case Phase::BOOT_LINK_3:
-        if (this->due_(now)) this->send_static_and_advance_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #3", Phase::BOOT_LINK_4);
+        this->send_and_advance_(LINK_SYNC_CONNECTED, "captured link synchronization #3",
+                                Phase::BOOT_LINK_4, this->frame_spacing_ms_);
         break;
       case Phase::BOOT_LINK_4:
-        if (this->due_(now)) {
-          this->send_(LINK_SYNC_CONNECTED, "connected link status 0x0E/0x03 #4");
-          if (!this->query_recovered_data_) {
-            this->finish_sequence_();
-            break;
-          }
-          this->phase_ = Phase::WAIT_FOR_STATUS;
-          this->phase_started_at_ = now;
-          this->next_action_at_ = now + this->serialized_gap_ms_();
+        this->send_(LINK_SYNC_CONNECTED, "captured link synchronization #4");
+        if (this->query_recovered_data_) {
+          this->phase_ = Phase::QUERY_QUIESCE;
+          this->next_action_at_ = now + this->quiesce_delay_ms_;
+        } else {
+          this->phase_ = Phase::RESPONSE_DRAIN;
+          this->next_action_at_ = now + RESPONSE_DRAIN_MS;
         }
         break;
-      case Phase::SCHEDULED_QUIESCE:
-        if (this->due_(now)) {
-          this->send_(LINK_SYNC_CONNECTED, "scheduled connected link status assertion: byte14=0x80");
-          this->phase_ = Phase::WAIT_FOR_STATUS;
-          this->phase_started_at_ = now;
-          this->next_action_at_ = now + this->serialized_gap_ms_();
+      case Phase::QUERY_QUIESCE:
+        this->phase_ = this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING
+                           ? Phase::QUERY_OUTDOOR
+                           : Phase::QUERY_COMBINED;
+        this->next_action_at_ = now;
+        break;
+      case Phase::QUERY_COMBINED:
+        this->send_query_and_advance_(QUERY_REPORT_COMBINED, 0x33,
+                                      "combined/general report selector -> 0x33",
+                                      Phase::QUERY_INDOOR);
+        break;
+      case Phase::QUERY_INDOOR:
+        this->send_query_and_advance_(QUERY_REPORT_INDOOR, 0x34,
+                                      "indoor report selector -> 0x34",
+                                      Phase::QUERY_OUTDOOR);
+        break;
+      case Phase::QUERY_OUTDOOR:
+        this->send_query_and_advance_(
+            QUERY_REPORT_OUTDOOR, 0x35,
+            "outdoor operating report selector -> 0x35",
+            this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING
+                ? Phase::RESPONSE_DRAIN
+                : Phase::QUERY_STATUS);
+        break;
+      case Phase::QUERY_STATUS:
+        this->send_query_and_advance_(QUERY_EXTENDED_STATUS, 0x31,
+                                      "extended status selector -> 0x31",
+                                      Phase::QUERY_PAGE_42);
+        break;
+      case Phase::QUERY_PAGE_42:
+        this->send_query_and_advance_(QUERY_SECONDARY_PAGE_42, 0x42,
+                                      "secondary service selector bit 0 -> 0x42",
+                                      Phase::QUERY_PAGE_41);
+        break;
+      case Phase::QUERY_PAGE_41:
+        this->send_query_and_advance_(QUERY_SECONDARY_PAGE_41, 0x41,
+                                      "secondary service selector bit 1 -> 0x41",
+                                      Phase::QUERY_ENERGY);
+        break;
+      case Phase::QUERY_ENERGY:
+        if (this->should_query_energy_()) {
+          this->energy_discovery_attempted_ = true;
+          this->send_query_and_advance_(QUERY_ENERGY_MONTH, 0x40,
+                                        "secondary electrical selector bit 2 -> 0x40",
+                                        Phase::RESPONSE_DRAIN);
+        } else {
+          this->finish_pending_query_();
+          ESP_LOGI(TAG, "Skipping 0x40: 0x32 does not advertise ElcEn");
+          this->phase_ = Phase::RESPONSE_DRAIN;
+          this->next_action_at_ = now + RESPONSE_DRAIN_MS;
         }
         break;
-      case Phase::WAIT_FOR_STATUS:
-        if (this->has_live_status_() && this->due_(now)) {
-          this->start_connected_dwell_(now);
-        } else if (now - this->phase_started_at_ >= STATUS_WAIT_TIMEOUT_MS) {
-          ESP_LOGE(TAG, "No usable 0x31 payload arrived; aborting serialized energy experiment");
-          this->finish_sequence_();
-        }
-        break;
-      case Phase::CONNECTED_DWELL:
-        this->run_connected_dwell_(now);
-        break;
-      case Phase::QUIET_DRAIN:
-        if (this->due_(now)) this->send_isolated_energy_query_(now);
-        break;
-      case Phase::ENERGY_RESPONSE_WINDOW:
-        if (!this->energy_0x40_seen_ && this->climate_->get_retained_payload(0x40) != nullptr) {
-          this->energy_0x40_seen_ = true;
-          ESP_LOGI(TAG, "SERIALIZED PROBE RESULT: command 0x40 observed during isolated response window");
-        }
-        if (this->due_(now)) {
-          ESP_LOGI(TAG, "Isolated energy response window closed after %u ms; no further probe TX occurred", ENERGY_RESPONSE_WINDOW_MS);
-          this->finish_sequence_();
-        }
+      case Phase::RESPONSE_DRAIN:
+        this->finish_pending_query_();
+        this->finish_sequence_();
         break;
       case Phase::IDLE:
       default:
@@ -116,21 +149,20 @@ class GreeOemBootProbe : public Component {
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG(TAG, "Gree OEM serialized Wi-Fi-gated energy probe:");
+    ESP_LOGCONFIG(TAG, "Gree OEM boot/RTL8720CF telemetry probe:");
     ESP_LOGCONFIG(TAG, "  Start delay: %u ms", this->start_delay_ms_);
-    ESP_LOGCONFIG(TAG, "  Serialized frame gap: %u ms", this->serialized_gap_ms_());
-    ESP_LOGCONFIG(TAG, "  Connected-state dwell: %u ms", CONNECTED_DWELL_MS);
-    ESP_LOGCONFIG(TAG, "  Quiet drain before energy request: %u ms", QUIET_DRAIN_MS);
-    ESP_LOGCONFIG(TAG, "  Isolated energy response window: %u ms", ENERGY_RESPONSE_WINDOW_MS);
-    ESP_LOGCONFIG(TAG, "  Connected normal-poll Wi-Fi field: 0x%02X", CONNECTED_WIFI_FIELD);
-    ESP_LOGCONFIG(TAG, "  Energy query module-state: %u", ENERGY_MODULE_STATE);
-    ESP_LOGCONFIG(TAG, "  Energy query RSSI magnitude fields: %u", QUERY_RSSI_MAGNITUDE);
-    ESP_LOGCONFIG(TAG, "  Recovered telemetry queries: %s", YESNO(this->query_recovered_data_));
-    ESP_LOGCONFIG(TAG, "  Repeat interval: %u ms", this->repeat_interval_ms_);
+    ESP_LOGCONFIG(TAG, "  Captured boot frame spacing: %u ms", this->frame_spacing_ms_);
+    ESP_LOGCONFIG(TAG, "  Query response window: %u ms", this->query_spacing_ms_());
+    ESP_LOGCONFIG(TAG, "  Query quiesce delay: %u ms", this->quiesce_delay_ms_);
+    ESP_LOGCONFIG(TAG, "  Recovered report queries: %s", YESNO(this->query_recovered_data_));
+    ESP_LOGCONFIG(TAG, "  Outdoor operating repeat interval: %u ms",
+                  this->repeat_interval_ms_);
     ESP_LOGCONFIG(TAG, "  Restore control: %s", YESNO(this->restore_control_));
   }
 
  protected:
+  enum class QueryCycle : uint8_t { FULL_DISCOVERY, OUTDOOR_OPERATING };
+
   enum class Phase : uint8_t {
     IDLE,
     BOOT_IDENTITY,
@@ -140,141 +172,108 @@ class GreeOemBootProbe : public Component {
     BOOT_LINK_2,
     BOOT_LINK_3,
     BOOT_LINK_4,
-    SCHEDULED_QUIESCE,
-    WAIT_FOR_STATUS,
-    CONNECTED_DWELL,
-    QUIET_DRAIN,
-    ENERGY_RESPONSE_WINDOW,
+    QUERY_QUIESCE,
+    QUERY_COMBINED,
+    QUERY_INDOOR,
+    QUERY_OUTDOOR,
+    QUERY_STATUS,
+    QUERY_PAGE_42,
+    QUERY_PAGE_41,
+    QUERY_ENERGY,
+    RESPONSE_DRAIN,
   };
 
-  static constexpr uint32_t MIN_SERIALIZED_GAP_MS = 900;
-  static constexpr uint32_t STATUS_WAIT_TIMEOUT_MS = 5000;
-  static constexpr uint32_t CONNECTED_DWELL_MS = 30000;
-  static constexpr uint32_t LINK_REFRESH_MS = 5000;
-  static constexpr uint32_t QUIET_DRAIN_MS = 2000;
-  static constexpr uint32_t ENERGY_RESPONSE_WINDOW_MS = 3000;
-  static constexpr uint8_t CONNECTED_WIFI_FIELD = 0x0C;
-  static constexpr uint8_t ENERGY_MODULE_STATE = 0x01;
-  static constexpr uint8_t QUERY_RSSI_MAGNITUDE = 0x3B;
-  static constexpr size_t OUTGOING_PAYLOAD_LEN = 45;
-  static constexpr size_t OUTGOING_WIFI_PAYLOAD_INDEX = 37;
-  static constexpr size_t SET_AF_PAYLOAD_INDEX = 3;
-  static constexpr size_t SET_CONST_BIT_PAYLOAD_INDEX = 7;
-  static constexpr size_t SET_NOCHANGE_PAYLOAD_INDEX = 11;
-  static constexpr size_t SET_CONST_02_PAYLOAD_INDEX = 39;
+  static constexpr uint32_t MIN_QUERY_SPACING_MS = 900;
+  static constexpr uint32_t RESPONSE_DRAIN_MS = 1500;
 
-  uint32_t serialized_gap_ms_() const {
-    return this->frame_spacing_ms_ < MIN_SERIALIZED_GAP_MS ? MIN_SERIALIZED_GAP_MS : this->frame_spacing_ms_;
+  uint32_t query_spacing_ms_() const {
+    return this->frame_spacing_ms_ < MIN_QUERY_SPACING_MS ? MIN_QUERY_SPACING_MS
+                                                          : this->frame_spacing_ms_;
   }
 
-  bool due_(uint32_t now) const { return static_cast<int32_t>(now - this->next_action_at_) >= 0; }
+  bool due_(uint32_t now) const {
+    return static_cast<int32_t>(now - this->next_action_at_) >= 0;
+  }
 
   void begin_initial_sequence_() {
+    this->query_cycle_ = QueryCycle::FULL_DISCOVERY;
     this->sequence_active_ = true;
-    this->energy_0x40_seen_ = this->climate_->get_retained_payload(0x40) != nullptr;
     this->tx_sequence_ = 0;
+    this->pending_query_active_ = false;
     this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
-    this->climate_->set_debug(true, false, true, true, 256);
     this->phase_ = Phase::BOOT_IDENTITY;
-    this->phase_started_at_ = millis();
-    this->next_action_at_ = this->phase_started_at_ + this->start_delay_ms_;
-    ESP_LOGI(TAG, "Starting serialized CS532 boot followed by one coherent connected-state energy experiment");
+    this->next_action_at_ = millis() + this->start_delay_ms_;
+    ESP_LOGI(TAG, "Starting captured adapter boot followed by RTL8720CF report queries");
   }
 
-  void begin_scheduled_sequence_() {
+  void begin_query_sequence_(bool quiesce, QueryCycle cycle) {
+    if (this->sequence_active_) return;
+    this->query_cycle_ = cycle;
     this->sequence_active_ = true;
-    this->energy_0x40_seen_ = this->climate_->get_retained_payload(0x40) != nullptr;
     this->tx_sequence_ = 0;
+    this->pending_query_active_ = false;
     this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
-    this->climate_->set_debug(true, false, true, true, 256);
-    this->phase_ = Phase::SCHEDULED_QUIESCE;
-    this->phase_started_at_ = millis();
-    this->next_action_at_ = this->phase_started_at_ + this->quiesce_delay_ms_;
+    this->phase_ = Phase::QUERY_QUIESCE;
+    this->next_action_at_ = millis() + (quiesce ? this->quiesce_delay_ms_ : 0);
   }
 
-  bool has_live_status_() const {
-    const auto *status = this->climate_->get_retained_payload(0x31);
-    return status != nullptr && status->size() >= OUTGOING_PAYLOAD_LEN;
-  }
 
-  void start_connected_dwell_(uint32_t now) {
-    this->phase_ = Phase::CONNECTED_DWELL;
-    this->phase_started_at_ = now;
-    this->dwell_started_at_ = now;
-    this->last_link_refresh_at_ = now;
-    this->next_action_at_ = now;
-    ESP_LOGI(TAG, "CONNECTED EMULATION START: 30000 ms, link=0x80, poll Wi-Fi byte=0x0C, serialized gap=%u ms",
-             this->serialized_gap_ms_());
-  }
+  bool should_query_energy_() const {
+    // The audited RTL8720CF dispatcher uses 0x32 payload[0] bit 0 to advertise
+    // the optional 0x40 report page. 0x32 payload[1] is the separate ElcEn
+    // property value and is only consumed after a supported 0x40 arrives.
+    const auto *electrical = this->climate_->get_retained_payload(0x40);
+    if (electrical != nullptr) return true;
 
-  void run_connected_dwell_(uint32_t now) {
-    if (now - this->dwell_started_at_ >= CONNECTED_DWELL_MS) {
-      this->phase_ = Phase::QUIET_DRAIN;
-      this->phase_started_at_ = now;
-      this->next_action_at_ = now + QUIET_DRAIN_MS;
-      ESP_LOGI(TAG, "CONNECTED EMULATION COMPLETE: entering %u ms no-transmit quiet drain", QUIET_DRAIN_MS);
-      return;
+    const auto *synchronization = this->climate_->get_retained_payload(0x32);
+    if (synchronization == nullptr || synchronization->empty()) {
+      return !this->energy_discovery_attempted_;
     }
-    if (!this->due_(now)) return;
+    return ((*synchronization)[0] & 0x01U) != 0;
+  }
 
-    if (now - this->last_link_refresh_at_ >= LINK_REFRESH_MS) {
-      this->send_(LINK_SYNC_CONNECTED, "connected link refresh: byte14=0x80");
-      this->last_link_refresh_at_ = now;
-    } else if (!this->send_connected_poll_()) {
-      ESP_LOGW(TAG, "Live 0x31 payload unavailable while dwelling; sending connected link refresh instead");
-      this->send_(LINK_SYNC_CONNECTED, "connected link refresh while waiting for live status");
-      this->last_link_refresh_at_ = now;
+  void finish_pending_query_() {
+    if (!this->pending_query_active_) return;
+
+    const uint32_t expected_after =
+        this->climate_->get_retained_payload_generation(this->pending_expected_command_);
+    const uint32_t status_after = this->climate_->get_retained_payload_generation(0x31);
+    if (expected_after != this->pending_expected_generation_) {
+      ESP_LOGI(TAG, "PROBE RX matched %s with command 0x%02X", this->pending_description_,
+               this->pending_expected_command_);
+    } else if (status_after != this->pending_status_generation_) {
+      ESP_LOGI(TAG, "PROBE RX fallback after %s: command 0x31", this->pending_description_);
+    } else {
+      ESP_LOGW(TAG, "PROBE RX timeout after %s: expected command 0x%02X",
+               this->pending_description_, this->pending_expected_command_);
     }
-    this->next_action_at_ = now + this->serialized_gap_ms_();
+    this->pending_query_active_ = false;
   }
 
-  bool send_connected_poll_() {
-    const auto *status = this->climate_->get_retained_payload(0x31);
-    if (status == nullptr || status->size() < OUTGOING_PAYLOAD_LEN) return false;
-
-    std::vector<uint8_t> payload(status->begin(), status->begin() + OUTGOING_PAYLOAD_LEN);
-    payload[SET_AF_PAYLOAD_INDEX] = 0x00;
-    payload[SET_CONST_BIT_PAYLOAD_INDEX] |= 0x02;
-    payload[SET_NOCHANGE_PAYLOAD_INDEX] |= 0x08;
-    payload[SET_CONST_02_PAYLOAD_INDEX] = 0x02;
-    payload[OUTGOING_WIFI_PAYLOAD_INDEX] = CONNECTED_WIFI_FIELD;
-
-    std::vector<uint8_t> frame;
-    frame.reserve(payload.size() + 5);
-    frame.push_back(0x7E);
-    frame.push_back(0x7E);
-    frame.push_back(static_cast<uint8_t>(payload.size() + 2));
-    frame.push_back(0x01);
-    frame.insert(frame.end(), payload.begin(), payload.end());
-    uint8_t checksum = 0;
-    for (size_t i = 2; i < frame.size(); ++i) checksum = static_cast<uint8_t>(checksum + frame[i]);
-    frame.push_back(checksum);
-    this->send_vector_(frame, "connected read poll generated from latest 0x31; full-frame byte41=0x0C");
-    return true;
-  }
-
-  void send_isolated_energy_query_(uint32_t now) {
-    std::array<uint8_t, 28> query = QUERY_ENERGY_TEMPLATE;
-    query[10] = QUERY_RSSI_MAGNITUDE;
-    query[13] = QUERY_RSSI_MAGNITUDE;
-    query[26] = ENERGY_MODULE_STATE;
-    query[27] = this->checksum_(query);
-
-    ESP_LOGI(TAG, "ISOLATED ENERGY TEST: UART has been probe-silent for %u ms; sending exactly one selector-8 request", QUIET_DRAIN_MS);
-    this->send_(query, "isolated monthly-energy query: Wi-Fi=0x0C dwell, RSSI=59, module-state=1");
-    this->phase_ = Phase::ENERGY_RESPONSE_WINDOW;
-    this->phase_started_at_ = now;
-    this->next_action_at_ = now + ENERGY_RESPONSE_WINDOW_MS;
-    ESP_LOGI(TAG, "ISOLATED RESPONSE WINDOW OPEN: %u ms with no additional probe transmissions", ENERGY_RESPONSE_WINDOW_MS);
+  template<size_t N>
+  void send_query_and_advance_(const std::array<uint8_t, N> &frame, uint8_t expected_command,
+                               const char *description, Phase next) {
+    this->finish_pending_query_();
+    this->pending_expected_command_ = expected_command;
+    this->pending_expected_generation_ =
+        this->climate_->get_retained_payload_generation(expected_command);
+    this->pending_status_generation_ = this->climate_->get_retained_payload_generation(0x31);
+    this->pending_description_ = description;
+    this->pending_query_active_ = true;
+    this->send_(frame, description);
+    this->phase_ = next;
+    this->next_action_at_ = millis() + this->query_spacing_ms_();
   }
 
   void finish_sequence_() {
-    this->climate_->set_debug(false, false, true, true, 256);
     if (this->restore_control_) {
       this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::CONTROL);
-      ESP_LOGI(TAG, "Serialized Wi-Fi-gated energy experiment complete; normal climate control enabled");
+      ESP_LOGI(TAG, "%s complete; normal climate control enabled",
+               this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING
+                   ? "Outdoor operating query"
+                   : "OEM telemetry discovery sequence");
     } else {
-      ESP_LOGI(TAG, "Serialized Wi-Fi-gated energy experiment complete; climate remains receive-only");
+      ESP_LOGI(TAG, "OEM telemetry sequence complete; climate remains receive-only");
     }
     this->phase_ = Phase::IDLE;
     this->sequence_active_ = false;
@@ -283,57 +282,43 @@ class GreeOemBootProbe : public Component {
   }
 
   template<size_t N>
-  void send_static_and_advance_(const std::array<uint8_t, N> &frame, const char *description, Phase next) {
+  void send_and_advance_(const std::array<uint8_t, N> &frame, const char *description,
+                         Phase next, uint32_t delay_ms) {
     this->send_(frame, description);
     this->phase_ = next;
-    this->phase_started_at_ = millis();
-    this->next_action_at_ = this->phase_started_at_ + this->serialized_gap_ms_();
+    this->next_action_at_ = millis() + delay_ms;
   }
 
-  template<size_t N> static uint8_t checksum_(const std::array<uint8_t, N> &frame) {
+  template<size_t N>
+  static uint8_t checksum_(const std::array<uint8_t, N> &frame) {
     uint8_t checksum = 0;
-    for (size_t i = 2; i + 1 < N; ++i) checksum = static_cast<uint8_t>(checksum + frame[i]);
+    for (size_t i = 2; i + 1 < N; ++i) {
+      checksum = static_cast<uint8_t>(checksum + frame[i]);
+    }
     return checksum;
   }
 
-  template<size_t N> void send_(const std::array<uint8_t, N> &frame, const char *description) {
-    if (frame[0] != 0x7E || frame[1] != 0x7E || static_cast<size_t>(frame[2]) + 3 != N ||
-        checksum_(frame) != frame[N - 1]) {
-      ESP_LOGE(TAG, "Refusing invalid probe frame: %s", description);
+  template<size_t N>
+  void send_(const std::array<uint8_t, N> &frame, const char *description) {
+    if (frame[0] != 0x7E || frame[1] != 0x7E ||
+        static_cast<size_t>(frame[2]) + 3 != N || checksum_(frame) != frame[N - 1]) {
+      ESP_LOGE(TAG, "Refusing invalid recovered frame: %s", description);
       return;
     }
-    ++this->tx_sequence_;
-    const uint32_t tx_started = millis();
-    ESP_LOGI(TAG, "PROBE TX #%u start=%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, tx_started, frame[3],
-             static_cast<unsigned>(N), description);
-    this->uart_->write_array(frame.data(), frame.size());
-    this->uart_->flush();
-    ESP_LOGI(TAG, "PROBE TX #%u complete=%u", this->tx_sequence_, millis());
-  }
 
-  void send_vector_(const std::vector<uint8_t> &frame, const char *description) {
-    if (frame.size() < 5 || frame[0] != 0x7E || frame[1] != 0x7E ||
-        static_cast<size_t>(frame[2]) + 3 != frame.size()) {
-      ESP_LOGE(TAG, "Refusing invalid generated probe frame: %s", description);
-      return;
-    }
-    uint8_t checksum = 0;
-    for (size_t i = 2; i + 1 < frame.size(); ++i) checksum = static_cast<uint8_t>(checksum + frame[i]);
-    if (checksum != frame.back()) {
-      ESP_LOGE(TAG, "Refusing generated probe frame with invalid checksum: %s", description);
-      return;
-    }
     ++this->tx_sequence_;
-    const uint32_t tx_started = millis();
-    ESP_LOGI(TAG, "PROBE TX #%u start=%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, tx_started, frame[3],
-             static_cast<unsigned>(frame.size()), description);
+    ESP_LOGI(TAG, "PROBE TX #%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, frame[3],
+             static_cast<unsigned>(N), description);
+    // At 4800-8E1, flushing a 29-byte frame blocks the ESPHome loop for about
+    // 66 ms. The 900 ms state-machine spacing makes a blocking flush needless.
     this->uart_->write_array(frame.data(), frame.size());
-    this->uart_->flush();
-    ESP_LOGI(TAG, "PROBE TX #%u complete=%u", this->tx_sequence_, millis());
   }
 
   static constexpr const char *TAG = "gree.oem_boot_probe";
 
+  // These three startup frames were captured from the target installation.
+  // Report selectors below come from the independently audited RTL8720CF V2/V3
+  // firmware and deliberately use its 29-byte command-0x03 wire format.
   static constexpr std::array<uint8_t, 19> BOOT_IDENTITY{
       0x7E, 0x7E, 0x10, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x01, 0x00, 0x28, 0x1E, 0x19, 0x23, 0x23, 0x00, 0xB8};
@@ -343,29 +328,35 @@ class GreeOemBootProbe : public Component {
       0x7E, 0x7E, 0x0E, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x7E, 0x0F};
 
-  static constexpr std::array<uint8_t, 28> QUERY_ENERGY_TEMPLATE{
-      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x3B, 0x00, 0x00, 0x3B, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x97};
+  static constexpr auto QUERY_REPORT_COMBINED = build_rtl_report_query(0x01, 0x00);
+  static constexpr auto QUERY_REPORT_INDOOR = build_rtl_report_query(0x02, 0x00);
+  static constexpr auto QUERY_REPORT_OUTDOOR = build_rtl_report_query(0x04, 0x00);
+  static constexpr auto QUERY_EXTENDED_STATUS = build_rtl_report_query(0x00, 0x00);
+  static constexpr auto QUERY_SECONDARY_PAGE_42 = build_rtl_report_query(0x00, 0x01);
+  static constexpr auto QUERY_SECONDARY_PAGE_41 = build_rtl_report_query(0x00, 0x02);
+  static constexpr auto QUERY_ENERGY_MONTH = build_rtl_report_query(0x00, 0x04);
 
   uart::UARTComponent *uart_{nullptr};
   sinclair_ac::SinclairAC *climate_{nullptr};
+  QueryCycle query_cycle_{QueryCycle::FULL_DISCOVERY};
   Phase phase_{Phase::IDLE};
   uint32_t start_delay_ms_{100};
   uint32_t frame_spacing_ms_{450};
   uint32_t quiesce_delay_ms_{1800};
   uint32_t repeat_interval_ms_{0};
   uint32_t last_sequence_finished_at_{0};
-  uint32_t phase_started_at_{0};
   uint32_t next_action_at_{0};
-  uint32_t dwell_started_at_{0};
-  uint32_t last_link_refresh_at_{0};
   uint32_t tx_sequence_{0};
+  uint32_t pending_expected_generation_{0};
+  uint32_t pending_status_generation_{0};
+  const char *pending_description_{nullptr};
+  uint8_t pending_expected_command_{0};
   bool restore_control_{true};
   bool query_recovered_data_{true};
   bool sequence_active_{false};
   bool finished_{false};
-  bool energy_0x40_seen_{false};
+  bool pending_query_active_{false};
+  bool energy_discovery_attempted_{false};
 };
 
 }  // namespace gree_oem_probe

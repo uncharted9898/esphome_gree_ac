@@ -27,17 +27,18 @@ The observed temperature-like values use `raw - 40`:
 | `0x34` | 7 | `0x41` | 25 C | target temperature; confirmed |
 | `0x34` | 8 | `0x40` | 24 C | current/room temperature; confirmed |
 | `0x34` | 10 | `0x3C` | 20 C | indoor coil candidate |
-| `0x34` | 25 | `0x44` | 28 C | secondary indoor temperature candidate |
+| `0x34` | 25 | `0x44` | raw 68 | no named RTL8720CF property |
 | `0x35` | 13 | `0x40` | 24 C | outdoor ambient candidate |
 | `0x35` | 14 | `0x46` | 30 C | outdoor coil candidate |
 | `0x35` | 15 | `0x51` | 41 C | compressor discharge candidate |
 
-The ordered outdoor cluster is physically plausible, but the three physical
-assignments remain candidates until controlled ambient/load/cool-down captures
-show their response independently.
-
-`0x35` byte 10 was `0xC8` (200) and is deliberately exposed only as a raw
-operating value. No scale or unit is assigned.
+The RTL8720CF V2 parser confirms payload 5 as `CompressorFqy`, payload 13 as
+`OutEnvTem`, and payload 15 as `CompressorTem`. The matching outdoor-controller page documented in
+[`mkaluza/gree-hacking`](https://github.com/mkaluza/gree-hacking/blob/87965e596c15a509d62d5987cdc446c85accccfd/data_frame/packet.md)
+independently aligns payload 6 with the outdoor-fan field, payload 9 with the
+expansion-valve closing flag, and payload 10 with the EEV setting. The
+captured `0xC8` therefore represents an EEV position/setting of 200 rather than
+an electrical or generic operating value.
 
 ## Firmware-confirmed change regions
 
@@ -68,8 +69,8 @@ log predate the OFF command. They cannot be used as OFF-state samples.
 
 A useful next capture should retain a fresh `0x34`/`0x35` query set at several
 points after shutdown (for example 0, 1, 3, 5, and 10 minutes) and again through
-compressor startup. That will separate ambient, coil, discharge, and operating
-scalar behavior without changing any control bytes.
+compressor startup. That will verify nonzero compressor frequency, outdoor-fan
+field behavior and EEV movement without changing any control bytes.
 
 ## Compatibility
 

@@ -1,5 +1,11 @@
 # CS532AX/MT7687 OEM UART request recovery
 
+> **Historical firmware family.** These findings describe the CS532AX/MT7687
+> image and are retained as provenance. The Livo implementation now uses the
+> independently audited RTL8720CF V2/V3 request format and field map in
+> [`rtl8720cf-telemetry-map.md`](rtl8720cf-telemetry-map.md). Do not copy the
+> 28-byte `LEN=0x19` vectors below into the active probe.
+
 This document records request builders recovered from the public Gree
 `U-CS532AX(MTK)V3` firmware by static analysis. Byte indexes below are full-frame
 indexes including the two `0x7E` sync bytes.

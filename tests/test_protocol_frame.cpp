@@ -13,6 +13,7 @@ using esphome::sinclair_ac::RequestLifecycle;
 using esphome::sinclair_ac::CaptureRecord;
 using esphome::sinclair_ac::SupplementalQueryGate;
 using esphome::sinclair_ac::TelemetryDiscovery;
+using esphome::sinclair_ac::CNT::decode_current_temperature_field;
 using esphome::sinclair_ac::CNT::decode_target_temperature_field;
 using esphome::sinclair_ac::CNT::encode_target_temperature_field;
 using esphome::sinclair_ac::CNT::normalize_target_temperature;
@@ -44,6 +45,10 @@ int main() {
   assert(encode_target_temperature_field(35.0f) == 0xE0);
   assert(!std::isfinite(normalize_target_temperature(std::numeric_limits<float>::infinity())));
   assert(!std::isfinite(normalize_target_temperature(std::numeric_limits<float>::quiet_NaN())));
+  // The GREE status report uses whole-degree raw-minus-40 values; the legacy
+  // Sinclair layout retains its half-degree raw-minus-16 representation.
+  assert(decode_current_temperature_field(0x41, true) == 25.0f);
+  assert(decode_current_temperature_field(0x41, false) == 24.5f);
   // Target command verification is a comparison of the protocol field, not
   // the original floating-point HA request.  An already-matching baseline is
   // therefore a no-op, a stale field needs a retry, and the same expected
@@ -120,7 +125,16 @@ int main() {
   const uint8_t sinclair_medium_speed1 = static_cast<uint8_t>((0x08 & ~sinclair_speed1_mask) | 3);
   assert(sinclair_medium_speed1 == 0x03);
 
-  assert(parse(frame(0x44, 1), parsed) == Result::VALID_UNKNOWN);
+  const uint8_t diagnostic_commands[] = {
+      0x32, 0x33, 0x34, 0x35, 0x36, 0x3C, 0x40, 0x41,
+      0x42, 0x44, 0x45, 0x46, 0x4D, 0x52, 0x53,
+  };
+  for (const auto command : diagnostic_commands) {
+    assert(is_diagnostic_command(command));
+    assert(parse(frame(command, 1), parsed) == Result::VALID_DIAGNOSTIC);
+  }
+  assert(!is_diagnostic_command(0x7F));
+  assert(parse(frame(0x7F, 1), parsed) == Result::VALID_UNKNOWN);
   auto bad = known;
   bad.back()++;
   assert(parse(bad, parsed) == Result::CHECKSUM);
