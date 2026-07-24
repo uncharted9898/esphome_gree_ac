@@ -126,51 +126,48 @@ jobs:
             -print -quit > "$RUNNER_TEMP/analyze-headless.txt"
           test -s "$RUNNER_TEMP/analyze-headless.txt"
 
-      - name: Recover all V2 and V3 code, property paths, builders, and parsers
+      - name: Recover combined V2 and V3 code, data, properties, builders, and parsers
         shell: bash
         run: |
           set -euo pipefail
           analyze_headless=$(cat "$RUNNER_TEMP/analyze-headless.txt")
           mkdir -p "$RUNNER_TEMP/ghidra-projects" firmware-research/results/ghidra
           for version in v1.21 v1.53; do
-            for spec in xip0:0x9B000140:0x9B000150 xip1:0x9B800140:none; do
-              label=${spec%%:*}
-              rest=${spec#*:}
-              base=${rest%%:*}
-              entry=${rest##*:}
-              xip=$(find "firmware-research/sections/${version}" -type f \
-                -name "*_xip_${base}.bin" -print -quit)
-              test -n "$xip"
-              console="firmware-research/results/ghidra/${version}-${label}-console.txt"
-              audit="firmware-research/results/ghidra/${version}-${label}-audit.txt"
-              protocol="firmware-research/results/ghidra/${version}-${label}-protocol.txt"
-              setup_args=(setup_rtl8720cf.py "$base")
-              if [ "$entry" != none ]; then
-                setup_args+=("$entry")
-              fi
-              "$analyze_headless" "$RUNNER_TEMP/ghidra-projects" \
-                "rtl8720cf-${version}-${label}" \
-                -import "$xip" \
-                -overwrite \
-                -loader BinaryLoader \
-                -processor 'ARM:LE:32:Cortex' \
-                -loader-baseAddr "$base" \
-                -scriptPath tools/firmware_research \
-                -preScript "${setup_args[@]}" \
-                -preScript seed_rtl8720cf_functions.py "$base" \
-                -analysisTimeoutPerFile 3600 \
-                -postScript audit_rtl8720cf_protocol.py \
-                  "$GITHUB_WORKSPACE/$audit" "${version}-${label}" \
-                -postScript extract_rtl8720cf_protocol.py \
-                  "$GITHUB_WORKSPACE/$protocol" \
-                > "$console" 2>&1
-              if grep -Eq 'Traceback \(most recent call last\):|SCRIPT ERROR|TypeError:|RuntimeError:' "$console"; then
-                cat "$console"
-                exit 1
-              fi
-              test -s "$audit"
-              grep -q '^=== DECOMPILED FUNCTIONS ===$' "$audit"
-            done
+            xip0=$(find "firmware-research/sections/${version}" -type f \
+              -name '*_xip_0x9B000140.bin' -print -quit)
+            xip1=$(find "firmware-research/sections/${version}" -type f \
+              -name '*_xip_0x9B800140.bin' -print -quit)
+            test -n "$xip0"
+            test -n "$xip1"
+            console="firmware-research/results/ghidra/${version}-combined-console.txt"
+            audit="firmware-research/results/ghidra/${version}-combined-audit.txt"
+            protocol="firmware-research/results/ghidra/${version}-combined-protocol.txt"
+            "$analyze_headless" "$RUNNER_TEMP/ghidra-projects" \
+              "rtl8720cf-${version}-combined" \
+              -import "$xip0" \
+              -overwrite \
+              -loader BinaryLoader \
+              -processor 'ARM:LE:32:Cortex' \
+              -loader-baseAddr 0x9B000140 \
+              -scriptPath tools/firmware_research \
+              -preScript setup_rtl8720cf.py 0x9B000140 0x9B000150 \
+              -preScript load_rtl8720cf_companion.py \
+                "$GITHUB_WORKSPACE/$xip1" 0x9B800140 \
+              -preScript seed_rtl8720cf_functions.py 0x9B000140 \
+              -preScript seed_rtl8720cf_functions.py 0x9B800140 \
+              -analysisTimeoutPerFile 3600 \
+              -postScript audit_rtl8720cf_protocol.py \
+                "$GITHUB_WORKSPACE/$audit" "${version}-combined" \
+              -postScript extract_rtl8720cf_protocol.py \
+                "$GITHUB_WORKSPACE/$protocol" \
+              > "$console" 2>&1
+            if grep -Eq 'Traceback \(most recent call last\):|SCRIPT ERROR|TypeError:|RuntimeError:' "$console"; then
+              cat "$console"
+              exit 1
+            fi
+            test -s "$audit"
+            grep -q '^=== DECOMPILED FUNCTIONS ===$' "$audit"
+            grep -q '9b800140' "$audit"
           done
 
       - name: Index audit results
