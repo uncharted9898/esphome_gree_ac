@@ -2,6 +2,12 @@ name: publish-clean-rtl8720cf
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - codex/add-compatibility-and-protocol-discovery-mode
+    paths:
+      - .github/workflows/publish-clean-rtl8720cf.yml
+      - .github/clean-publish/**
   push:
     branches:
       - agent/rtl8720cf-telemetry-publisher
