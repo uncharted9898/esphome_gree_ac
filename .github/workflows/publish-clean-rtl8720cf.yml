@@ -97,6 +97,9 @@ jobs:
             tools/firmware_research/rtl8720cf_properties.py
           python -m unittest tests.test_rtl8720cf_image -v
 
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
             tests/test_protocol_frame.cpp -o "$RUNNER_TEMP/test_protocol_frame"
           "$RUNNER_TEMP/test_protocol_frame"
