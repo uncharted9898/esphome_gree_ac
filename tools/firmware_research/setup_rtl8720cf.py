@@ -1,4 +1,4 @@
-# Prepare a raw RTL8720CF/AmebaZ2 XIP application for Ghidra analysis.
+# Prepare a raw RTL8720CF/AmebaZ2 XIP section for Ghidra analysis.
 # @category Gree
 
 from java.math import BigInteger
@@ -6,29 +6,40 @@ from ghidra.program.model.symbol import SourceType
 
 args = getScriptArgs()
 if len(args) < 1:
-    raise RuntimeError("usage: setup_rtl8720cf.py <base-address> [entry-address]")
+    raise RuntimeError("usage: setup_rtl8720cf.py <base-address> [entry-address|-]")
 
 base = toAddr(args[0])
-entry_value = int(args[1], 0) if len(args) > 1 else base.getOffset()
-entry = toAddr(entry_value & ~1)
+entry_arg = args[1] if len(args) > 1 else "-"
+
+block = currentProgram.getMemory().getBlock(base)
+if block is None or not block.isInitialized():
+    raise RuntimeError("no initialized memory block at %s" % base)
 
 program_context = currentProgram.getProgramContext()
 tmode = currentProgram.getLanguage().getRegister("TMode")
 if tmode is not None:
-    program_context.setValue(tmode, base, currentProgram.getMaxAddress(), BigInteger.ONE)
+    program_context.setValue(tmode, block.getStart(), block.getEnd(), BigInteger.ONE)
 
-symbol_table = currentProgram.getSymbolTable()
-try:
-    symbol_table.createLabel(entry, "rtl8720cf_seed", SourceType.USER_DEFINED)
-except Exception:
-    pass
-try:
-    symbol_table.addExternalEntryPoint(entry)
-except Exception:
-    pass
+if entry_arg == "-":
+    print("Configured Thumb mode for %s-%s; no synthetic entry point" %
+          (block.getStart(), block.getEnd()))
+else:
+    entry = toAddr(int(entry_arg, 0) & ~1)
+    symbol_table = currentProgram.getSymbolTable()
+    try:
+        symbol_table.createLabel(entry, "rtl8720cf_seed", SourceType.USER_DEFINED)
+    except Exception:
+        pass
+    try:
+        symbol_table.addExternalEntryPoint(entry)
+    except Exception:
+        pass
 
-disassemble(entry)
-if getFunctionAt(entry) is None:
-    createFunction(entry, "rtl8720cf_seed")
+    disassemble(entry)
+    if getInstructionAt(entry) is None:
+        raise RuntimeError("entry point did not decode as Thumb code: %s" % entry)
+    if getFunctionAt(entry) is None:
+        createFunction(entry, "rtl8720cf_seed")
 
-print("Configured Thumb mode from %s and seed point %s" % (base, entry))
+    print("Configured Thumb mode for %s-%s and seed point %s" %
+          (block.getStart(), block.getEnd(), entry))
