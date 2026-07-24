@@ -1,11 +1,9 @@
 name: export-current-source
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/correct-gree-telemetry-direct
-    paths:
-      - .github/workflows/export-current-source.yml
+      - codex/add-compatibility-and-protocol-discovery-mode
   workflow_dispatch:
 
 permissions:
