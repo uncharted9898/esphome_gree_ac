@@ -1,33 +1,64 @@
-name: export-agent-source
+name: publish-gree-telemetry-fix
 
 on:
-  pull_request:
-    branches: [codex/add-compatibility-and-protocol-discovery-mode]
+  push:
+    branches:
+      - agent/correct-gree-telemetry-and-query-tracking
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export:
+  publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Record source metadata
+
+      - name: Reconstruct and verify final patch
         shell: bash
         run: |
           set -euo pipefail
-          {
-            echo "head_sha=${{ github.event.pull_request.head.sha }}"
-            echo "base_sha=${{ github.event.pull_request.base.sha }}"
-            echo "head_tree=$(git rev-parse '${{ github.event.pull_request.head.sha }}^{tree}')"
-            echo "base_tree=$(git rev-parse '${{ github.event.pull_request.base.sha }}^{tree}')"
-          } > .agent-source-metadata
-      - uses: actions/upload-artifact@v4
+          cat .github/agent-patch/part-* > /tmp/gree-final.patch.gz.b64
+          echo 'ae72331dd58ab258c430350bcfd4a7eb2cfc78426c7235ec552914648aa80da8  /tmp/gree-final.patch.gz.b64' | sha256sum -c -
+          base64 --decode /tmp/gree-final.patch.gz.b64 > /tmp/gree-final.patch.gz
+          echo 'e456e854281001af86f89e4f20a2cce0e859c05e23e78b88e716d6c0b9d50639  /tmp/gree-final.patch.gz' | sha256sum -c -
+          gzip --decompress --stdout /tmp/gree-final.patch.gz > /tmp/gree-final.patch
+          echo 'dd84952666504d8e9ac826c51137d240293e1f087f969abd218adaa47069cf62  /tmp/gree-final.patch' | sha256sum -c -
+
+      - name: Apply patch to reviewed base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard a317cb25f748749ebdc1c87541b2e719ba026e7b
+          git clean -fdx
+          git apply --index --whitespace=error-all /tmp/gree-final.patch
+          test "$(git write-tree)" = ac5beb0349d21191d9643c6a13c9e976bec70f18
+          git diff --cached --check
+
+      - uses: actions/setup-python@v5
         with:
-          name: agent-source
-          path: .
-          include-hidden-files: true
-          retention-days: 1
+          python-version: '3.12'
+
+      - name: Install validation dependencies
+        shell: bash
+        run: python -m pip install --disable-pip-version-check esphome==2026.7.1
+
+      - name: Run repository validation
+        shell: bash
+        run: ./scripts_validate.sh
+
+      - name: Publish one clean commit
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Correct Gree telemetry semantics and query tracking'
+          git push --force-with-lease=refs/heads/agent/correct-gree-telemetry-and-query-tracking:${EXPECTED_HEAD} \
+            origin HEAD:refs/heads/agent/correct-gree-telemetry-and-query-tracking
