@@ -32,9 +32,9 @@ CONFIG_SCHEMA = cv.Schema(
             cv.Range(min=cv.TimePeriod(milliseconds=325), max=cv.TimePeriod(seconds=5)),
         ),
         cv.Optional(CONF_QUERY_RECOVERED_DATA, default=True): cv.boolean,
-        cv.Optional(CONF_QUIESCE_DELAY, default="750ms"): cv.All(
+        cv.Optional(CONF_QUIESCE_DELAY, default="1800ms"): cv.All(
             cv.positive_time_period_milliseconds,
-            cv.Range(min=cv.TimePeriod(milliseconds=500), max=cv.TimePeriod(seconds=5)),
+            cv.Range(min=cv.TimePeriod(milliseconds=1600), max=cv.TimePeriod(seconds=5)),
         ),
         cv.Optional(CONF_REPEAT_INTERVAL): cv.All(
             cv.positive_time_period_milliseconds,
