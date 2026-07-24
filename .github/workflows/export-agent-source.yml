@@ -1,0 +1,33 @@
+name: export-agent-source
+
+on:
+  pull_request:
+    branches: [codex/add-compatibility-and-protocol-discovery-mode]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Record source metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "head_sha=${{ github.event.pull_request.head.sha }}"
+            echo "base_sha=${{ github.event.pull_request.base.sha }}"
+            echo "head_tree=$(git rev-parse '${{ github.event.pull_request.head.sha }}^{tree}')"
+            echo "base_tree=$(git rev-parse '${{ github.event.pull_request.base.sha }}^{tree}')"
+          } > .agent-source-metadata
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-source
+          path: .
+          include-hidden-files: true
+          retention-days: 1
