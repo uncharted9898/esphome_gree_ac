@@ -184,51 +184,78 @@ void SinclairACCNT::loop()
     /* we have a frame from AC */
     if (this->serialProcess_.state == STATE_COMPLETE)
     {
-        /* do not forget to order for restart of the recieve state machine */
+        /* do not forget to order for restart of the receive state machine */
         this->serialProcess_.state = STATE_RESTART;
-        /* log for ESPHome debug */
         log_packet(this->serialProcess_.data);
 
         const auto validation = verify_packet();
-        if (validation == PacketValidationResult::INVALID_TOO_SHORT || validation == PacketValidationResult::INVALID_LENGTH || validation == PacketValidationResult::INVALID_CHECKSUM) {
+        const bool invalid = validation == PacketValidationResult::INVALID_TOO_SHORT ||
+                             validation == PacketValidationResult::INVALID_LENGTH ||
+                             validation == PacketValidationResult::INVALID_CHECKSUM;
+        if (invalid) {
             this->reset_parser();
         } else {
-        const bool known = validation == PacketValidationResult::VALID_KNOWN;
-        if (known) this->record_received_packet(true);  // Unsupported traffic is not proof of HVAC health.
-        this->log_packet_difference(this->serialProcess_.data);
-        this->retain_payload(this->serialProcess_.data[3], std::vector<uint8_t>(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1));
-        const std::string packet_description = "RX cmd=0x" + format_hex_pretty(std::vector<uint8_t>{this->serialProcess_.data[3]});
-        if (!known) {
-            ESP_LOGD(TAG, "RX valid unsupported command 0x%02X retained for discovery", this->serialProcess_.data[3]);
-            if (this->log_unknown_ && !this->log_rx_) this->log_packet(this->serialProcess_.data);
-            const size_t n = std::min(this->serialProcess_.data.size(), static_cast<size_t>(this->maximum_hex_length_));
-            const std::string unknown_packet_description = format_hex_pretty(std::vector<uint8_t>(this->serialProcess_.data.begin(), this->serialProcess_.data.begin() + n));
-            this->record_last_packet_diagnostics(this->serialProcess_.data.size(), this->serialProcess_.data[3], packet_description, &unknown_packet_description);
-        } else {
-        this->record_last_packet_diagnostics(this->serialProcess_.data.size(), this->serialProcess_.data[3], packet_description);
+            const bool climate_report = validation == PacketValidationResult::VALID_KNOWN;
+            const bool diagnostic_report = validation == PacketValidationResult::VALID_DIAGNOSTIC;
+            const bool known = climate_report || diagnostic_report;
 
-        /* A valid recieved packet of accepted type marks module as being ready */
-        if (this->state_ != ACState::Ready)
-        {
-            this->state_ = ACState::Ready;  
-            Component::status_clear_error();
-            this->last_packet_sent_ = millis();
-        }
+            // Every checksum-valid frame is counted. Only recovered climate or
+            // diagnostic commands prove HVAC communication health.
+            this->record_received_packet(known, known);
+            this->log_packet_difference(this->serialProcess_.data);
 
-        handle_packet(); /* Reports are acknowledgements as well as state updates. */
-        const std::vector<uint8_t> payload(this->serialProcess_.data.begin() + 4, this->serialProcess_.data.end() - 1);
-        this->handle_active_control_response(payload); /* Verify after decoded state has been updated. */
+            const std::vector<uint8_t> payload(this->serialProcess_.data.begin() + 4,
+                                               this->serialProcess_.data.end() - 1);
+            this->retain_payload(this->serialProcess_.data[3], payload);
+
+            const std::string packet_description =
+                "RX cmd=0x" + format_hex_pretty(std::vector<uint8_t>{this->serialProcess_.data[3]});
+            if (!known) {
+                ESP_LOGD(TAG, "RX valid unsupported command 0x%02X retained for discovery",
+                         this->serialProcess_.data[3]);
+                if (this->log_unknown_ && !this->log_rx_) this->log_packet(this->serialProcess_.data);
+                const size_t n = std::min(this->serialProcess_.data.size(),
+                                          static_cast<size_t>(this->maximum_hex_length_));
+                const std::string unknown_packet_description = format_hex_pretty(
+                    std::vector<uint8_t>(this->serialProcess_.data.begin(),
+                                         this->serialProcess_.data.begin() + n));
+                this->record_last_packet_diagnostics(this->serialProcess_.data.size(),
+                                                     this->serialProcess_.data[3],
+                                                     packet_description,
+                                                     &unknown_packet_description);
+            } else {
+                if (diagnostic_report) {
+                    ESP_LOGD(TAG, "RX known OEM diagnostic command 0x%02X retained",
+                             this->serialProcess_.data[3]);
+                }
+                this->record_last_packet_diagnostics(this->serialProcess_.data.size(),
+                                                     this->serialProcess_.data[3],
+                                                     packet_description);
+
+                // Only 0x31 is a climate state report and may acknowledge the
+                // normal poll/control request lifecycle.
+                if (climate_report) {
+                    if (this->state_ != ACState::Ready)
+                    {
+                        this->state_ = ACState::Ready;
+                        Component::status_clear_error();
+                        this->last_packet_sent_ = millis();
+                    }
+
+                    handle_packet();
+                    this->handle_active_control_response(payload);
+                }
+            }
+            this->reset_parser();
         }
-        this->reset_parser();
-    }  // closes validation else
-    }  // closes: if (serialProcess_.state == STATE_COMPLETE)
+    }
 
     this->publish_diagnostics();
     this->publish_request_diagnostics();
-    /* we will send a packet to the AC as a reponse to indicate changes */
+    /* we will send a packet to the AC as a response to indicate changes */
     send_packet();
 
-    /* if there are no packets for 5 seconds - mark module as not ready */
+    /* if there are no known packets for 5 seconds - mark module as not ready */
     if (millis() - this->last_packet_received_ >= protocol::COMMUNICATION_TIMEOUT_MS)
     {
         if (this->state_ != ACState::Initializing)
@@ -571,6 +598,7 @@ SinclairACCNT::PacketValidationResult SinclairACCNT::verify_packet()
     const auto result = sinclair_ac_protocol::parse(this->serialProcess_.data, frame);
     switch (result) {
         case sinclair_ac_protocol::Result::VALID_KNOWN: return PacketValidationResult::VALID_KNOWN;
+        case sinclair_ac_protocol::Result::VALID_DIAGNOSTIC: return PacketValidationResult::VALID_DIAGNOSTIC;
         case sinclair_ac_protocol::Result::VALID_UNKNOWN: return PacketValidationResult::VALID_UNKNOWN;
         case sinclair_ac_protocol::Result::TOO_SHORT:
             this->too_short_frames_++;
@@ -633,24 +661,31 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
 {
     bool hasChanged = false;
     this->last_report_payload_ = payload;
-    if (payload.size() > 44) {
-        const bool refresh_due = millis() - this->last_candidate_telemetry_byte_44_publish_ >= 60000;
-        const bool changed = !this->has_published_candidate_telemetry_byte_44_ || payload[44] != this->published_candidate_telemetry_byte_44_;
-        if (changed || refresh_due) {
-            if (this->candidate_telemetry_byte_44_raw_sensor_) this->candidate_telemetry_byte_44_raw_sensor_->publish_state(payload[44]);
-        // Diagnostic-only and opt-in.  Byte 44 has no assigned physical meaning.
-            if (this->candidate_byte_44_temperature_hypothesis_sensor_) this->candidate_byte_44_temperature_hypothesis_sensor_->publish_state((payload[44] - 16) / 2.0f);
-            this->published_candidate_telemetry_byte_44_ = payload[44];
-            this->has_published_candidate_telemetry_byte_44_ = true;
-            this->last_candidate_telemetry_byte_44_publish_ = millis();
-        }
-    }
+
     if (this->fan_profile_ == FanProfile::AUTO && !this->gree_fan_layout_detected_ &&
         payload.size() > protocol::REPORT_FAN_SPD1_BYTE &&
         payload[protocol::REPORT_FAN_SPD1_BYTE] == 0x08 &&
         (payload[protocol::REPORT_FAN_SPD2_BYTE] & protocol::REPORT_GREE_FAN_MASK) <= protocol::REPORT_GREE_FAN_HIGH) {
         this->gree_fan_layout_detected_ = true;
         ESP_LOGD(TAG, "Detected persistent Gree four-speed fan layout from valid report");
+    }
+
+    if (payload.size() > 44) {
+        const bool refresh_due = millis() - this->last_candidate_telemetry_byte_44_publish_ >= 60000;
+        const bool changed = !this->has_published_candidate_telemetry_byte_44_ ||
+                             payload[44] != this->published_candidate_telemetry_byte_44_;
+        if (changed || refresh_due) {
+            if (this->candidate_telemetry_byte_44_raw_sensor_) {
+                this->candidate_telemetry_byte_44_raw_sensor_->publish_state(payload[44]);
+            }
+            if (this->candidate_byte_44_temperature_hypothesis_sensor_) {
+                this->candidate_byte_44_temperature_hypothesis_sensor_->publish_state(
+                    decode_current_temperature_field(payload[44], this->uses_gree_fan_layout()));
+            }
+            this->published_candidate_telemetry_byte_44_ = payload[44];
+            this->has_published_candidate_telemetry_byte_44_ = true;
+            this->last_candidate_telemetry_byte_44_publish_ = millis();
+        }
     }
     this->report_payload_ = &payload;
 
@@ -676,8 +711,11 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
     /* if there is no external sensor mapped to represent current temperature we will get data from AC unit */
     if (this->current_temperature_sensor_ == nullptr)
     {
-        float newCurrentTemperature = (float)((((*this->report_payload_)[protocol::REPORT_TEMP_ACT_BYTE] & protocol::REPORT_TEMP_ACT_MASK) >> protocol::REPORT_TEMP_ACT_POS)
-            - protocol::REPORT_TEMP_ACT_OFF) / protocol::REPORT_TEMP_ACT_DIV;
+        const uint8_t raw_current_temperature = static_cast<uint8_t>(
+            ((*this->report_payload_)[protocol::REPORT_TEMP_ACT_BYTE] & protocol::REPORT_TEMP_ACT_MASK) >>
+            protocol::REPORT_TEMP_ACT_POS);
+        const float newCurrentTemperature =
+            decode_current_temperature_field(raw_current_temperature, this->uses_gree_fan_layout());
         if (this->current_temperature != newCurrentTemperature) hasChanged = true;
         this->update_current_temperature(newCurrentTemperature);
     }

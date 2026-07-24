@@ -53,7 +53,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: agent/refine-livo-telemetry-and-energy
+      ref: agent/rtl8720cf-operating-telemetry
     refresh: 5min
     components:
       - sinclair_ac
@@ -203,7 +203,9 @@ gree_oem_boot_probe:
   frame_spacing: 450ms
   quiesce_delay: 1800ms
   query_recovered_data: true
-  repeat_interval: 2min
+  # The complete discovery sweep runs once; scheduled cycles refresh only the 0x35
+  # outdoor operating page after climate traffic becomes idle.
+  repeat_interval: 30s
   restore_control: true
 
 gree_oem_report_sensors:
@@ -224,6 +226,15 @@ gree_oem_report_sensors:
     id: gree_report_0x35
     name: ${friendly_name} Last 0x35 Outdoor Report Payload
     entity_category: diagnostic
+  last_0x36_payload:
+    name: ${friendly_name} Last 0x36 Diagnostic Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x3c_payload:
+    name: ${friendly_name} Last 0x3C Service Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+
   last_0x40_payload:
     name: ${friendly_name} Last 0x40 Extended Energy Payload Copy
     entity_category: diagnostic
@@ -243,8 +254,17 @@ gree_oem_report_sensors:
     name: ${friendly_name} Indoor Evaporator Temperature
     entity_category: diagnostic
 
-  outdoor_operating_value_raw:
-    name: ${friendly_name} Outdoor Report Byte 10 Raw
+  compressor_frequency:
+    name: ${friendly_name} Compressor Frequency
+    entity_category: diagnostic
+  outdoor_fan_speed_raw:
+    name: ${friendly_name} Outdoor Fan Speed Raw
+    entity_category: diagnostic
+  expansion_valve_position:
+    name: ${friendly_name} Expansion Valve Position Raw
+    entity_category: diagnostic
+  expansion_valve_closing:
+    name: ${friendly_name} Expansion Valve Closing
     entity_category: diagnostic
   outdoor_ambient_temperature_candidate:
     name: ${friendly_name} Outdoor Ambient Temperature
@@ -285,49 +305,6 @@ sensor:
       }
       if (start + 2 > s.size()) return NAN;
       return static_cast<float>(strtol(s.substr(start, 2).c_str(), nullptr, 16) - 40);
-
-  # 0x34 payload[25] is 0x44 / 68 on the tested unit. OEM firmware contains
-  # HumSen/curhum/sethum properties, making raw percent a testable candidate.
-  - platform: template
-    name: ${friendly_name} Indoor Relative Humidity Candidate
-    id: gree_indoor_humidity_candidate
-    unit_of_measurement: "%"
-    device_class: humidity
-    state_class: measurement
-    accuracy_decimals: 0
-    entity_category: diagnostic
-    update_interval: 10s
-    lambda: |-
-      const std::string &s = id(gree_report_0x34).state;
-      size_t start = 0;
-      for (size_t i = 0; i < 25; ++i) {
-        start = s.find('.', start);
-        if (start == std::string::npos) return NAN;
-        ++start;
-      }
-      if (start + 2 > s.size()) return NAN;
-      const int raw = strtol(s.substr(start, 2).c_str(), nullptr, 16);
-      if (raw < 0 || raw > 100) return NAN;
-      return static_cast<float>(raw);
-
-  # 0x33 payload[15] is decimal 24 on this independently known 24 kBTU unit.
-  - platform: template
-    name: ${friendly_name} Nominal Capacity Candidate
-    id: gree_nominal_capacity_candidate
-    unit_of_measurement: kBTU/h
-    accuracy_decimals: 0
-    entity_category: diagnostic
-    update_interval: 30s
-    lambda: |-
-      const std::string &s = id(gree_report_0x33).state;
-      size_t start = 0;
-      for (size_t i = 0; i < 15; ++i) {
-        start = s.find('.', start);
-        if (start == std::string::npos) return NAN;
-        ++start;
-      }
-      if (start + 2 > s.size()) return NAN;
-      return static_cast<float>(strtol(s.substr(start, 2).c_str(), nullptr, 16));
 
   - platform: uptime
     name: ${friendly_name} Uptime

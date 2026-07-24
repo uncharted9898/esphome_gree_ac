@@ -120,7 +120,7 @@ For the normal `0x31` stripped payload indexing used by this component:
 
 - byte 24: older research suggests an I-Feel/remote-sensor temperature candidate;
 - byte 37: older captures suggest possible IR-reception or communication activity;
-- byte 42: confirmed indoor/return-air temperature, `(raw - 16) / 2`;
+- byte 42: indoor/return-air temperature; GREE four-speed units use `raw - 40`;
 - byte 44: unresolved on Livo Gen3 and observed changing, unlike older captures where the equivalent byte remained zero.
 
 These are research targets, not finalized entity names. The byte-statistics output should be compared with deliberate event timestamps before assigning physical meanings.

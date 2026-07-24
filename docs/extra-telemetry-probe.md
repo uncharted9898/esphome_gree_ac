@@ -1,5 +1,11 @@
 # Extra telemetry discovery with an OEM Gree Wi-Fi module
 
+> **Separate cloud/property experiment.** This tool queries an original module
+> over its local UDP interface; it does not prove that every named property is
+> present on the indoor appliance UART. For the fields and read-only selectors
+> recovered from the replacement module's RTL8720CF UART firmware, see
+> [`rtl8720cf-telemetry-map.md`](rtl8720cf-telemetry-map.md).
+
 This research path uses an original Gree Wi-Fi module as a read-only protocol bridge. The module accepts local UDP status requests containing arbitrary property names and translates them into whatever internal appliance communication is required by its firmware.
 
 The included `tools/gree_full_status_probe.py` utility never sends a Gree `cmd` request. It performs only:

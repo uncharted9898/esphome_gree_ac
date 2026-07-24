@@ -40,6 +40,14 @@ inline float decode_target_temperature_field(uint8_t payload_byte) {
                             static_cast<uint8_t>(TARGET_TEMPERATURE_MIN_C));
 }
 
+// GREE four-speed units expose whole-degree room and outdoor temperatures using
+// the same raw-minus-40 representation as their OEM diagnostic reports. The
+// original Sinclair layout uses half-degree units with an offset of 16.
+inline float decode_current_temperature_field(uint8_t raw, bool gree_layout) {
+  if (gree_layout) return static_cast<float>(static_cast<int>(raw) - 40);
+  return static_cast<float>(static_cast<int>(raw) - 16) / 2.0f;
+}
+
 }  // namespace CNT
 }  // namespace sinclair_ac
 }  // namespace esphome

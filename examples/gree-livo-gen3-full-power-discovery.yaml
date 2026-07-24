@@ -54,7 +54,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: agent/discover-gree-power-data
+      ref: agent/rtl8720cf-operating-telemetry
     # Use a short refresh while testing this PR. Delete the ESPHome build files
     # once after switching branches so an older cached component is not reused.
     refresh: 5min
@@ -168,8 +168,9 @@ gree_oem_boot_probe:
   frame_spacing: 450ms
   quiesce_delay: 1800ms
   query_recovered_data: true
-  # Discovery cadence only. Increase to 15min or disable after mapping power.
-  repeat_interval: 2min
+  # After the one-time full discovery sweep, refresh only the 0x35 outdoor
+  # operating page. This keeps compressor/EEV telemetry current.
+  repeat_interval: 30s
   restore_control: true
 
 gree_oem_report_sensors:
@@ -191,6 +192,15 @@ gree_oem_report_sensors:
   last_0x35_payload:
     name: ${friendly_name} Last 0x35 Outdoor Report Payload
     entity_category: diagnostic
+  last_0x36_payload:
+    name: ${friendly_name} Last 0x36 Diagnostic Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x3c_payload:
+    name: ${friendly_name} Last 0x3C Service Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+
   last_0x40_payload:
     name: ${friendly_name} Last 0x40 Energy Payload Copy
     entity_category: diagnostic
@@ -215,8 +225,17 @@ gree_oem_report_sensors:
     name: ${friendly_name} Indoor Secondary Temperature Candidate
     entity_category: diagnostic
 
-  outdoor_operating_value_raw:
-    name: ${friendly_name} Outdoor Operating Value Raw
+  compressor_frequency:
+    name: ${friendly_name} Compressor Frequency
+    entity_category: diagnostic
+  outdoor_fan_speed_raw:
+    name: ${friendly_name} Outdoor Fan Speed Raw
+    entity_category: diagnostic
+  expansion_valve_position:
+    name: ${friendly_name} Expansion Valve Position Raw
+    entity_category: diagnostic
+  expansion_valve_closing:
+    name: ${friendly_name} Expansion Valve Closing
     entity_category: diagnostic
   outdoor_ambient_temperature_candidate:
     name: ${friendly_name} Outdoor Ambient Temperature Candidate
