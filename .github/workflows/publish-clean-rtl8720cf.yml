@@ -119,6 +119,13 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/clean-source"
+
+          # GitHub's Actions installation token cannot create or update workflow
+          # files. Publish the reviewed implementation first; the two workflow
+          # files are applied immediately afterwards through the GitHub connector.
+          git checkout "$BASE_SHA" -- .github/workflows/validation.yml
+          rm -f .github/workflows/rtl8720cf-firmware-audit.yml
+
           git config user.name openai-agent
           git config user.email openai-agent@users.noreply.github.com
           git add -A
