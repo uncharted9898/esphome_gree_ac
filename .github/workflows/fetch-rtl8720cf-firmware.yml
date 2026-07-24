@@ -2,6 +2,11 @@ name: fetch-rtl8720cf-firmware
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - codex/add-compatibility-and-protocol-discovery-mode
+    paths:
+      - .github/workflows/fetch-rtl8720cf-firmware.yml
   push:
     branches:
       - agent/correct-gree-telemetry-direct
