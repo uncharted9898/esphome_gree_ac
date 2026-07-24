@@ -28,20 +28,21 @@ jobs:
     env:
       BASE_SHA: 664c71d87e4fd3931c2c19aebe43bc124f218c59
       TARGET_BRANCH: agent/rtl8720cf-operating-telemetry
-      ARCHIVE_SHA256: fba8ffbad537671bc06c6d78c4b26debdfcb4cc693cc98aac255b5c3a7a0c02e
+      ARCHIVE_SHA256: 6f4a451768f84936b56700fee7bde0bbeb95206e63ed911bc18d58bcbd84c6a2
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/rtl8720cf-telemetry-publisher
           fetch-depth: 0
 
-      - name: Reconstruct and verify the reviewed implementation
+      - name: Reconstruct and verify reviewed source
         shell: bash
         run: |
           set -euo pipefail
-          payload="$RUNNER_TEMP/rtl8720cf-clean-implementation.tar.gz"
-          cat .github/clean-publish/part-* | base64 --decode > "$payload"
+          payload="$RUNNER_TEMP/rtl8720cf-latest-implementation.tar.gz"
+          cat .github/clean-publish/latest-part-* | base64 --decode > "$payload"
           echo "$ARCHIVE_SHA256  $payload" | sha256sum --check --strict
+          test "$(wc -c < "$payload")" -eq 82612
 
           python - "$payload" <<'PY'
           import pathlib
@@ -56,114 +57,15 @@ jobs:
                       raise SystemExit(f"unsafe archive path: {member.name}")
           PY
 
-          test "$(wc -c < "$payload")" -eq 81670
-
-      - name: Create the clean source tree from the reviewed base
+      - name: Create clean source tree from reviewed base
         shell: bash
         run: |
           set -euo pipefail
           clean="$RUNNER_TEMP/clean-source"
           git worktree add --detach "$clean" "$BASE_SHA"
-          tar -xzf "$RUNNER_TEMP/rtl8720cf-clean-implementation.tar.gz" -C "$clean"
+          tar -xzf "$RUNNER_TEMP/rtl8720cf-latest-implementation.tar.gz" -C "$clean"
 
           cd "$clean"
-          cat > scripts_validate.sh <<'VALIDATE'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          cd "$ROOT_DIR"
-
-          cleanup_validation_files() {
-            if [ "${KEEP_VALIDATION_YAML:-0}" != "1" ]; then
-              rm -f examples/.validation-*.yaml
-            fi
-            find . -type d -name __pycache__ -prune -exec rm -rf {} +
-            find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-          }
-          trap cleanup_validation_files EXIT
-
-          python3 -m py_compile \
-            components/sinclair_ac/climate.py \
-            components/gree_oem_boot_probe/__init__.py \
-            components/gree_oem_report_sensors/__init__.py \
-            tools/firmware_research/rtl8720cf_image.py \
-            tools/firmware_research/analyze_rtl8720cf.py \
-            tools/firmware_research/rtl8720cf_properties.py \
-            tools/firmware_research/setup_rtl8720cf.py \
-            tools/firmware_research/load_rtl8720cf_companion.py \
-            tools/firmware_research/seed_rtl8720cf_functions.py \
-            tools/gree_oem_frame_generator.py
-
-          python3 -m unittest \
-            tests/test_rtl8720cf_image.py \
-            tests/test_gree_oem_frame_generator.py
-
-          c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
-            tests/test_protocol_frame.cpp -o /tmp/test_protocol_frame
-          /tmp/test_protocol_frame
-
-          c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
-            tests/test_oem_report_decoder.cpp -o /tmp/test_oem_report_decoder
-          /tmp/test_oem_report_decoder
-
-          c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
-            tests/test_rtl_report_query.cpp -o /tmp/test_rtl_report_query
-          /tmp/test_rtl_report_query
-
-          if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
-            echo 'Examples contain an unpinned or obsolete external component source' >&2
-            exit 1
-          fi
-
-          if ! command -v esphome >/dev/null 2>&1; then
-            echo 'esphome is required for YAML validation' >&2
-            exit 1
-          fi
-          esphome --version | grep -F '2026.7.1'
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          component_path = Path('components').resolve()
-          sources = (
-              Path('examples/gree-livo-oem-boot-probe.yaml'),
-              Path('examples/gree-livo-gen3-refined-discovery.yaml'),
-              Path('examples/gree-livo-gen3-full-power-discovery.yaml'),
-          )
-          pattern = re.compile(
-              r'(?m)^  - source:\n'
-              r'      type: git\n'
-              r'      url: https://github\.com/uncharted9898/esphome_gree_ac\n'
-              r'      ref: codex/add-compatibility-and-protocol-discovery-mode\n'
-          )
-          replacement = (
-              '  - source:\n'
-              '      type: local\n'
-              f'      path: {component_path}\n'
-          )
-          for source in sources:
-              target = source.with_name(f'.validation-{source.name}')
-              localized, count = pattern.subn(replacement, source.read_text(), count=1)
-              if count != 1:
-                  raise SystemExit(f'{source}: expected one branch source, found {count}')
-              target.write_text(localized)
-              print(target)
-          PY
-
-          for example in \
-            examples/gree-livo-gen3-receive-only.yaml \
-            examples/gree-livo-gen3-poll-only.yaml \
-            examples/gree-livo-gen3-control.yaml \
-            examples/.validation-gree-livo-gen3-refined-discovery.yaml \
-            examples/.validation-gree-livo-gen3-full-power-discovery.yaml \
-            examples/.validation-gree-livo-oem-boot-probe.yaml; do
-            esphome config "$example"
-          done
-          VALIDATE
-          chmod +x scripts_validate.sh
-
           git diff --check
           test ! -e .github/clean-publish
           test ! -e .github/agent-transfer
@@ -196,6 +98,7 @@ jobs:
             tools/firmware_research/load_rtl8720cf_companion.py \
             tools/firmware_research/seed_rtl8720cf_functions.py \
             tools/gree_oem_frame_generator.py
+
           python -m unittest \
             tests/test_rtl8720cf_image.py \
             tests/test_gree_oem_frame_generator.py
@@ -206,33 +109,24 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
             tests/test_protocol_frame.cpp -o "$RUNNER_TEMP/test_protocol_frame"
           "$RUNNER_TEMP/test_protocol_frame"
+
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
             tests/test_oem_report_decoder.cpp -o "$RUNNER_TEMP/test_oem_report_decoder"
           "$RUNNER_TEMP/test_oem_report_decoder"
+
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
             tests/test_rtl_report_query.cpp -o "$RUNNER_TEMP/test_rtl_report_query"
           "$RUNNER_TEMP/test_rtl_report_query"
 
-          if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
-            echo 'Examples contain an unpinned or obsolete external component source' >&2
-            exit 1
-          fi
           git diff --check
           test -z "$(find . -type d -name __pycache__ -print -quit)"
           test -z "$(find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit)"
 
-      - name: Create and push one clean implementation commit
+      - name: Create and push clean implementation commit
         shell: bash
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/clean-source"
-
-          # GitHub's Actions installation token cannot create or update workflow
-          # files. Publish the reviewed implementation first; the two workflow
-          # files are applied immediately afterwards through the GitHub connector.
-          git checkout "$BASE_SHA" -- .github/workflows/validation.yml
-          rm -f .github/workflows/rtl8720cf-firmware-audit.yml
-
           git config user.name openai-agent
           git config user.email openai-agent@users.noreply.github.com
           git add -A
@@ -247,7 +141,7 @@ jobs:
           git push --force origin "HEAD:refs/heads/$TARGET_BRANCH"
           git rev-parse HEAD | tee "$RUNNER_TEMP/final-sha"
 
-      - name: Install ESPHome validation toolchain
+      - name: Install ESPHome 2026.7.1
         shell: bash
         run: |
           set -euo pipefail
@@ -271,53 +165,13 @@ jobs:
           SECRETS
           sed -i 's/^          //' examples/secrets.yaml
 
-      - name: Prepare local telemetry validation YAMLs
+      - name: Run repository validation
         shell: bash
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/clean-source"
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          component_path = Path('components').resolve()
-          sources = (
-              Path('examples/gree-livo-oem-boot-probe.yaml'),
-              Path('examples/gree-livo-gen3-refined-discovery.yaml'),
-              Path('examples/gree-livo-gen3-full-power-discovery.yaml'),
-          )
-          pattern = re.compile(
-              r'(?m)^  - source:\n'
-              r'      type: git\n'
-              r'      url: https://github\.com/uncharted9898/esphome_gree_ac\n'
-              r'      ref: codex/add-compatibility-and-protocol-discovery-mode\n'
-          )
-          replacement = (
-              '  - source:\n'
-              '      type: local\n'
-              f'      path: {component_path}\n'
-          )
-          for source in sources:
-              target = source.with_name(f'.validation-{source.name}')
-              localized, count = pattern.subn(replacement, source.read_text(), count=1)
-              if count != 1:
-                  raise SystemExit(f'{source}: expected one branch source, found {count}')
-              target.write_text(localized)
-              print(target)
-          PY
-
-      - name: Validate receive-only configuration
-        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/gree-livo-gen3-receive-only.yaml
-      - name: Validate poll-only configuration
-        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/gree-livo-gen3-poll-only.yaml
-      - name: Validate control configuration
-        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/gree-livo-gen3-control.yaml
-      - name: Validate refined telemetry configuration
-        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/.validation-gree-livo-gen3-refined-discovery.yaml
-      - name: Validate full telemetry configuration
-        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/.validation-gree-livo-gen3-full-power-discovery.yaml
-      - name: Validate OEM boot probe configuration
-        run: cd "$RUNNER_TEMP/clean-source" && esphome config examples/.validation-gree-livo-oem-boot-probe.yaml
+          export PYTHONDONTWRITEBYTECODE=1
+          KEEP_VALIDATION_YAML=1 ./scripts_validate.sh
 
       - name: Compile standard hardware examples
         shell: bash
