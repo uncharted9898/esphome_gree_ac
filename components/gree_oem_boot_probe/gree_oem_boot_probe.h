@@ -45,6 +45,7 @@ class GreeOemBootProbe : public Component {
     ESP_LOGCONFIG(TAG, "Gree OEM boot/telemetry probe:");
     ESP_LOGCONFIG(TAG, "  Start delay: %u ms", this->start_delay_ms_);
     ESP_LOGCONFIG(TAG, "  Frame spacing: %u ms", this->frame_spacing_ms_);
+    ESP_LOGCONFIG(TAG, "  Probe response window: %u ms", this->query_spacing_ms_());
     ESP_LOGCONFIG(TAG, "  Recovered telemetry queries: %s", YESNO(this->query_recovered_data_));
     ESP_LOGCONFIG(TAG, "  Query quiesce delay: %u ms", this->quiesce_delay_ms_);
     ESP_LOGCONFIG(TAG, "  Repeat interval: %u ms", this->repeat_interval_ms_);
@@ -52,6 +53,8 @@ class GreeOemBootProbe : public Component {
   }
 
  protected:
+  uint32_t query_spacing_ms_() const { return this->frame_spacing_ms_ < 900 ? 900 : this->frame_spacing_ms_; }
+
   void begin_initial_sequence_() {
     this->sequence_active_ = true;
     this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
@@ -91,32 +94,43 @@ class GreeOemBootProbe : public Component {
   }
 
   void run_recovered_queries_() {
+    const uint32_t spacing = this->query_spacing_ms_();
     ESP_LOGI(TAG, "Querying OEM capability, selector 6/7, fault, status/power-path, outdoor, and monthly-energy reports");
+    ESP_LOGI(TAG, "Temporary raw RX logging enabled; each request has a %u ms response window", spacing);
+
+    // The normal YAML intentionally disables full RX logging. Enable it only
+    // while the climate component is in receive-only mode so duplicate 0x31
+    // fallbacks and otherwise unchanged replies remain visible and attributable
+    // to the immediately preceding request.
+    this->climate_->set_debug(true, false, true, true, 256);
+
     this->send_(QUERY_DEVICE_CAPABILITIES, "device capabilities query -> expected 0x47");
-    this->set_timeout("gree_oem_query_selector_6", this->frame_spacing_ms_,
+    this->set_timeout("gree_oem_query_selector_6", spacing,
                       [this]() { this->send_(QUERY_SECONDARY_SELECTOR_6, "secondary selector 6 query (wire 0x01)"); });
-    this->set_timeout("gree_oem_query_selector_7", this->frame_spacing_ms_ * 2,
+    this->set_timeout("gree_oem_query_selector_7", spacing * 2,
                       [this]() { this->send_(QUERY_SECONDARY_SELECTOR_7, "secondary selector 7 query (wire 0x02)"); });
-    this->set_timeout("gree_oem_query_combined", this->frame_spacing_ms_ * 3,
+    this->set_timeout("gree_oem_query_combined", spacing * 3,
                       [this]() { this->send_(QUERY_FAULT_COMBINED, "combined/general fault query -> 0x33"); });
-    this->set_timeout("gree_oem_query_indoor", this->frame_spacing_ms_ * 4,
+    this->set_timeout("gree_oem_query_indoor", spacing * 4,
                       [this]() { this->send_(QUERY_FAULT_INDOOR, "indoor fault/data query -> 0x34"); });
-    this->set_timeout("gree_oem_query_outdoor", this->frame_spacing_ms_ * 5,
+    this->set_timeout("gree_oem_query_outdoor", spacing * 5,
                       [this]() { this->send_(QUERY_FAULT_OUTDOOR, "outdoor-unit query -> 0x35"); });
-    this->set_timeout("gree_oem_query_status", this->frame_spacing_ms_ * 6,
+    this->set_timeout("gree_oem_query_status", spacing * 6,
                       [this]() { this->send_(QUERY_STATUS_EXTENDED, "extended status/power-upload query -> 0x31"); });
-    this->set_timeout("gree_oem_query_energy", this->frame_spacing_ms_ * 7,
+    this->set_timeout("gree_oem_query_energy", spacing * 7,
                       [this]() { this->send_(QUERY_ENERGY_MONTH, "extended/monthly energy query -> 0x40; 0x31 fallback observed on Livo Gen3"); });
-    this->set_timeout("gree_oem_query_finish", this->frame_spacing_ms_ * 8 + 1000,
+    this->set_timeout("gree_oem_query_finish", spacing * 8 + 500,
                       [this]() { this->finish_sequence_(); });
   }
 
   void finish_sequence_() {
+    // Restore the project YAML's normal debug settings after the bounded probe.
+    this->climate_->set_debug(false, false, true, true, 256);
     if (this->restore_control_) {
       this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::CONTROL);
-      ESP_LOGI(TAG, "OEM probe sequence complete; normal climate control enabled");
+      ESP_LOGI(TAG, "OEM probe sequence complete; raw RX logging disabled and normal climate control enabled");
     } else {
-      ESP_LOGI(TAG, "OEM probe sequence complete; climate remains receive-only");
+      ESP_LOGI(TAG, "OEM probe sequence complete; raw RX logging disabled; climate remains receive-only");
     }
     this->sequence_active_ = false;
     this->finished_ = true;
