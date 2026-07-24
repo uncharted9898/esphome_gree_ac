@@ -1,0 +1,117 @@
+name: publish-rtl8720cf-telemetry
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/correct-gree-telemetry-direct
+    paths:
+      - .github/workflows/publish-rtl8720cf-telemetry.yml
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: publish-rtl8720cf-telemetry
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify and apply reviewed source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload='.github/agent-transfer/rtl-telemetry-implementation.tar.gz.b64'
+          test -s "$payload"
+          base64 --decode "$payload" > "$RUNNER_TEMP/rtl-telemetry-implementation.tar.gz"
+          echo '1838cd88fe3317abcde452f4c897e28e73dcec5709e9802b86308fc2bad4dc2f  '"$RUNNER_TEMP/rtl-telemetry-implementation.tar.gz" | sha256sum --check --strict
+
+          if tar -tzf "$RUNNER_TEMP/rtl-telemetry-implementation.tar.gz" | \
+             grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+            echo 'Unsafe archive path detected' >&2
+            exit 1
+          fi
+
+          tar -xzf "$RUNNER_TEMP/rtl-telemetry-implementation.tar.gz" -C .
+
+          # Remove all transport-only files from the resulting source commit.
+          rm -f "$payload"
+          rm -f .github/workflows/publish-rtl8720cf-telemetry.yml
+          rm -f .github/workflows/export-current-source.yml
+          rm -f .github/workflows/fetch-rtl8720cf-firmware.yml
+          rmdir .github/agent-transfer 2>/dev/null || true
+
+          test ! -e "$payload"
+          test ! -e .github/workflows/publish-rtl8720cf-telemetry.yml
+          test ! -e .github/workflows/export-current-source.yml
+          test ! -e .github/workflows/fetch-rtl8720cf-firmware.yml
+          git diff --check
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run native protocol and firmware-analysis tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            components/sinclair_ac/climate.py \
+            components/gree_oem_report_sensors/__init__.py \
+            tools/firmware_research/rtl8720cf_image.py \
+            tools/firmware_research/analyze_rtl8720cf.py \
+            tools/firmware_research/rtl8720cf_properties.py
+          python -m unittest tests.test_rtl8720cf_image -v
+          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_protocol_frame.cpp -o /tmp/test_protocol_frame
+          /tmp/test_protocol_frame
+          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_oem_report_decoder.cpp -o /tmp/test_oem_report_decoder
+          /tmp/test_oem_report_decoder
+          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_rtl_report_query.cpp -o /tmp/test_rtl_report_query
+          /tmp/test_rtl_report_query
+
+      - name: Create and push the production source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'openai-agent'
+          git config user.email 'openai-agent@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'Recover RTL8720CF operating telemetry'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/published-sha"
+
+      - name: Validate ESPHome configuration and compile every hardware example
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install esphome==2026.7.1
+          ./scripts_validate.sh
+          esphome compile examples/gree-livo-gen3-receive-only.yaml
+          esphome compile examples/gree-livo-gen3-poll-only.yaml
+          esphome compile examples/gree-livo-gen3-control.yaml
+          esphome compile examples/gree-livo-oem-boot-probe.yaml
+
+      - name: Dispatch clean validation and firmware-audit runs on the published commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF_NAME}"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/validation.yml/dispatches" \
+            -f ref="$ref"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/rtl8720cf-firmware-audit.yml/dispatches" \
+            -f ref="$ref"
