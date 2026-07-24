@@ -23,12 +23,20 @@ int main() {
   assert(indoor_fields.current_temperature_c == 24.0f);
   assert(indoor_fields.coil_temperature_candidate_c == 20.0f);
   assert(indoor_fields.secondary_temperature_candidate_c == 28.0f);
+  assert(indoor_fields.byte_6_raw == 0x20);
+  assert(indoor_fields.byte_6_bit_5);
   assert(!indoor_fields.byte_14_bit_5);
   assert(indoor_fields.byte_20_raw == 0x00);
   assert(indoor_fields.byte_21_raw == 0x00);
   assert(indoor_fields.byte_36_raw == 0x00);
   assert(indoor_fields.byte_37_raw == 0x00);
   assert(indoor_fields.byte_38_raw == 0x00);
+
+  auto indoor_active_cooling_variant = indoor;
+  indoor_active_cooling_variant[6] = 0x00;
+  assert(decode_indoor_report(indoor_active_cooling_variant, indoor_fields));
+  assert(indoor_fields.byte_6_raw == 0x00);
+  assert(!indoor_fields.byte_6_bit_5);
 
   auto indoor_fault_variant = indoor;
   indoor_fault_variant[14] = 0x20;
