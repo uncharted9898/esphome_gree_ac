@@ -140,20 +140,74 @@ jobs:
           git push --force origin "HEAD:refs/heads/$TARGET_BRANCH"
           git rev-parse HEAD | tee "$RUNNER_TEMP/final-sha"
 
-      - name: Validate ESPHome and compile every hardware example
+      - name: Install ESPHome validation toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install esphome==2026.7.1
+          esphome --version
+
+      - name: Create validation-only secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          cat > examples/secrets.yaml <<'SECRETS'
+          wifi_ssid: validation-network
+          wifi_password: validation-password
+          ota_password: validation-ota-password
+          api_encryption_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          gree_livo_api_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          gree_livo_web_username: validation
+          gree_livo_web_password: validation-password
+          SECRETS
+          sed -i 's/^          //' examples/secrets.yaml
+
+      - name: Run repository validation
         shell: bash
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/clean-source"
           export PYTHONDONTWRITEBYTECODE=1
-          python -m pip install --upgrade pip
-          python -m pip install esphome==2026.7.1
-
           ./scripts_validate.sh
-          esphome compile examples/gree-livo-gen3-receive-only.yaml
-          esphome compile examples/gree-livo-gen3-poll-only.yaml
-          esphome compile examples/gree-livo-gen3-control.yaml
-          esphome compile examples/gree-livo-oem-boot-probe.yaml
+
+      - name: Compile standard hardware examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          for example in \
+            examples/gree-livo-gen3-receive-only.yaml \
+            examples/gree-livo-gen3-poll-only.yaml \
+            examples/gree-livo-gen3-control.yaml; do
+            esphome compile "$example"
+          done
+
+      - name: Compile RTL8720CF telemetry examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          for example in \
+            examples/gree-livo-oem-boot-probe.yaml \
+            examples/gree-livo-gen3-refined-discovery.yaml \
+            examples/gree-livo-gen3-full-power-discovery.yaml; do
+            esphome compile "$example"
+          done
+
+      - name: Clean generated validation files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          rm -f examples/secrets.yaml
+          rm -rf .esphome examples/.esphome
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          git clean -fdX
+          git diff --check
 
       - name: Report published revision
         shell: bash
