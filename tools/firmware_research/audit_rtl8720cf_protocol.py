@@ -1,4 +1,4 @@
-# Evidence-oriented Ghidra audit for a raw GREE RTL8720CF XIP application.
+# Evidence-oriented Ghidra audit for one raw GREE RTL8720CF XIP section.
 # @category Gree
 
 from __future__ import print_function
@@ -14,24 +14,29 @@ OUT_PATH = args[0] if len(args) else "/tmp/rtl8720cf-audit.txt"
 LABEL = args[1] if len(args) > 1 else currentProgram.getName()
 
 KEYWORDS = [
-    "elcen", "energy", "electric", "electricity", "power", "watt", "kwh",
-    "current", "amp", "voltage", "volt", "compressor", "comp", "frequency",
-    "freq", "hz", "eev", "exv", "valve", "load", "service", "diagnostic",
-    "diag", "fault", "error", "status", "report", "selector", "query",
-    "property", "attribute", "uart", "serial", "gree", "gatf", "gatr",
-    "gatd", "ghex", "hum", "temperature", "thermistor", "outdoor",
-    "indoor", "month", "meter", "capacity", "rated", "rpm", "speed",
-    "bus", "phase", "module", "protocol", "cloud", "upload", "download",
+    "elcen", "elc", "energy", "electric", "electricity", "power", "watt",
+    "kwh", "current", "amp", "voltage", "volt", "compressor", "comp",
+    "compressorfqy", "compressortem", "frequency", "freq", "fqy", "hz",
+    "eev", "exv", "valve", "load", "gear", "flow", "service",
+    "diagnostic", "diag", "fault", "error", "status", "report", "selector",
+    "query", "property", "attribute", "uart", "serial", "gree", "gatf",
+    "gatr", "gatd", "ghex", "hum", "temperature", "thermistor", "outdoor",
+    "indoor", "month", "meter", "capacity", "rated", "rpm", "speed", "bus",
+    "phase", "module", "protocol", "cloud", "upload", "download", "inboard",
+    "outboard", "midtype", "devinfo", "energyflow", "watttmp", "fantmod",
 ]
-RESPONSE_COMMANDS = set([0x31, 0x32, 0x33, 0x34, 0x35, 0x40, 0x44, 0x45, 0x46, 0x47])
+RESPONSE_COMMANDS = set([0x31, 0x32, 0x33, 0x34, 0x35, 0x40, 0x44, 0x45,
+                         0x46, 0x47, 0x4D, 0x52])
 REQUEST_COMMANDS = set([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0A, 0x0B])
-MAX_DECOMPILED_FUNCTIONS = 1200
+MAX_DECOMPILED_FUNCTIONS = 1000
 CALL_GRAPH_DEPTH = 3
 
 out = open(OUT_PATH, "w")
 
+
 def emit(value=""):
     out.write(str(value) + "\n")
+
 
 def read_block(block):
     size = int(block.getSize())
@@ -41,8 +46,16 @@ def read_block(block):
         raise RuntimeError("unable to read block %s" % block.getName())
     return bytearray((value & 0xFF) for value in raw_java[:count])
 
+
+def binary_string(data):
+    # Ghidra 11.3 uses Jython 2.7. hashlib accepts a byte string, not a Python
+    # bytearray, under that runtime.
+    return "".join(chr(value & 0xFF) for value in data)
+
+
 def digest(data):
-    return hashlib.sha256(bytearray(data)).hexdigest()
+    return hashlib.sha256(binary_string(data)).hexdigest()
+
 
 def function_bytes(function):
     merged = bytearray()
@@ -54,6 +67,7 @@ def function_bytes(function):
         except Exception:
             pass
     return merged
+
 
 def function_scalars(function):
     values = set()
@@ -73,6 +87,7 @@ def function_scalars(function):
                         pass
     return values
 
+
 def ascii_strings(block, data, minimum=4):
     result = []
     begin = None
@@ -83,11 +98,14 @@ def ascii_strings(block, data, minimum=4):
                 begin = index
             continue
         if begin is not None and index - begin >= minimum:
-            result.append((block.getStart().add(begin), data[begin:index].decode("ascii", "replace")))
+            result.append((block.getStart().add(begin),
+                           data[begin:index].decode("ascii", "replace")))
         begin = None
     if begin is not None and len(data) - begin >= minimum:
-        result.append((block.getStart().add(begin), data[begin:].decode("ascii", "replace")))
+        result.append((block.getStart().add(begin),
+                       data[begin:].decode("ascii", "replace")))
     return result
+
 
 def refs_to(address):
     result = []
@@ -95,6 +113,7 @@ def refs_to(address):
     while iterator.hasNext():
         result.append(iterator.next())
     return result
+
 
 def select(function, reason, selected):
     if function is None:
@@ -104,6 +123,7 @@ def select(function, reason, selected):
         selected[key] = {"function": function, "reasons": []}
     if reason not in selected[key]["reasons"]:
         selected[key]["reasons"].append(reason)
+
 
 def pointer_function(value):
     if value in (0, 0xFFFFFFFF):
@@ -117,7 +137,8 @@ def pointer_function(value):
         function = currentProgram.getFunctionManager().getFunctionContaining(address)
     return function
 
-def dword_context(block, data, offset, radius=8):
+
+def dword_context(block, data, offset, radius=12):
     aligned = offset & ~3
     start = max(0, aligned - radius * 4)
     end = min(len(data), aligned + (radius + 1) * 4)
@@ -127,6 +148,22 @@ def dword_context(block, data, offset, radius=8):
                  (data[index + 2] << 16) | (data[index + 3] << 24))
         result.append((block.getStart().add(index), value))
     return result
+
+
+def instruction_text(function):
+    lines = []
+    iterator = currentProgram.getListing().getInstructions(function.getBody(), True)
+    while iterator.hasNext():
+        instruction = iterator.next()
+        try:
+            raw = " ".join("%02X" % (value & 0xFF)
+                           for value in instruction.getBytes())
+        except Exception:
+            raw = ""
+        lines.append("%s %-11s %s" %
+                     (instruction.getAddress(), raw, instruction.toString()))
+    return lines
+
 
 memory = currentProgram.getMemory()
 functions = currentProgram.getFunctionManager()
@@ -144,7 +181,8 @@ emit("Compiler: %s" % currentProgram.getCompilerSpec().getCompilerSpecID())
 emit("Memory blocks:")
 for block, data in blocks:
     emit("  %s %s-%s bytes=%d sha256=%s" %
-         (block.getName(), block.getStart(), block.getEnd(), len(data), digest(data)))
+         (block.getName(), block.getStart(), block.getEnd(), len(data),
+          digest(data)))
 emit()
 
 all_strings = []
@@ -154,8 +192,14 @@ keyword_strings = []
 for address, text in all_strings:
     lower = text.lower()
     matches = sorted(set(keyword for keyword in KEYWORDS if keyword in lower))
-    if matches:
-        keyword_strings.append((address, text, matches))
+    if not matches:
+        continue
+    keyword_strings.append((address, text, matches))
+    try:
+        if getDataAt(address) is None:
+            createAsciiString(address)
+    except Exception:
+        pass
 
 emit("=== KEYWORD STRINGS ===")
 for address, text, matches in keyword_strings:
@@ -169,7 +213,8 @@ for string_address, text, matches in keyword_strings:
     for ref in refs_to(string_address):
         source = ref.getFromAddress()
         select(functions.getFunctionContaining(source),
-               "string-ref %s -> %s %s" % (source, string_address, text), selected)
+               "string-ref %s -> %s %s" %
+               (source, string_address, text), selected)
 
     value = string_address.getOffset() & 0xFFFFFFFF
     needle = bytearray([value & 0xFF, (value >> 8) & 0xFF,
@@ -196,7 +241,8 @@ for string_address, text, matches in keyword_strings:
 
 emit("=== RAW PROPERTY/TABLE POINTERS ===")
 for string_address, text, pointer_address, context in pointer_records:
-    emit("string %s %s pointer-at %s" % (string_address, text, pointer_address))
+    emit("string %s %s pointer-at %s" %
+         (string_address, text, pointer_address))
     emit("  " + " ".join("%s=%08X" % pair for pair in context))
 emit()
 
@@ -218,16 +264,19 @@ while iterator.hasNext():
         "request_hits": request_hits,
     }
 
-    if response_hits:
-        select(function, "response constants=%s" % response_hits, selected)
+    if len(response_hits) >= 3:
+        select(function, "multi-response dispatcher=%s" % response_hits,
+               selected)
     if 0x7E in scalars and request_hits:
         select(function, "sync/request constants=%s" % request_hits, selected)
-    if 0x7E in scalars and (0x19 in scalars or 0x2C in scalars or 0x2F in scalars):
+    if 0x7E in scalars and (0x19 in scalars or 0x2C in scalars or
+                            0x2F in scalars):
         select(function, "frame length and sync constants", selected)
-    if len(response_hits) >= 3:
-        select(function, "multi-response dispatcher=%s" % response_hits, selected)
     if 0x19 in scalars and 0x03 in scalars:
         select(function, "long command-0x03 candidate", selected)
+    if 0x40 in scalars and (0x35 in scalars or 0x19 in scalars or
+                            0x03 in scalars):
+        select(function, "0x40 electrical-report candidate", selected)
 
 emit("=== ALL FUNCTION INDEX ===")
 for entry in sorted(metadata.keys()):
@@ -240,7 +289,7 @@ for entry in sorted(metadata.keys()):
 emit()
 
 # Pull in wrappers, UART writers, checksums and dispatch callees/callers that do
-# not contain protocol constants themselves.
+# not contain protocol constants or property names themselves.
 queue = deque((selected[key]["function"], 0) for key in sorted(selected.keys()))
 visited = {}
 while queue:
@@ -276,24 +325,36 @@ for key in sorted(selected.keys()):
     callers = []
     callees = []
     try:
-        callers = sorted(item.getEntryPoint().toString()
-                         for item in function.getCallingFunctions(monitor))
+        callers = sorted(caller.getEntryPoint().toString()
+                         for caller in function.getCallingFunctions(monitor))
     except Exception:
         pass
     try:
-        callees = sorted(item.getEntryPoint().toString()
-                         for item in function.getCalledFunctions(monitor))
+        callees = sorted(callee.getEntryPoint().toString()
+                         for callee in function.getCalledFunctions(monitor))
     except Exception:
         pass
     emit("%s name=%s size=%d hash=%s" %
-         (function.getEntryPoint(), function.getName(), item["size"], item["hash"]))
+         (function.getEntryPoint(), function.getName(), item["size"],
+          item["hash"]))
     emit("  reasons: %s" % " || ".join(selected[key]["reasons"]))
     emit("  responses: %s requests: %s" %
          (item.get("response_hits", []), item.get("request_hits", [])))
     emit("  scalars: %s" % " ".join("0x%X" % value for value in
-                                     sorted(item["scalars"]) if value <= 0xFFFFFFFF))
+                                     sorted(item["scalars"])
+                                     if value <= 0xFFFFFFFF))
     emit("  callers: %s" % " ".join(callers))
     emit("  callees: %s" % " ".join(callees))
+emit()
+
+emit("=== SELECTED FUNCTION DISASSEMBLY ===")
+for key in sorted(selected.keys()):
+    function = selected[key]["function"]
+    emit("\n----- %s %s -----" %
+         (function.getEntryPoint(), function.getName()))
+    emit("reasons: %s" % " || ".join(selected[key]["reasons"]))
+    for line in instruction_text(function):
+        emit(line)
 emit()
 
 emit("=== CHECKSUM-VALID 7E 7E FRAMES ===")
@@ -326,7 +387,8 @@ for count, key in enumerate(sorted(selected.keys())):
         emit("DECOMPILATION LIMIT REACHED: %d" % MAX_DECOMPILED_FUNCTIONS)
         break
     function = selected[key]["function"]
-    emit("\n----- %s %s -----" % (function.getEntryPoint(), function.getName()))
+    emit("\n----- %s %s -----" %
+         (function.getEntryPoint(), function.getName()))
     emit("reasons: %s" % " || ".join(selected[key]["reasons"]))
     try:
         result = decompiler.decompileFunction(function, 120, monitor)
