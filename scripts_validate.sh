@@ -66,7 +66,7 @@ pattern = re.compile(
     r'(?m)^  - source:\n'
     r'      type: git\n'
     r'      url: https://github\.com/uncharted9898/esphome_gree_ac\n'
-    r'      ref: codex/add-compatibility-and-protocol-discovery-mode\n'
+    r'      ref: [^\n]+\n'
 )
 replacement = (
     '  - source:\n'
@@ -77,7 +77,7 @@ for source in sources:
     target = source.with_name(f'.validation-{source.name}')
     localized, count = pattern.subn(replacement, source.read_text(), count=1)
     if count != 1:
-        raise SystemExit(f'{source}: expected one branch source, found {count}')
+        raise SystemExit(f'{source}: expected one repository source, found {count}')
     target.write_text(localized)
     print(target)
 PY
