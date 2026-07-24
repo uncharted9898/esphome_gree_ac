@@ -2,6 +2,7 @@
 
 The protocol analysis in this branch uses the two archived images below from
 `maxim-smirnov/gree-wifimodule-firmware`, firmware code `362001065279`.
+The complete upstream repository is also available as a [source archive](https://codeload.github.com/maxim-smirnov/gree-wifimodule-firmware/zip/refs/heads/main).
 
 | Image | Archived protocol | Git blob SHA | Upstream binary | Upstream metadata |
 |---|---|---|---|---|
