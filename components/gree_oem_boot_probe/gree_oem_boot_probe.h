@@ -91,17 +91,23 @@ class GreeOemBootProbe : public Component {
   }
 
   void run_recovered_queries_() {
-    ESP_LOGI(TAG, "Querying recovered OEM fault, status/power-path, outdoor, and monthly-energy reports");
-    this->send_(QUERY_FAULT_COMBINED, "combined/general fault query -> 0x33");
-    this->set_timeout("gree_oem_query_indoor", this->frame_spacing_ms_,
+    ESP_LOGI(TAG, "Querying OEM capability, selector 6/7, fault, status/power-path, outdoor, and monthly-energy reports");
+    this->send_(QUERY_DEVICE_CAPABILITIES, "device capabilities query -> expected 0x47");
+    this->set_timeout("gree_oem_query_selector_6", this->frame_spacing_ms_,
+                      [this]() { this->send_(QUERY_SECONDARY_SELECTOR_6, "secondary selector 6 query (wire 0x01)"); });
+    this->set_timeout("gree_oem_query_selector_7", this->frame_spacing_ms_ * 2,
+                      [this]() { this->send_(QUERY_SECONDARY_SELECTOR_7, "secondary selector 7 query (wire 0x02)"); });
+    this->set_timeout("gree_oem_query_combined", this->frame_spacing_ms_ * 3,
+                      [this]() { this->send_(QUERY_FAULT_COMBINED, "combined/general fault query -> 0x33"); });
+    this->set_timeout("gree_oem_query_indoor", this->frame_spacing_ms_ * 4,
                       [this]() { this->send_(QUERY_FAULT_INDOOR, "indoor fault/data query -> 0x34"); });
-    this->set_timeout("gree_oem_query_outdoor", this->frame_spacing_ms_ * 2,
+    this->set_timeout("gree_oem_query_outdoor", this->frame_spacing_ms_ * 5,
                       [this]() { this->send_(QUERY_FAULT_OUTDOOR, "outdoor-unit query -> 0x35"); });
-    this->set_timeout("gree_oem_query_status", this->frame_spacing_ms_ * 3,
+    this->set_timeout("gree_oem_query_status", this->frame_spacing_ms_ * 6,
                       [this]() { this->send_(QUERY_STATUS_EXTENDED, "extended status/power-upload query -> 0x31"); });
-    this->set_timeout("gree_oem_query_energy", this->frame_spacing_ms_ * 4,
+    this->set_timeout("gree_oem_query_energy", this->frame_spacing_ms_ * 7,
                       [this]() { this->send_(QUERY_ENERGY_MONTH, "extended/monthly energy query -> 0x40; 0x31 fallback observed on Livo Gen3"); });
-    this->set_timeout("gree_oem_query_finish", this->frame_spacing_ms_ * 5 + 500,
+    this->set_timeout("gree_oem_query_finish", this->frame_spacing_ms_ * 8 + 1000,
                       [this]() { this->finish_sequence_(); });
   }
 
@@ -141,8 +147,18 @@ class GreeOemBootProbe : public Component {
       0x7E, 0x7E, 0x0E, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x7E, 0x0F};
 
-  // Recovered from the CS532AX/MT7687 command-0x03 builder. Selector zero
-  // expects 0x31; extended selector 4 is the separate monthly-energy path.
+  static constexpr std::array<uint8_t, 6> QUERY_DEVICE_CAPABILITIES{
+      0x7E, 0x7E, 0x03, 0x0A, 0x00, 0x0D};
+
+  // Recovered from the CS532AX/MT7687 command-0x03 builder. Selectors 6 and 7
+  // use the secondary selector byte with wire values 0x01 and 0x02. Selector
+  // zero expects 0x31; secondary selector 0x04 is the monthly-energy path.
+  static constexpr std::array<uint8_t, 28> QUERY_SECONDARY_SELECTOR_6{
+      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x94};
+  static constexpr std::array<uint8_t, 28> QUERY_SECONDARY_SELECTOR_7{
+      0x7E, 0x7E, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
+      0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x95};
   static constexpr std::array<uint8_t, 28> QUERY_FAULT_COMBINED{
       0x7E, 0x7E, 0x19, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x00, 0x00, 0x3B,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x94};
