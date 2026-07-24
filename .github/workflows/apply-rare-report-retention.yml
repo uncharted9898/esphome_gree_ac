@@ -1,0 +1,321 @@
+name: apply-rare-report-retention
+
+on:
+  push:
+    branches: [research/retain-rare-oem-reports]
+    paths: [.github/workflows/apply-rare-report-retention.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/retain-rare-oem-reports
+          fetch-depth: 0
+
+      - name: Apply rare OEM report retention changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          # Keep routine polling history compact while retaining every rare OEM frame.
+          path = "components/sinclair_ac/telemetry_discovery.h"
+          replace_once(
+              path,
+              "  void capture(const CaptureRecord &record) { history_.push_back(record); trim_history(); }",
+              """  bool capture(const CaptureRecord &record) {
+    const uint16_t stream = static_cast<uint16_t>((record.transmitted ? 0x100 : 0) | record.command);
+    const bool routine = (record.transmitted && record.command == 0x01) ||
+                         (!record.transmitted && record.command == 0x31);
+    const auto previous = history_last_payloads_.find(stream);
+    if (routine && previous != history_last_payloads_.end() && previous->second == record.payload) return false;
+    history_last_payloads_[stream] = record.payload;
+    history_.push_back(record);
+    trim_history();
+    return true;
+  }""",
+          )
+          replace_once(
+              path,
+              """  std::string export_csv() const {
+    std::ostringstream out; out << "timestamp_ms,direction,command,payload,mode,requested_fan,target_temperature,indoor_temperature,pending_command\\n";
+    for (const auto &r : history_) out << r.timestamp_ms << ',' << (r.transmitted ? "TX" : "RX") << ",0x" << hex(r.command) << ",\\\"" << payload_hex(r.payload) << "\\\"," << unsigned(r.decoded_mode) << ",\\\"" << r.requested_fan << "\\\"," << r.target_temperature << ',' << r.indoor_temperature << ",\\\"" << r.pending_command << "\\\"\\n";
+    return out.str();
+  }""",
+              """  std::string export_csv(size_t max_chars = 3800) const {
+    const std::string header = "timestamp_ms,direction,command,payload,mode,requested_fan,target_temperature,indoor_temperature,pending_command\\n";
+    std::vector<std::string> lines;
+    lines.reserve(history_.size());
+    for (const auto &r : history_) {
+      std::ostringstream line;
+      line << r.timestamp_ms << ',' << (r.transmitted ? "TX" : "RX") << ",0x" << hex(r.command)
+           << ",\\\"" << payload_hex(r.payload) << "\\\"," << unsigned(r.decoded_mode) << ",\\\""
+           << r.requested_fan << "\\\"," << r.target_temperature << ',' << r.indoor_temperature
+           << ",\\\"" << r.pending_command << "\\\"\\n";
+      lines.push_back(line.str());
+    }
+    size_t start = lines.size();
+    size_t used = header.size();
+    while (start > 0 && used + lines[start - 1].size() <= max_chars) {
+      --start;
+      used += lines[start].size();
+    }
+    std::ostringstream out;
+    out << header;
+    for (size_t i = start; i < lines.size(); ++i) out << lines[i];
+    return out.str();
+  }""",
+          )
+          replace_once(
+              path,
+              "  uint8_t history_depth_{16}, last_command_{0}; std::map<uint8_t, CommandDiscoveryStats> commands_; std::deque<CaptureRecord> history_;",
+              "  uint8_t history_depth_{16}, last_command_{0}; std::map<uint8_t, CommandDiscoveryStats> commands_; std::deque<CaptureRecord> history_; std::map<uint16_t, std::vector<uint8_t>> history_last_payloads_;",
+          )
+
+          # Expose recovered response families and tentative outdoor report values.
+          path = "components/sinclair_ac/esppac.h"
+          replace_once(path, "        void set_protocol_mode(ProtocolMode mode) { this->protocol_mode_ = mode; }", "        void set_protocol_mode(ProtocolMode mode);")
+          replace_once(
+              path,
+              """        void set_last_0x31_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x31_payload_sensor_ = sensor; }
+        void set_last_0x33_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x33_payload_sensor_ = sensor; }
+        void set_last_0x44_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x44_payload_sensor_ = sensor; }
+        void set_last_0x40_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x40_payload_sensor_ = sensor; }""",
+              """        void set_last_0x31_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x31_payload_sensor_ = sensor; }
+        void set_last_0x32_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x32_payload_sensor_ = sensor; }
+        void set_last_0x33_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x33_payload_sensor_ = sensor; }
+        void set_last_0x34_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x34_payload_sensor_ = sensor; }
+        void set_last_0x35_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x35_payload_sensor_ = sensor; }
+        void set_last_0x40_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x40_payload_sensor_ = sensor; }
+        void set_last_0x44_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x44_payload_sensor_ = sensor; }""",
+          )
+          replace_once(
+              path,
+              """        void set_candidate_telemetry_byte_44_raw_sensor(sensor::Sensor *sensor) { this->candidate_telemetry_byte_44_raw_sensor_ = sensor; }
+        void set_candidate_byte_44_temperature_hypothesis_sensor(sensor::Sensor *sensor) { this->candidate_byte_44_temperature_hypothesis_sensor_ = sensor; }""",
+              """        void set_candidate_telemetry_byte_44_raw_sensor(sensor::Sensor *sensor) { this->candidate_telemetry_byte_44_raw_sensor_ = sensor; }
+        void set_candidate_byte_44_temperature_hypothesis_sensor(sensor::Sensor *sensor) { this->candidate_byte_44_temperature_hypothesis_sensor_ = sensor; }
+        void set_outdoor_report_byte_10_raw_sensor(sensor::Sensor *sensor) { this->outdoor_report_byte_10_raw_sensor_ = sensor; }
+        void set_outdoor_report_temperature_13_hypothesis_sensor(sensor::Sensor *sensor) { this->outdoor_report_temperature_13_hypothesis_sensor_ = sensor; }
+        void set_outdoor_report_temperature_14_hypothesis_sensor(sensor::Sensor *sensor) { this->outdoor_report_temperature_14_hypothesis_sensor_ = sensor; }
+        void set_outdoor_report_temperature_15_hypothesis_sensor(sensor::Sensor *sensor) { this->outdoor_report_temperature_15_hypothesis_sensor_ = sensor; }""",
+          )
+          replace_once(
+              path,
+              "        sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *too_short_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *frame_timeout_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr}, *candidate_telemetry_byte_44_raw_sensor_{nullptr}, *candidate_byte_44_temperature_hypothesis_sensor_{nullptr};",
+              "        sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *too_short_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *frame_timeout_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr}, *candidate_telemetry_byte_44_raw_sensor_{nullptr}, *candidate_byte_44_temperature_hypothesis_sensor_{nullptr}, *outdoor_report_byte_10_raw_sensor_{nullptr}, *outdoor_report_temperature_13_hypothesis_sensor_{nullptr}, *outdoor_report_temperature_14_hypothesis_sensor_{nullptr}, *outdoor_report_temperature_15_hypothesis_sensor_{nullptr};",
+          )
+          replace_once(
+              path,
+              "        text_sensor::TextSensor *last_0x31_payload_sensor_{nullptr}, *last_0x33_payload_sensor_{nullptr}, *last_0x44_payload_sensor_{nullptr}, *last_0x40_payload_sensor_{nullptr}, *last_unknown_payload_sensor_{nullptr}, *discovery_summary_sensor_{nullptr}, *capture_export_sensor_{nullptr};",
+              "        text_sensor::TextSensor *last_0x31_payload_sensor_{nullptr}, *last_0x32_payload_sensor_{nullptr}, *last_0x33_payload_sensor_{nullptr}, *last_0x34_payload_sensor_{nullptr}, *last_0x35_payload_sensor_{nullptr}, *last_0x40_payload_sensor_{nullptr}, *last_0x44_payload_sensor_{nullptr}, *last_unknown_payload_sensor_{nullptr}, *discovery_summary_sensor_{nullptr}, *capture_export_sensor_{nullptr};",
+          )
+
+          path = "components/sinclair_ac/esppac.cpp"
+          replace_once(
+              path,
+              """const char *SinclairAC::protocol_mode_name() const {
+    switch (this->protocol_mode_) { case ProtocolMode::RECEIVE_ONLY: return "receive_only"; case ProtocolMode::POLL_ONLY: return "poll_only"; default: return "control"; }
+}
+""",
+              """const char *SinclairAC::protocol_mode_name() const {
+    switch (this->protocol_mode_) { case ProtocolMode::RECEIVE_ONLY: return "receive_only"; case ProtocolMode::POLL_ONLY: return "poll_only"; default: return "control"; }
+}
+void SinclairAC::set_protocol_mode(ProtocolMode mode) {
+    if (this->protocol_mode_ == mode) return;
+    this->protocol_mode_ = mode;
+    this->transmit_warning_logged_ = false;
+    if (this->protocol_mode_sensor_) this->protocol_mode_sensor_->publish_state(this->protocol_mode_name());
+    if (this->receive_only_sensor_) this->receive_only_sensor_->publish_state(this->is_receive_only());
+    if (this->poll_only_sensor_) this->poll_only_sensor_->publish_state(this->is_poll_only());
+}
+""",
+          )
+          replace_once(
+              path,
+              """    // Retain every checksum-valid command, including unsupported commands.
+    // This is observational and deliberately does not acknowledge requests.
+    this->telemetry_capture_.observe(command, payload, millis());""",
+              """    // Retain every checksum-valid command, including unsupported commands.
+    // This is observational and deliberately does not acknowledge requests.
+    // Only 0x31 reaches record_received_packet(); count the recovered report
+    // families here without treating them as poll/control acknowledgements.
+    if (command != 0x31) {
+        ++this->valid_rx_packets_;
+        switch (command) {
+            case 0x32: case 0x33: case 0x34: case 0x35: case 0x40: case 0x44:
+                break;
+            default:
+                ++this->unknown_packets_;
+                break;
+        }
+    }
+    this->telemetry_capture_.observe(command, payload, millis());""",
+          )
+          replace_once(
+              path,
+              "        text_sensor::TextSensor *target = command == 0x31 ? this->last_0x31_payload_sensor_ : command == 0x33 ? this->last_0x33_payload_sensor_ : command == 0x44 ? this->last_0x44_payload_sensor_ : command == 0x40 ? this->last_0x40_payload_sensor_ : this->last_unknown_payload_sensor_;",
+              """        text_sensor::TextSensor *target = nullptr;
+        switch (command) {
+            case 0x31: target = this->last_0x31_payload_sensor_; break;
+            case 0x32: target = this->last_0x32_payload_sensor_; break;
+            case 0x33: target = this->last_0x33_payload_sensor_; break;
+            case 0x34: target = this->last_0x34_payload_sensor_; break;
+            case 0x35: target = this->last_0x35_payload_sensor_; break;
+            case 0x40: target = this->last_0x40_payload_sensor_; break;
+            case 0x44: target = this->last_0x44_payload_sensor_; break;
+            default: target = this->last_unknown_payload_sensor_; break;
+        }""",
+          )
+          replace_once(
+              path,
+              """        if (target != nullptr && (raw_changed || !this->telemetry_log_changes_only_)) target->publish_state(format_hex_pretty(payload));
+    }
+    if (!this->telemetry_discovery_enabled_) return;""",
+              """        if (target != nullptr && (raw_changed || !this->telemetry_log_changes_only_)) target->publish_state(format_hex_pretty(payload));
+    }
+    if (command == 0x35 && payload.size() > 15 && (raw_changed || !this->telemetry_log_changes_only_)) {
+        if (this->outdoor_report_byte_10_raw_sensor_) this->outdoor_report_byte_10_raw_sensor_->publish_state(payload[10]);
+        // These three values follow the common Gree raw-minus-40 temperature
+        // shape in the observed Livo report, but remain explicitly hypotheses.
+        if (this->outdoor_report_temperature_13_hypothesis_sensor_) this->outdoor_report_temperature_13_hypothesis_sensor_->publish_state(static_cast<int>(payload[13]) - 40.0f);
+        if (this->outdoor_report_temperature_14_hypothesis_sensor_) this->outdoor_report_temperature_14_hypothesis_sensor_->publish_state(static_cast<int>(payload[14]) - 40.0f);
+        if (this->outdoor_report_temperature_15_hypothesis_sensor_) this->outdoor_report_temperature_15_hypothesis_sensor_->publish_state(static_cast<int>(payload[15]) - 40.0f);
+    }
+    if (!this->telemetry_discovery_enabled_) return;""",
+          )
+          replace_once(
+              path,
+              """    this->telemetry_capture_.capture(record);
+    this->discovery_capture_dirty_ = true;""",
+              """    if (this->telemetry_capture_.capture(record)) this->discovery_capture_dirty_ = true;""",
+          )
+
+          path = "components/sinclair_ac/climate.py"
+          replace_once(
+              path,
+              """    cv.Optional("candidate_telemetry_byte_44_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("candidate_byte_44_temperature_hypothesis"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1),""",
+              """    cv.Optional("candidate_telemetry_byte_44_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("candidate_byte_44_temperature_hypothesis"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1),
+    cv.Optional("outdoor_report_byte_10_raw"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0),
+    cv.Optional("outdoor_report_temperature_13_hypothesis"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1, unit_of_measurement="°C", device_class="temperature", state_class="measurement"),
+    cv.Optional("outdoor_report_temperature_14_hypothesis"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1, unit_of_measurement="°C", device_class="temperature", state_class="measurement"),
+    cv.Optional("outdoor_report_temperature_15_hypothesis"): sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1, unit_of_measurement="°C", device_class="temperature", state_class="measurement"),""",
+          )
+          replace_once(
+              path,
+              """    cv.Optional("last_0x31_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x33_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x44_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x40_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),""",
+              """    cv.Optional("last_0x31_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x32_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x33_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x34_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x35_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x40_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),
+    cv.Optional("last_0x44_payload"): text_sensor.text_sensor_schema(text_sensor.TextSensor),""",
+          )
+          replace_once(
+              path,
+              '"invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "candidate_telemetry_byte_44_raw": "set_candidate_telemetry_byte_44_raw_sensor", "candidate_byte_44_temperature_hypothesis": "set_candidate_byte_44_temperature_hypothesis_sensor", "parser_resynchronizations": "set_parser_resync_sensor",',
+              '"invalid_length_packets": "set_invalid_length_sensor", "too_short_frames": "set_too_short_sensor", "frame_timeouts": "set_frame_timeout_sensor", "candidate_telemetry_byte_44_raw": "set_candidate_telemetry_byte_44_raw_sensor", "candidate_byte_44_temperature_hypothesis": "set_candidate_byte_44_temperature_hypothesis_sensor", "outdoor_report_byte_10_raw": "set_outdoor_report_byte_10_raw_sensor", "outdoor_report_temperature_13_hypothesis": "set_outdoor_report_temperature_13_hypothesis_sensor", "outdoor_report_temperature_14_hypothesis": "set_outdoor_report_temperature_14_hypothesis_sensor", "outdoor_report_temperature_15_hypothesis": "set_outdoor_report_temperature_15_hypothesis_sensor", "parser_resynchronizations": "set_parser_resync_sensor",',
+          )
+          replace_once(
+              path,
+              '"last_0x31_payload": "set_last_0x31_payload_sensor", "last_0x33_payload": "set_last_0x33_payload_sensor", "last_0x44_payload": "set_last_0x44_payload_sensor", "last_0x40_payload": "set_last_0x40_payload_sensor",',
+              '"last_0x31_payload": "set_last_0x31_payload_sensor", "last_0x32_payload": "set_last_0x32_payload_sensor", "last_0x33_payload": "set_last_0x33_payload_sensor", "last_0x34_payload": "set_last_0x34_payload_sensor", "last_0x35_payload": "set_last_0x35_payload_sensor", "last_0x40_payload": "set_last_0x40_payload_sensor", "last_0x44_payload": "set_last_0x44_payload_sensor",',
+          )
+
+          path = "examples/gree-livo-oem-boot-probe.yaml"
+          replace_once(path, "      ref: research/active-oem-telemetry-queries", "      ref: research/retain-rare-oem-reports")
+          replace_once(
+              path,
+              """      last_0x31_payload:
+        name: ${friendly_name} Last 0x31 Payload
+      last_0x33_payload:
+        name: ${friendly_name} Last 0x33 Payload
+      last_0x40_payload:
+        name: ${friendly_name} Last 0x40 Payload
+      last_0x44_payload:
+        name: ${friendly_name} Last 0x44 Payload""",
+              """      last_0x31_payload:
+        name: ${friendly_name} Last 0x31 Status Payload
+      last_0x32_payload:
+        name: ${friendly_name} Last 0x32 Synchronization Payload
+      last_0x33_payload:
+        name: ${friendly_name} Last 0x33 Fault Payload
+      last_0x34_payload:
+        name: ${friendly_name} Last 0x34 Indoor Fault Payload
+      last_0x35_payload:
+        name: ${friendly_name} Last 0x35 Outdoor Payload
+      last_0x40_payload:
+        name: ${friendly_name} Last 0x40 Electrical Payload
+      last_0x44_payload:
+        name: ${friendly_name} Last 0x44 Information Payload""",
+          )
+          replace_once(
+              path,
+              """      candidate_byte_44_temperature_hypothesis:
+        name: ${friendly_name} Candidate Byte 44 Temperature Hypothesis""",
+              """      candidate_byte_44_temperature_hypothesis:
+        name: ${friendly_name} Candidate Byte 44 Temperature Hypothesis
+      outdoor_report_byte_10_raw:
+        name: ${friendly_name} Outdoor Report Byte 10 Raw
+      outdoor_report_temperature_13_hypothesis:
+        name: ${friendly_name} Outdoor Report Temperature 13 Hypothesis
+      outdoor_report_temperature_14_hypothesis:
+        name: ${friendly_name} Outdoor Report Temperature 14 Hypothesis
+      outdoor_report_temperature_15_hypothesis:
+        name: ${friendly_name} Outdoor Report Temperature 15 Hypothesis""",
+          )
+
+          Path("docs/rare-oem-report-retention.md").write_text("""# Rare OEM report retention
+
+Hardware probing on a Gree Livo Gen3 produced checksum-valid recovered reports including `0x33`, `0x35`, and `0x44`. The observed `0x35` payload was 45 bytes and changed at candidate bytes 13 and 15 while normal `0x31` polling remained healthy.
+
+This change keeps those reports visible in Home Assistant:
+
+- dedicated payload entities for `0x32`, `0x34`, and `0x35`;
+- recovered `0x32`-`0x35`, `0x40`, and `0x44` reports count as valid RX traffic without being treated as poll/control acknowledgements;
+- truly unrecognized checksum-valid commands increment the unknown counter;
+- identical routine `0x01` TX and `0x31` RX records are de-duplicated from the capture ring;
+- CSV export is bounded to the newest records so ESPHome API JSON remains below its payload limit;
+- `0x35` bytes 13-15 are exposed as explicitly unconfirmed raw-minus-40 temperature hypotheses, plus byte 10 raw.
+
+The candidate values must not be assigned physical names such as ambient, coil, suction, or discharge until controlled correlation proves their meanings.
+""")
+          PY
+
+      - name: Validate
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile components/sinclair_ac/climate.py
+          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_protocol_frame.cpp -o /tmp/sinclair_protocol_behavior
+          /tmp/sinclair_protocol_behavior
+          git diff --check
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add components/sinclair_ac/telemetry_discovery.h components/sinclair_ac/esppac.h components/sinclair_ac/esppac.cpp components/sinclair_ac/climate.py examples/gree-livo-oem-boot-probe.yaml docs/rare-oem-report-retention.md
+          git commit -m 'Retain and expose rare OEM telemetry reports'
+          git push origin HEAD:research/retain-rare-oem-reports
