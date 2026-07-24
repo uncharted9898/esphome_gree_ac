@@ -118,6 +118,8 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
 
         void set_current_temperature_sensor(sensor::Sensor *current_temperature_sensor);
         void set_protocol_mode(ProtocolMode mode) { this->protocol_mode_ = mode; }
+        ProtocolMode get_protocol_mode() const { return this->protocol_mode_; }
+        virtual bool supplemental_query_may_start() const { return true; }
         void set_fan_profile(FanProfile profile) { this->fan_profile_ = profile; }
         void set_telemetry_discovery(bool enabled, bool expose_raw_payload, bool expose_raw_bytes, bool log_changes_only, uint8_t history_depth);
         void set_supplemental_queries(bool enabled, uint8_t max_attempts) { this->supplemental_query_gate_.configure(enabled, max_attempts); }
@@ -159,6 +161,10 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         const std::vector<uint8_t> *get_retained_payload(uint8_t command) const {
             const auto it = this->last_payloads_.find(command);
             return it == this->last_payloads_.end() ? nullptr : &it->second;
+        }
+        uint32_t get_retained_payload_generation(uint8_t command) const {
+            const auto it = this->payload_generations_.find(command);
+            return it == this->payload_generations_.end() ? 0 : it->second;
         }
 
         void setup() override;
@@ -216,6 +222,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         bool has_published_discovery_capture_{false};
         std::string published_discovery_summary_, published_capture_export_;
         std::map<uint8_t, std::vector<uint8_t>> last_payloads_;
+        std::map<uint8_t, uint32_t> payload_generations_;
         std::map<uint8_t, std::vector<uint8_t>> previous_frames_;
         bool has_last_packet_diagnostics_{false};
         uint32_t last_packet_length_{0}, last_packet_type_{0};
@@ -233,7 +240,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         bool is_poll_only() const { return this->protocol_mode_ == ProtocolMode::POLL_ONLY; }
         bool can_control() const { return this->protocol_mode_ == ProtocolMode::CONTROL; }
         const char *protocol_mode_name() const;
-        void record_received_packet(bool known);
+        void record_received_packet(bool known, bool establishes_health);
         void record_transmitted_packet(const std::vector<uint8_t> &packet);
         void publish_diagnostics(bool force = false);
         void record_last_packet_diagnostics(uint32_t length, uint32_t type, const std::string &description, const std::string *unknown_description = nullptr);

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import Counter
 from dataclasses import asdict
@@ -17,6 +18,7 @@ from rtl8720cf_image import (
     iter_gree_frames,
     iter_printable_strings,
     iter_sections,
+    manifest_to_dict,
     parse_firmware,
 )
 
@@ -58,8 +60,25 @@ DEFAULT_KEYWORDS = (
 )
 
 
-def _application_sections(manifest: FirmwareManifest):
-    """Select the main Gree application, excluding the Realtek radio image."""
+GREE_APPLICATION_MARKERS = (
+    b"gree_init_thread",
+    b"gree_uart_init",
+    b"GREE_APLICATION_START",
+    b"ElcEn",
+    b"CompressorFqy",
+    b"GATD=1 Open Tx Printf",
+)
+
+
+def _application_sections(data: bytes, manifest: FirmwareManifest):
+    """Select the XIP section that contains the GREE appliance application.
+
+    The archived RTL8720CF images contain two XIP sections.  The section at
+    ``0x9B000140`` is the Realtek platform image; the appliance/cloud/UART
+    implementation, property dictionaries, and report handlers are in the
+    later section at ``0x9B800140``.  Select by content rather than address so
+    future images fail loudly instead of silently auditing the wrong section.
+    """
 
     xip_sections = [
         section
@@ -68,24 +87,31 @@ def _application_sections(manifest: FirmwareManifest):
     ]
     if not xip_sections:
         return tuple(iter_sections(manifest))
-    first_base = min(section.entry.section_base for section in xip_sections)
-    return tuple(
-        section
-        for section in iter_sections(manifest)
-        if section.section_type_name != "xip"
-        or section.entry.section_base == first_base
-    )
+
+    scored = []
+    for section in xip_sections:
+        raw = data[section.image_offset : section.image_end]
+        score = sum(marker in raw for marker in GREE_APPLICATION_MARKERS)
+        scored.append((score, section.entry.section_base, section))
+    scored.sort(reverse=True, key=lambda item: (item[0], item[1]))
+    best_score, _, best = scored[0]
+    if best_score == 0:
+        raise ValueError("unable to identify GREE application XIP section")
+    return (best,)
 
 
-def _section_ranges(manifest: FirmwareManifest) -> set[tuple[int, int]]:
+def _section_ranges(data: bytes, manifest: FirmwareManifest) -> set[tuple[int, int]]:
     return {
         (section.image_offset, section.image_end)
-        for section in _application_sections(manifest)
+        for section in _application_sections(data, manifest)
     }
 
 
-def _in_application(manifest: FirmwareManifest, offset: int) -> bool:
-    return any(start <= offset < end for start, end in _section_ranges(manifest))
+def _in_application(data: bytes, manifest: FirmwareManifest, offset: int) -> bool:
+    return any(
+        start <= offset < end
+        for start, end in _section_ranges(data, manifest)
+    )
 
 
 def _filter_strings(
@@ -96,6 +122,10 @@ def _filter_strings(
         for item in strings
         if any(keyword in item.text.lower() for keyword in keywords)
     ]
+
+
+def _frame_key(frame: GreeFrame) -> tuple[int, str]:
+    return frame.command, frame.raw_hex
 
 
 def _manifest_summary(manifest: FirmwareManifest) -> dict:
@@ -127,12 +157,16 @@ def analyze(path: Path, keywords: tuple[str, ...]) -> dict:
     data = path.read_bytes()
     manifest = parse_firmware(data, str(path))
     all_strings = list(iter_printable_strings(data, manifest, minimum_length=4))
-    strings = [item for item in all_strings if _in_application(manifest, item.file_offset)]
+    strings = [
+        item
+        for item in all_strings
+        if _in_application(data, manifest, item.file_offset)
+    ]
     matched = _filter_strings(strings, keywords)
     frames = [
         frame
         for frame in iter_gree_frames(data, manifest)
-        if _in_application(manifest, frame.file_offset)
+        if _in_application(data, manifest, frame.file_offset)
     ]
     return {
         "manifest": _manifest_summary(manifest),

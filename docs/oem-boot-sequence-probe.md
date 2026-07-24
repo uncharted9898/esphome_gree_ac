@@ -1,5 +1,11 @@
 # Captured OEM boot-sequence probe
 
+> **Current status.** The captured startup frames remain useful for this target
+> installation, but report requests are no longer based on the older CS532
+> length assumptions. The active probe follows them with the audited RTL8720CF
+> 29-byte selector requests documented in
+> [`rtl8720cf-telemetry-map.md`](rtl8720cf-telemetry-map.md).
+
 This opt-in experiment replays the byte-for-byte startup requests published for original Gree CS532-family Wi-Fi modules before returning the installed ESP controller to normal operation.
 
 It is intended to answer one narrow question: does the indoor unit expose additional reports only after the original module's initialization exchange?
@@ -43,7 +49,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: research/oem-boot-sequence-probe
+      ref: agent/rtl8720cf-operating-telemetry
     components: [sinclair_ac, gree_oem_boot_probe]
 
 climate:
@@ -68,7 +74,7 @@ Home Assistant Recorder should preserve changed states from:
 
 - `Last 0x44 Payload` after the two `0x05/0x04` requests;
 - `Last 0x33 Payload` or another valid unknown response after `0x0E/0x03`;
-- `Last Unknown Payload` for response commands not currently named;
+- the dedicated raw payload entities for known diagnostic/service commands;
 - the subsequent `0x31` payload, especially bytes that differ from the pre-probe baseline.
 
 The ESP logs should show seven lines beginning with:

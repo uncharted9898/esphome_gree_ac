@@ -1,5 +1,7 @@
 // based on: https://github.com/DomiStyle/esphome-panasonic-ac
 #include "esppac.h"
+#include "protocol_frame.h"
+
 #include <cmath>
 
 #include "esphome/core/log.h"
@@ -166,9 +168,25 @@ void SinclairAC::retain_payload(uint8_t command, const std::vector<uint8_t> &pay
     }
     // Raw retention is unconditional: the Last 0x31 entity must never be stale.
     this->last_payloads_[command] = payload;
+    ++this->payload_generations_[command];
     if (this->telemetry_expose_raw_payload_) {
-        text_sensor::TextSensor *target = command == 0x31 ? this->last_0x31_payload_sensor_ : command == 0x33 ? this->last_0x33_payload_sensor_ : command == 0x44 ? this->last_0x44_payload_sensor_ : command == 0x40 ? this->last_0x40_payload_sensor_ : this->last_unknown_payload_sensor_;
-        if (target != nullptr && (raw_changed || !this->telemetry_log_changes_only_)) target->publish_state(format_hex_pretty(payload));
+        text_sensor::TextSensor *target = nullptr;
+        switch (command) {
+            case 0x31: target = this->last_0x31_payload_sensor_; break;
+            case 0x33: target = this->last_0x33_payload_sensor_; break;
+            case 0x40: target = this->last_0x40_payload_sensor_; break;
+            case 0x44: target = this->last_0x44_payload_sensor_; break;
+            default:
+                // Known diagnostic pages are retained for component-level
+                // decoders, but they are not unsupported/unknown payloads.
+                if (!sinclair_ac_protocol::is_diagnostic_command(command)) {
+                    target = this->last_unknown_payload_sensor_;
+                }
+                break;
+        }
+        if (target != nullptr && (raw_changed || !this->telemetry_log_changes_only_)) {
+            target->publish_state(format_hex_pretty(payload));
+        }
     }
     if (!this->telemetry_discovery_enabled_) return;
     if (meaningful_changed || !this->telemetry_log_changes_only_) ESP_LOGD(TAG, "Telemetry discovery: cmd=0x%02X payload changed (%u bytes)", command, payload.size());
@@ -213,9 +231,11 @@ void SinclairAC::publish_protocol_state(const char *state) {
     this->protocol_state_ = state;
     if (this->protocol_state_sensor_) this->protocol_state_sensor_->publish_state(state);
 }
-void SinclairAC::record_received_packet(bool known) {
-    this->last_packet_received_ = millis(); this->valid_rx_packets_++;
+void SinclairAC::record_received_packet(bool known, bool establishes_health) {
+    this->valid_rx_packets_++;
     if (!known) this->unknown_packets_++;
+    if (!establishes_health) return;
+    this->last_packet_received_ = millis();
     if (this->communication_sensor_) this->communication_sensor_->publish_state(true);
     this->publish_protocol_state("ready");
 }

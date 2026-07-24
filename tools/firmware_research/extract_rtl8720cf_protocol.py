@@ -3,7 +3,7 @@
 #
 # Import the first XIP application section at its EntryHeader section_base
 # (0x9B000140 for the archived v1.21 and v1.53 images), run auto-analysis, and
-# invoke this script with an output path. The later 0x9B800140 XIP section is
+# invoke this script with an output path.  The later 0x9B800140 XIP section is
 # Realtek radio firmware and should be analyzed separately, not merged into the
 # Gree application report.
 
@@ -72,7 +72,7 @@ for address, text in matched:
             (source, address, text)
         )
 
-# Include one call-graph hop in each direction. UART wrappers often contain no
+# Include one call-graph hop in each direction.  UART wrappers often contain no
 # useful string themselves but are adjacent to string-bearing dispatch code.
 for key in list(selected.keys()):
     function = selected[key]["fn"]

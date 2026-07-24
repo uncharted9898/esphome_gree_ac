@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate checksum-valid Gree OEM UART research frames.
+"""Generate checksum-valid Gree RTL8720CF HVAC UART research frames.
 
-The layouts in this tool come from static analysis of the public
-CS532AX/MT7687 OEM firmware. It does not access a serial port and never sends a
-packet. Its output is intended for review, tests, and explicitly controlled
-hardware probes.
+The report-query layout is recovered independently from the archived RTL8720CF
+V2 and V3 module firmware. This utility never opens a serial port or sends a
+packet; it only builds and validates byte vectors for review, tests, and
+explicitly controlled hardware probes.
 """
 
 from __future__ import annotations
@@ -14,6 +14,10 @@ from dataclasses import dataclass
 
 
 SYNC = (0x7E, 0x7E)
+RTL_REPORT_QUERY_SIZE = 29
+RTL_REPORT_QUERY_LENGTH = 0x1A
+RTL_REPORT_QUERY_COMMAND = 0x03
+RTL_REPORT_QUERY_RESERVED_INDEX = 27
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,8 @@ QUERIES = {
     "fault_combined": ExtendedQuery("fault_combined", 0x01, 0x00, 0x33),
     "fault_indoor": ExtendedQuery("fault_indoor", 0x02, 0x00, 0x34),
     "fault_outdoor": ExtendedQuery("fault_outdoor", 0x04, 0x00, 0x35),
+    "service_page_42": ExtendedQuery("service_page_42", 0x00, 0x01, 0x42),
+    "service_page_41": ExtendedQuery("service_page_41", 0x00, 0x02, 0x41),
     "energy_month": ExtendedQuery("energy_month", 0x00, 0x04, 0x40),
 }
 
@@ -52,33 +58,51 @@ def validate_frame(frame: list[int]) -> None:
         raise ValueError("checksum mismatch")
 
 
+def validate_extended_query(frame: list[int]) -> None:
+    """Validate the exact RTL8720CF report-query envelope."""
+
+    validate_frame(frame)
+    if len(frame) != RTL_REPORT_QUERY_SIZE:
+        raise ValueError(f"RTL report query must contain {RTL_REPORT_QUERY_SIZE} bytes")
+    if frame[2] != RTL_REPORT_QUERY_LENGTH or frame[3] != RTL_REPORT_QUERY_COMMAND:
+        raise ValueError("unexpected RTL report-query length or command")
+    if frame[RTL_REPORT_QUERY_RESERVED_INDEX] != 0x00:
+        raise ValueError("RTL report-query reserved byte must be zero")
+
+
 def build_extended_query(
     query: ExtendedQuery,
     *,
     module_state: int = 1,
     state_flags: int = 0,
 ) -> list[int]:
-    """Build the recovered length-0x19 command-0x03 request.
+    """Build the audited 29-byte command-0x03 report request.
 
-    state_flags occupies full-frame byte 4 bits 7:6. module_state occupies full
-    frame byte 26. The defaults reproduce a neutral, checksum-valid research
-    vector rather than pretending to know the original module's live Wi-Fi
-    state.
+    `state_flags` occupies full-frame byte 4 bits 7:6. `module_state` occupies
+    full-frame byte 26. Full-frame byte 27 is the reserved byte that the older
+    28-byte experiment omitted. The defaults reproduce a neutral,
+    checksum-valid RTL8720CF request.
     """
 
     if not 0 <= module_state <= 0xFF:
         raise ValueError("module_state must fit in one byte")
+    if not 0 <= query.primary_selector <= 0x3F:
+        raise ValueError("primary selector must fit in byte 4 bits 5:0")
+    if not 0 <= query.extended_selector <= 0xFF:
+        raise ValueError("extended selector must fit in one byte")
     if state_flags & ~0xC0:
         raise ValueError("state_flags may only use bits 7:6")
 
-    frame = [0x7E, 0x7E, 0x19, 0x03] + [0x00] * 23 + [0x00]
+    frame = [0x7E, 0x7E, RTL_REPORT_QUERY_LENGTH, RTL_REPORT_QUERY_COMMAND]
+    frame.extend([0x00] * (RTL_REPORT_QUERY_SIZE - len(frame)))
     frame[4] = state_flags | query.primary_selector
     frame[10] = 0x3B
     frame[13] = 0x3B
     frame[14] = query.extended_selector
     frame[26] = module_state
-    frame[27] = checksum(frame[:-1])
-    validate_frame(frame)
+    frame[RTL_REPORT_QUERY_RESERVED_INDEX] = 0x00
+    frame[-1] = checksum(frame[:-1])
+    validate_extended_query(frame)
     return frame
 
 
@@ -109,7 +133,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
 
-    query_parser = sub.add_parser("query", help="generate a recovered extended query")
+    query_parser = sub.add_parser("query", help="generate an audited RTL report query")
     query_parser.add_argument("name", choices=sorted(QUERIES))
     query_parser.add_argument("--module-state", type=lambda value: int(value, 0), default=1)
     query_parser.add_argument("--state-flags", type=lambda value: int(value, 0), default=0)

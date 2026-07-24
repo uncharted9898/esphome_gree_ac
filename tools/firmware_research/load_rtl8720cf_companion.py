@@ -1,18 +1,22 @@
-# Add the companion RTL8720CF XIP section to the current Ghidra program.
+# Add a companion RTL8720CF image section to the current Ghidra program.
 # @category Gree
 
 from java.io import File, FileInputStream
 from java.math import BigInteger
 
 args = getScriptArgs()
-if len(args) != 2:
-    raise RuntimeError("usage: load_rtl8720cf_companion.py <raw-file> <base-address>")
+if len(args) < 2:
+    raise RuntimeError(
+        "usage: load_rtl8720cf_companion.py <raw-file> <base-address> [block-name] [execute]"
+    )
 
 path = args[0]
 base = toAddr(args[1])
+name = args[2] if len(args) > 2 else "rtl8720cf_companion"
+execute = len(args) <= 3 or args[3].lower() not in ("0", "false", "no")
 source = File(path)
 if not source.isFile():
-    raise RuntimeError("companion XIP file does not exist: %s" % path)
+    raise RuntimeError("companion file does not exist: %s" % path)
 
 memory = currentProgram.getMemory()
 if memory.getBlock(base) is not None:
@@ -21,24 +25,20 @@ if memory.getBlock(base) is not None:
 stream = FileInputStream(source)
 try:
     block = memory.createInitializedBlock(
-        "rtl8720cf_companion_xip",
-        base,
-        stream,
-        source.length(),
-        monitor,
-        False,
+        name, base, stream, source.length(), monitor, False
     )
 finally:
     stream.close()
-
 block.setRead(True)
 block.setWrite(False)
-block.setExecute(True)
+block.setExecute(execute)
 
-program_context = currentProgram.getProgramContext()
-tmode = currentProgram.getLanguage().getRegister("TMode")
-if tmode is not None:
-    program_context.setValue(tmode, block.getStart(), block.getEnd(), BigInteger.ONE)
+if execute:
+    tmode = currentProgram.getLanguage().getRegister("TMode")
+    if tmode is not None:
+        currentProgram.getProgramContext().setValue(
+            tmode, block.getStart(), block.getEnd(), BigInteger.ONE
+        )
 
-print("Loaded companion RTL8720CF XIP block %s-%s from %s" %
-      (block.getStart(), block.getEnd(), path))
+print("Loaded %s at %s-%s execute=%s" %
+      (path, block.getStart(), block.getEnd(), execute))

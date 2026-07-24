@@ -1,114 +1,34 @@
 name: export-current-source
 
 on:
-  pull_request:
+  push:
     branches:
-      - codex/add-compatibility-and-protocol-discovery-mode
+      - agent/correct-gree-telemetry-direct
+    paths:
+      - .github/workflows/export-current-source.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
-  actions: write
-
-concurrency:
-  group: publish-audited-rtl8720cf-telemetry
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  publish-audited-source:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+  export:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
-
-      - name: Verify and apply the reviewed implementation
+      - name: Record exact revision
         shell: bash
         run: |
           set -euo pipefail
-          payload='.github/agent-transfer/rtl-telemetry-implementation.tar.gz.b64'
-          archive="$RUNNER_TEMP/rtl-telemetry-implementation.tar.gz"
-          test -s "$payload"
-          base64 --decode "$payload" > "$archive"
-          echo '1838cd88fe3317abcde452f4c897e28e73dcec5709e9802b86308fc2bad4dc2f  '"$archive" | sha256sum --check --strict
-          if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-            echo 'Unsafe archive path detected' >&2
-            exit 1
-          fi
-          tar -xzf "$archive" -C .
-
-          # The archive restores the permanent audit workflow. All publication
-          # transport and exploratory export/acquisition workflows disappear.
-          rm -f "$payload"
-          rm -f .github/workflows/publish-rtl8720cf-telemetry.yml
-          rm -f .github/workflows/export-current-source.yml
-          rm -f .github/workflows/fetch-rtl8720cf-firmware.yml
-          rmdir .github/agent-transfer 2>/dev/null || true
-          git diff --check
-
-      - uses: actions/setup-python@v5
+          git rev-parse HEAD > SOURCE_HEAD
+          git status --short > SOURCE_STATUS
+      - uses: actions/upload-artifact@v4
         with:
-          python-version: '3.12'
-
-      - name: Run native protocol and firmware-analysis tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m py_compile \
-            components/sinclair_ac/climate.py \
-            components/gree_oem_report_sensors/__init__.py \
-            tools/firmware_research/rtl8720cf_image.py \
-            tools/firmware_research/analyze_rtl8720cf.py \
-            tools/firmware_research/rtl8720cf_properties.py
-          python -m unittest tests.test_rtl8720cf_image -v
-          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_protocol_frame.cpp -o /tmp/test_protocol_frame
-          /tmp/test_protocol_frame
-          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_oem_report_decoder.cpp -o /tmp/test_oem_report_decoder
-          /tmp/test_oem_report_decoder
-          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_rtl_report_query.cpp -o /tmp/test_rtl_report_query
-          /tmp/test_rtl_report_query
-
-      - name: Create and push the production source commit
-        id: publish
-        shell: bash
-        run: |
-          set -euo pipefail
-          target_branch="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
-          git config user.name 'openai-agent'
-          git config user.email 'openai-agent@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          test -n "$(git diff --cached --name-only)"
-          git commit -m 'Recover RTL8720CF operating telemetry'
-          git push origin "HEAD:${target_branch}"
-          echo "branch=${target_branch}" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Validate ESPHome configuration and compile every hardware example
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install esphome==2026.7.1
-          ./scripts_validate.sh
-          esphome compile examples/gree-livo-gen3-receive-only.yaml
-          esphome compile examples/gree-livo-gen3-poll-only.yaml
-          esphome compile examples/gree-livo-gen3-control.yaml
-          esphome compile examples/gree-livo-oem-boot-probe.yaml
-
-      - name: Dispatch validation and the permanent firmware audit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_BRANCH: ${{ steps.publish.outputs.branch }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/validation.yml/dispatches" \
-            -f ref="$TARGET_BRANCH"
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/rtl8720cf-firmware-audit.yml/dispatches" \
-            -f ref="$TARGET_BRANCH"
+          name: current-source
+          path: .
+          include-hidden-files: true
+          retention-days: 1
+          compression-level: 0

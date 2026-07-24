@@ -10,7 +10,6 @@ if len(args) < 1:
 
 base = toAddr(args[0])
 entry_arg = args[1] if len(args) > 1 else "-"
-
 block = currentProgram.getMemory().getBlock(base)
 if block is None or not block.isInitialized():
     raise RuntimeError("no initialized memory block at %s" % base)
@@ -20,10 +19,7 @@ tmode = currentProgram.getLanguage().getRegister("TMode")
 if tmode is not None:
     program_context.setValue(tmode, block.getStart(), block.getEnd(), BigInteger.ONE)
 
-if entry_arg == "-":
-    print("Configured Thumb mode for %s-%s; no synthetic entry point" %
-          (block.getStart(), block.getEnd()))
-else:
+if entry_arg != "-":
     entry = toAddr(int(entry_arg, 0) & ~1)
     symbol_table = currentProgram.getSymbolTable()
     try:
@@ -34,12 +30,10 @@ else:
         symbol_table.addExternalEntryPoint(entry)
     except Exception:
         pass
-
     disassemble(entry)
     if getInstructionAt(entry) is None:
         raise RuntimeError("entry point did not decode as Thumb code: %s" % entry)
     if getFunctionAt(entry) is None:
         createFunction(entry, "rtl8720cf_seed")
 
-    print("Configured Thumb mode for %s-%s and seed point %s" %
-          (block.getStart(), block.getEnd(), entry))
+print("Configured Thumb mode for %s-%s" % (block.getStart(), block.getEnd()))

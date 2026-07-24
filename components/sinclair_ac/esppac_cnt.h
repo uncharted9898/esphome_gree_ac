@@ -159,6 +159,10 @@ class SinclairACCNT : public SinclairAC {
 
         void setup() override;
         void loop() override;
+        bool supplemental_query_may_start() const override {
+            return this->request_lifecycle_.may_send() && !this->pending_control_.active &&
+                   !this->active_control_.active && !this->control_send_queued_;
+        }
         void set_polls_sent_sensor(sensor::Sensor *s) { polls_sent_sensor_ = s; }
         void set_poll_responses_sensor(sensor::Sensor *s) { poll_responses_sensor_ = s; }
         void set_poll_response_timeouts_sensor(sensor::Sensor *s) { poll_response_timeouts_sensor_ = s; }
@@ -226,7 +230,7 @@ class SinclairACCNT : public SinclairAC {
 
         void send_packet();
 
-        enum class PacketValidationResult { VALID_KNOWN, VALID_UNKNOWN, INVALID_TOO_SHORT, INVALID_LENGTH, INVALID_CHECKSUM };
+        enum class PacketValidationResult { VALID_KNOWN, VALID_DIAGNOSTIC, VALID_UNKNOWN, INVALID_TOO_SHORT, INVALID_LENGTH, INVALID_CHECKSUM };
         PacketValidationResult verify_packet();
         void handle_packet();
 

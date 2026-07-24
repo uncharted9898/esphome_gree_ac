@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Inspect Realtek AmebaZ2/RTL8720CF OTA firmware images.
 
-The Gree RTL8720CF images are AmebaZ2 OTA containers. This module parses the
+The Gree RTL8720CF images are AmebaZ2 OTA containers.  This module parses the
 container without third-party dependencies, extracts loadable sections, maps
 file offsets to runtime addresses, and scans application bytes for printable
 strings and checksum-valid Gree UART frames.
 
 The implementation follows the public AmebaZ2 structures documented by
-LibreTiny/ltchiptool. It intentionally stops at structural facts; it does not
+LibreTiny/ltchiptool.  It intentionally stops at structural facts; it does not
 assign protocol semantics to a byte merely because a value looks plausible.
 """
 
@@ -19,7 +19,7 @@ import json
 import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Iterable, Iterator, Sequence
 
 OTA_PREFIX_SIZE = 0xE0
 IMAGE_HEADER_SIZE = 0x60
@@ -244,6 +244,9 @@ def parse_firmware(data: bytes, path: str = "<memory>") -> FirmwareManifest:
             if next_section_header == 0:
                 section_offset = sequential
             else:
+                # Realtek images normally store a relative offset.  Accept the
+                # sequential value as a defensive fallback for images whose
+                # field is informational rather than authoritative.
                 candidate = section_offset + next_section_header
                 section_offset = (
                     candidate

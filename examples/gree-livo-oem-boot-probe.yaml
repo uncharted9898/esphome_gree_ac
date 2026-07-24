@@ -1,6 +1,6 @@
 substitutions:
   device_name: gree-livo-oem-boot-probe
-  friendly_name: Gree Livo OEM Boot Probe
+  friendly_name: Gree Livo OEM Probe
 
 esphome:
   name: ${device_name}
@@ -13,11 +13,20 @@ esp32:
 
 logger:
   baud_rate: 0
-  level: INFO
+  level: DEBUG
+  logs:
+    api: INFO
+    sensor: INFO
+    text_sensor: INFO
+    sinclair_ac: DEBUG
+    sinclair_ac.serial: DEBUG
+    gree.oem_boot_probe: DEBUG
+    gree.oem_report_sensors: DEBUG
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  power_save_mode: none
 
 api:
 
@@ -33,12 +42,13 @@ uart:
   data_bits: 8
   parity: EVEN
   stop_bits: 1
+  rx_buffer_size: 2048
 
 external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: agent/map-oem-report-telemetry
+      ref: agent/rtl8720cf-operating-telemetry
     refresh: 5min
     components:
       - sinclair_ac
@@ -50,9 +60,6 @@ climate:
     id: gree_ac
     name: ${friendly_name}
     uart_id: gree_uart
-
-    # The probe owns TX during the captured startup and recovered telemetry
-    # query window. Normal polling/control starts after the responses arrive.
     protocol_mode: receive_only
     fan_profile: gree_4_speed
 
@@ -61,7 +68,7 @@ climate:
       expose_raw_payload: true
       expose_raw_bytes: false
       log_changes_only: true
-      history_depth: 64
+      history_depth: 16
 
     debug:
       log_rx: false
@@ -73,43 +80,68 @@ climate:
     diagnostics:
       communication:
         name: ${friendly_name} Communication
+        entity_category: diagnostic
       valid_rx_packets:
         name: ${friendly_name} Valid RX Packets
+        entity_category: diagnostic
       valid_tx_packets:
         name: ${friendly_name} Valid TX Packets
+        entity_category: diagnostic
       unknown_packets:
-        name: ${friendly_name} Unknown Packets
+        name: ${friendly_name} Unsupported Valid Packets
+        entity_category: diagnostic
       checksum_failures:
         name: ${friendly_name} Checksum Failures
+        entity_category: diagnostic
+      invalid_length_packets:
+        name: ${friendly_name} Invalid Length Packets
+        entity_category: diagnostic
       parser_resynchronizations:
         name: ${friendly_name} Parser Resynchronizations
+        entity_category: diagnostic
       frame_timeouts:
         name: ${friendly_name} Frame Timeouts
+        entity_category: diagnostic
       last_packet_type:
         name: ${friendly_name} Last Packet Type
+        entity_category: diagnostic
       last_packet:
         name: ${friendly_name} Last Packet
+        entity_category: diagnostic
       last_unknown_packet:
-        name: ${friendly_name} Last Unknown Packet
+        name: ${friendly_name} Last Unsupported Packet
+        entity_category: diagnostic
+        disabled_by_default: true
       last_0x31_payload:
-        name: ${friendly_name} Last 0x31 Payload
+        name: ${friendly_name} Last 0x31 Status Payload
+        entity_category: diagnostic
       last_0x33_payload:
-        name: ${friendly_name} Last 0x33 Payload
+        name: ${friendly_name} Last 0x33 Combined Payload
+        entity_category: diagnostic
       last_0x40_payload:
-        name: ${friendly_name} Last 0x40 Payload
+        name: ${friendly_name} Last 0x40 Electrical Payload
+        entity_category: diagnostic
       last_0x44_payload:
-        name: ${friendly_name} Last 0x44 Payload
+        name: ${friendly_name} Last 0x44 Information Payload
+        entity_category: diagnostic
+        disabled_by_default: true
       last_unknown_payload:
-        name: ${friendly_name} Last Unknown Payload
+        name: ${friendly_name} Last Unsupported Payload
+        entity_category: diagnostic
+        disabled_by_default: true
       discovery_summary:
         name: ${friendly_name} Discovery Summary
+        entity_category: diagnostic
       capture_export_csv:
         name: ${friendly_name} Capture Export CSV
-      candidate_telemetry_byte_44_raw:
-        name: ${friendly_name} Candidate Byte 44 Raw
-      candidate_byte_44_temperature_hypothesis:
-        name: ${friendly_name} Candidate Byte 44 Temperature Hypothesis
+        entity_category: diagnostic
+        disabled_by_default: true
 
+# The captured startup exchange is followed by the exact 29-byte RTL8720CF
+# command-0x03 report requests. The probe asks for 0x33, 0x34, 0x35, an
+# extended 0x31, and the opaque 0x42/0x41 pages. It requests 0x40 only when
+# 0x32 payload[0] advertises that report page, with one discovery attempt when
+# no synchronization report has arrived yet.
 gree_oem_boot_probe:
   id: gree_boot_probe
   uart_id: gree_uart
@@ -118,7 +150,9 @@ gree_oem_boot_probe:
   frame_spacing: 450ms
   quiesce_delay: 1800ms
   query_recovered_data: true
-  # repeat_interval: 15min
+  # The complete discovery sweep runs once; scheduled cycles refresh only the 0x35
+  # outdoor operating page after climate traffic becomes idle.
+  repeat_interval: 30s
   restore_control: true
 
 gree_oem_report_sensors:
@@ -135,96 +169,129 @@ gree_oem_report_sensors:
   last_0x35_payload:
     name: ${friendly_name} Last 0x35 Outdoor Report Payload
     entity_category: diagnostic
+  last_0x36_payload:
+    name: ${friendly_name} Last 0x36 Diagnostic Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x3c_payload:
+    name: ${friendly_name} Last 0x3C Service Payload
+    entity_category: diagnostic
+    disabled_by_default: true
 
-  # Confirmed against the simultaneous 25 C target and 24 C room temperature
-  # in the live Livo Gen3 capture. Formula: raw - 40.
+  last_0x40_payload:
+    name: ${friendly_name} Last 0x40 Electrical Payload Copy
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x41_payload:
+    name: ${friendly_name} Last 0x41 Service Page
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x42_payload:
+    name: ${friendly_name} Last 0x42 Service Page
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x53_payload:
+    name: ${friendly_name} Last 0x53 Energy Flow Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  electrical_energy_capability:
+    name: ${friendly_name} Electrical Energy Capability
+    entity_category: diagnostic
+  power_discovery_summary:
+    name: ${friendly_name} Operating Telemetry Summary
+    entity_category: diagnostic
+
+  status_indoor_temperature:
+    name: ${friendly_name} Status Indoor Temperature
+    entity_category: diagnostic
+  status_outdoor_ambient_temperature:
+    name: ${friendly_name} Status Outdoor Ambient Temperature
+    entity_category: diagnostic
+  status_humidity_sensor_field_raw:
+    name: ${friendly_name} HumSen Field Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  status_indoor_fan_port_raw:
+    name: ${friendly_name} Indoor Fan Port Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  status_elc_erg:
+    name: ${friendly_name} Electrical Energy Flag
+    entity_category: diagnostic
+  status_elc_gear_raw:
+    name: ${friendly_name} Electrical Gear Raw
+    entity_category: diagnostic
+  status_elc_1kwh_raw:
+    name: ${friendly_name} Elc1Kwh Raw
+    entity_category: diagnostic
+
   indoor_report_target_temperature:
     name: ${friendly_name} Indoor Report Target Temperature
     entity_category: diagnostic
   indoor_report_current_temperature:
     name: ${friendly_name} Indoor Report Current Temperature
     entity_category: diagnostic
-
-  # Candidate thermistor assignments. The temperature encoding is strongly
-  # supported, but the exact physical sensor names still require controlled
-  # warm-up/cool-down captures.
   indoor_coil_temperature_candidate:
-    name: ${friendly_name} Indoor Coil Temperature Candidate
+    name: ${friendly_name} Indoor Evaporator Temperature
+    entity_category: diagnostic
+  indoor_report_byte_25_raw:
+    name: ${friendly_name} Indoor Report Byte 25 Raw
     entity_category: diagnostic
     disabled_by_default: true
-  indoor_secondary_temperature_candidate:
-    name: ${friendly_name} Indoor Secondary Temperature Candidate
+
+  # Firmware v1.21 maps 0x35 payload[5] directly to CompressorFqy.
+  compressor_frequency:
+    name: ${friendly_name} Compressor Frequency
+    entity_category: diagnostic
+  outdoor_fan_speed_raw:
+    name: ${friendly_name} Outdoor Fan Speed Raw
+    entity_category: diagnostic
+  expansion_valve_position:
+    name: ${friendly_name} Expansion Valve Position Raw
+    entity_category: diagnostic
+  expansion_valve_closing:
+    name: ${friendly_name} Expansion Valve Closing
+    entity_category: diagnostic
+  outdoor_operating_state_raw:
+    name: ${friendly_name} Outdoor Operating State Raw
     entity_category: diagnostic
     disabled_by_default: true
   outdoor_ambient_temperature_candidate:
-    name: ${friendly_name} Outdoor Ambient Temperature Candidate
+    name: ${friendly_name} Outdoor Ambient Temperature
     entity_category: diagnostic
-    disabled_by_default: true
   outdoor_coil_temperature_candidate:
-    name: ${friendly_name} Outdoor Coil Temperature Candidate
+    name: ${friendly_name} Outdoor Coil Temperature
     entity_category: diagnostic
-    disabled_by_default: true
   compressor_discharge_temperature_candidate:
-    name: ${friendly_name} Compressor Discharge Temperature Candidate
+    name: ${friendly_name} Compressor Temperature
     entity_category: diagnostic
-    disabled_by_default: true
 
-  # Byte 10 is not temperature-coded in the observed report. Keep it raw until
-  # a startup/load/shutdown capture establishes whether it is frequency,
-  # current, voltage, power, or another operating scalar.
-  outdoor_operating_value_raw:
-    name: ${friendly_name} Outdoor Operating Value Raw
+  outdoor_report_byte_4_raw:
+    name: ${friendly_name} Outdoor Report Byte 4 Raw
     entity_category: diagnostic
     disabled_by_default: true
-
-  # The recovered OEM firmware compares these exact fields when deciding
-  # whether the indoor fault report changed. They are intentionally raw because
-  # neither active polarity nor fault-code semantics are proven yet.
-  indoor_report_byte_14_bit_5:
-    name: ${friendly_name} Indoor Report Byte 14 Bit 5
+  outdoor_report_byte_4_bit_4:
+    name: ${friendly_name} Outdoor Report Byte 4 Bit 4
     entity_category: diagnostic
     disabled_by_default: true
-  indoor_report_byte_20_raw:
-    name: ${friendly_name} Indoor Report Byte 20 Raw
+  outdoor_report_byte_5_raw:
+    name: ${friendly_name} Outdoor Report Byte 5 Raw
     entity_category: diagnostic
     disabled_by_default: true
-  indoor_report_byte_21_raw:
-    name: ${friendly_name} Indoor Report Byte 21 Raw
+  outdoor_report_byte_6_raw:
+    name: ${friendly_name} Outdoor Report Byte 6 Raw
     entity_category: diagnostic
     disabled_by_default: true
-  indoor_report_byte_36_raw:
-    name: ${friendly_name} Indoor Report Byte 36 Raw
+  outdoor_report_byte_9_raw:
+    name: ${friendly_name} Outdoor Report Byte 9 Raw
     entity_category: diagnostic
     disabled_by_default: true
-  indoor_report_byte_37_raw:
-    name: ${friendly_name} Indoor Report Byte 37 Raw
+  outdoor_report_byte_10_raw:
+    name: ${friendly_name} Outdoor Report Byte 10 Raw
     entity_category: diagnostic
     disabled_by_default: true
-  indoor_report_byte_38_raw:
-    name: ${friendly_name} Indoor Report Byte 38 Raw
-    entity_category: diagnostic
-    disabled_by_default: true
-
-  # The recovered OEM firmware compares these exact fields when deciding
-  # whether the outdoor fault report changed. The 21-28 range is retained as a
-  # compact hexadecimal text entity instead of eight low-value numeric entities.
-  outdoor_report_byte_17_bit_2:
-    name: ${friendly_name} Outdoor Report Byte 17 Bit 2
-    entity_category: diagnostic
-    disabled_by_default: true
-  outdoor_report_bytes_21_28_raw:
-    name: ${friendly_name} Outdoor Report Bytes 21-28 Raw
-    entity_category: diagnostic
-    disabled_by_default: true
-  outdoor_report_byte_30_raw:
-    name: ${friendly_name} Outdoor Report Byte 30 Raw
-    entity_category: diagnostic
-    disabled_by_default: true
-  outdoor_report_byte_31_bit_6:
-    name: ${friendly_name} Outdoor Report Byte 31 Bit 6
-    entity_category: diagnostic
-    disabled_by_default: true
-  outdoor_report_byte_36_raw:
-    name: ${friendly_name} Outdoor Report Byte 36 Raw
+  energy_flow_raw:
+    name: ${friendly_name} Energy Flow Raw
     entity_category: diagnostic
     disabled_by_default: true
