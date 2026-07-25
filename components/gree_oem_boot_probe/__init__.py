@@ -18,6 +18,9 @@ CONF_REPEAT_INTERVAL = "repeat_interval"
 CONF_QUIESCE_DELAY = "quiesce_delay"
 CONF_SCHEDULED_QUIESCE_DELAY = "scheduled_quiesce_delay"
 CONF_SELECTOR_DISCOVERY = "selector_discovery"
+CONF_MODULE_STATE_DISCOVERY = "module_state_discovery"
+CONF_MODULE_STATE_PRIMARY_SELECTOR = "module_state_primary_selector"
+CONF_MODULE_STATE_SECONDARY_SELECTOR = "module_state_secondary_selector"
 
 gree_oem_probe_ns = cg.esphome_ns.namespace("gree_oem_probe")
 GreeOemBootProbe = gree_oem_probe_ns.class_("GreeOemBootProbe", cg.Component)
@@ -46,6 +49,9 @@ CONFIG_SCHEMA = cv.Schema(
             cv.Range(min=cv.TimePeriod(milliseconds=50), max=cv.TimePeriod(seconds=1)),
         ),
         cv.Optional(CONF_SELECTOR_DISCOVERY, default=False): cv.boolean,
+        cv.Optional(CONF_MODULE_STATE_DISCOVERY, default=False): cv.boolean,
+        cv.Optional(CONF_MODULE_STATE_PRIMARY_SELECTOR, default=0x04): cv.int_range(min=0, max=7),
+        cv.Optional(CONF_MODULE_STATE_SECONDARY_SELECTOR, default=0x00): cv.int_range(min=0, max=7),
         cv.Optional(CONF_REPEAT_INTERVAL): cv.All(
             cv.positive_time_period_milliseconds,
             cv.Range(min=cv.TimePeriod(seconds=30)),
@@ -68,5 +74,10 @@ async def to_code(config):
     cg.add(var.set_quiesce_delay(config[CONF_QUIESCE_DELAY]))
     cg.add(var.set_scheduled_quiesce_delay(config[CONF_SCHEDULED_QUIESCE_DELAY]))
     cg.add(var.set_selector_discovery(config[CONF_SELECTOR_DISCOVERY]))
+    cg.add(var.set_module_state_discovery(config[CONF_MODULE_STATE_DISCOVERY]))
+    cg.add(var.set_module_state_selectors(
+        config[CONF_MODULE_STATE_PRIMARY_SELECTOR],
+        config[CONF_MODULE_STATE_SECONDARY_SELECTOR],
+    ))
     if CONF_REPEAT_INTERVAL in config:
         cg.add(var.set_repeat_interval(config[CONF_REPEAT_INTERVAL]))

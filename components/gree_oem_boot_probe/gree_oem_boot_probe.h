@@ -4,11 +4,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <map>
+#include <string>
+#include <vector>
 
 #include "esphome/components/sinclair_ac/esppac.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
+#include "payload_fingerprint.h"
 #include "rtl_query.h"
 
 namespace esphome {
@@ -26,6 +30,11 @@ class GreeOemBootProbe : public Component {
   void set_quiesce_delay(uint32_t delay_ms) { this->quiesce_delay_ms_ = delay_ms; }
   void set_scheduled_quiesce_delay(uint32_t delay_ms) { this->scheduled_quiesce_delay_ms_ = delay_ms; }
   void set_selector_discovery(bool enabled) { this->selector_discovery_ = enabled; }
+  void set_module_state_discovery(bool enabled) { this->module_state_discovery_ = enabled; }
+  void set_module_state_selectors(uint8_t primary, uint8_t secondary) {
+    this->module_state_primary_selector_ = primary;
+    this->module_state_secondary_selector_ = secondary;
+  }
 
   float get_setup_priority() const override { return setup_priority::LATE; }
 
@@ -142,18 +151,36 @@ class GreeOemBootProbe : public Component {
         }
         break;
       case Phase::QUERY_SELECTOR_DISCOVERY:
-        if (!this->selector_discovery_) {
-          this->finish_pending_query_();
-          this->phase_ = Phase::RESPONSE_DRAIN;
-          this->next_action_at_ = now + RESPONSE_DRAIN_MS;
-        } else if (this->selector_discovery_index_ >= SELECTOR_DISCOVERY_CASES) {
-          this->finish_pending_query_();
-          ESP_LOGI(TAG, "Read-only selector discovery complete: %u combinations tested",
-                   static_cast<unsigned>(SELECTOR_DISCOVERY_CASES));
-          this->phase_ = Phase::RESPONSE_DRAIN;
-          this->next_action_at_ = now + RESPONSE_DRAIN_MS;
-        } else {
+        if (this->selector_discovery_ &&
+            this->selector_discovery_index_ < SELECTOR_DISCOVERY_CASES) {
           this->send_next_selector_discovery_query_();
+        } else {
+          this->finish_pending_query_();
+          if (this->selector_discovery_) {
+            ESP_LOGI(TAG, "Read-only selector discovery complete: %u combinations tested",
+                     static_cast<unsigned>(SELECTOR_DISCOVERY_CASES));
+          }
+          if (this->module_state_discovery_) {
+            this->begin_module_state_discovery_();
+          } else {
+            this->phase_ = Phase::RESPONSE_DRAIN;
+            this->next_action_at_ = now + RESPONSE_DRAIN_MS;
+          }
+        }
+        break;
+      case Phase::QUERY_MODULE_STATE_DISCOVERY:
+        if (this->module_state_discovery_index_ < MODULE_STATE_DISCOVERY_CASES) {
+          this->send_next_module_state_discovery_query_();
+        } else {
+          this->finish_pending_query_();
+          ESP_LOGI(TAG,
+                   "Read-only module-state discovery complete: %u states tested "
+                   "for primary=0x%02X secondary=0x%02X",
+                   static_cast<unsigned>(MODULE_STATE_DISCOVERY_CASES),
+                   this->module_state_primary_selector_,
+                   this->module_state_secondary_selector_);
+          this->phase_ = Phase::RESPONSE_DRAIN;
+          this->next_action_at_ = now + RESPONSE_DRAIN_MS;
         }
         break;
       case Phase::RESPONSE_DRAIN:
@@ -175,6 +202,9 @@ class GreeOemBootProbe : public Component {
     ESP_LOGCONFIG(TAG, "  Scheduled query quiesce delay: %u ms", this->scheduled_quiesce_delay_ms_);
     ESP_LOGCONFIG(TAG, "  Recovered report queries: %s", YESNO(this->query_recovered_data_));
     ESP_LOGCONFIG(TAG, "  Exhaustive read-only selector discovery: %s", YESNO(this->selector_discovery_));
+    ESP_LOGCONFIG(TAG, "  Read-only module-state discovery: %s", YESNO(this->module_state_discovery_));
+    ESP_LOGCONFIG(TAG, "  Module-state selector: primary=0x%02X secondary=0x%02X",
+                  this->module_state_primary_selector_, this->module_state_secondary_selector_);
     ESP_LOGCONFIG(TAG, "  Outdoor operating repeat interval: %u ms",
                   this->repeat_interval_ms_);
     ESP_LOGCONFIG(TAG, "  Restore control: %s", YESNO(this->restore_control_));
@@ -182,6 +212,7 @@ class GreeOemBootProbe : public Component {
 
  protected:
   enum class QueryCycle : uint8_t { FULL_DISCOVERY, OUTDOOR_OPERATING };
+  enum class DiscoveryKind : uint8_t { SELECTOR, MODULE_STATE };
 
   enum class Phase : uint8_t {
     IDLE,
@@ -201,12 +232,14 @@ class GreeOemBootProbe : public Component {
     QUERY_PAGE_41,
     QUERY_ENERGY,
     QUERY_SELECTOR_DISCOVERY,
+    QUERY_MODULE_STATE_DISCOVERY,
     RESPONSE_DRAIN,
   };
 
   static constexpr uint32_t MIN_QUERY_SPACING_MS = 900;
   static constexpr uint32_t RESPONSE_DRAIN_MS = 1500;
   static constexpr uint8_t SELECTOR_DISCOVERY_CASES = 64;
+  static constexpr uint8_t MODULE_STATE_DISCOVERY_CASES = 8;
 
   uint32_t query_spacing_ms_() const {
     return this->frame_spacing_ms_ < MIN_QUERY_SPACING_MS ? MIN_QUERY_SPACING_MS
@@ -224,6 +257,8 @@ class GreeOemBootProbe : public Component {
     this->pending_query_active_ = false;
     this->pending_any_response_ = false;
     this->selector_discovery_index_ = 0;
+    this->module_state_discovery_index_ = 0;
+    this->discovery_baselines_.clear();
     this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
     this->phase_ = Phase::BOOT_IDENTITY;
     this->next_action_at_ = millis() + this->start_delay_ms_;
@@ -263,20 +298,42 @@ class GreeOemBootProbe : public Component {
     if (!this->pending_query_active_) return;
 
     if (this->pending_any_response_) {
+      const char *kind = this->pending_discovery_kind_ == DiscoveryKind::MODULE_STATE
+                             ? "STATE"
+                             : "SELECTOR";
       const uint32_t total_after = this->climate_->get_retained_payload_total_generation();
       if (total_after != this->pending_total_generation_) {
         const uint8_t command = this->climate_->get_last_retained_command();
         const auto *payload = this->climate_->get_retained_payload(command);
-        ESP_LOGI(TAG,
-                 "SELECTOR RX primary=0x%02X secondary=0x%02X state=0x%02X -> "
-                 "cmd=0x%02X payload=%u bytes",
-                 this->pending_primary_selector_, this->pending_secondary_selector_,
-                 this->pending_module_state_, command,
-                 payload == nullptr ? 0U : static_cast<unsigned>(payload->size()));
+        if (payload != nullptr) {
+          const uint32_t hash = payload_fnv1a(*payload);
+          const auto baseline = this->discovery_baselines_.find(command);
+          uint32_t baseline_hash = hash;
+          std::string differences = "baseline";
+          if (baseline == this->discovery_baselines_.end()) {
+            this->discovery_baselines_[command] = *payload;
+          } else {
+            baseline_hash = payload_fnv1a(baseline->second);
+            differences = payload_changed_indices(baseline->second, *payload);
+          }
+          ESP_LOGI(TAG,
+                   "%s RX primary=0x%02X secondary=0x%02X state=0x%02X -> "
+                   "cmd=0x%02X payload=%u hash=0x%08X baseline=0x%08X diff=[%s]",
+                   kind, this->pending_primary_selector_, this->pending_secondary_selector_,
+                   this->pending_module_state_, command,
+                   static_cast<unsigned>(payload->size()), static_cast<unsigned>(hash),
+                   static_cast<unsigned>(baseline_hash), differences.c_str());
+        } else {
+          ESP_LOGW(TAG,
+                   "%s RX primary=0x%02X secondary=0x%02X state=0x%02X -> "
+                   "cmd=0x%02X retained payload missing",
+                   kind, this->pending_primary_selector_, this->pending_secondary_selector_,
+                   this->pending_module_state_, command);
+        }
       } else {
         ESP_LOGW(TAG,
-                 "SELECTOR RX timeout primary=0x%02X secondary=0x%02X state=0x%02X",
-                 this->pending_primary_selector_, this->pending_secondary_selector_,
+                 "%s RX timeout primary=0x%02X secondary=0x%02X state=0x%02X",
+                 kind, this->pending_primary_selector_, this->pending_secondary_selector_,
                  this->pending_module_state_);
       }
       this->pending_any_response_ = false;
@@ -314,6 +371,7 @@ class GreeOemBootProbe : public Component {
     const uint8_t secondary = static_cast<uint8_t>(this->selector_discovery_index_ % 8U);
     ++this->selector_discovery_index_;
 
+    this->pending_discovery_kind_ = DiscoveryKind::SELECTOR;
     this->pending_primary_selector_ = primary;
     this->pending_secondary_selector_ = secondary;
     this->pending_module_state_ = 0x01;
@@ -327,6 +385,41 @@ class GreeOemBootProbe : public Component {
     const auto frame = build_rtl_report_query(primary, secondary, 0x3B, 0x01);
     this->send_(frame, this->selector_description_);
     this->phase_ = Phase::QUERY_SELECTOR_DISCOVERY;
+    this->next_action_at_ = millis() + this->query_spacing_ms_();
+  }
+
+  void begin_module_state_discovery_() {
+    this->module_state_discovery_index_ = 0;
+    this->discovery_baselines_.clear();
+    this->phase_ = Phase::QUERY_MODULE_STATE_DISCOVERY;
+    this->next_action_at_ = millis();
+    ESP_LOGI(TAG,
+             "Starting read-only module-state discovery for primary=0x%02X "
+             "secondary=0x%02X",
+             this->module_state_primary_selector_, this->module_state_secondary_selector_);
+  }
+
+  void send_next_module_state_discovery_query_() {
+    this->finish_pending_query_();
+    const uint8_t module_state = this->module_state_discovery_index_++;
+
+    this->pending_discovery_kind_ = DiscoveryKind::MODULE_STATE;
+    this->pending_primary_selector_ = this->module_state_primary_selector_;
+    this->pending_secondary_selector_ = this->module_state_secondary_selector_;
+    this->pending_module_state_ = module_state;
+    this->pending_total_generation_ = this->climate_->get_retained_payload_total_generation();
+    this->pending_any_response_ = true;
+    this->pending_query_active_ = true;
+
+    std::snprintf(this->selector_description_, sizeof(this->selector_description_),
+                  "read-only module state primary=0x%02X secondary=0x%02X state=0x%02X",
+                  this->pending_primary_selector_, this->pending_secondary_selector_,
+                  module_state);
+    const auto frame = build_rtl_report_query(this->pending_primary_selector_,
+                                              this->pending_secondary_selector_,
+                                              0x3B, module_state);
+    this->send_(frame, this->selector_description_);
+    this->phase_ = Phase::QUERY_MODULE_STATE_DISCOVERY;
     this->next_action_at_ = millis() + this->query_spacing_ms_();
   }
 
@@ -425,6 +518,7 @@ class GreeOemBootProbe : public Component {
   uart::UARTComponent *uart_{nullptr};
   sinclair_ac::SinclairAC *climate_{nullptr};
   QueryCycle query_cycle_{QueryCycle::FULL_DISCOVERY};
+  DiscoveryKind pending_discovery_kind_{DiscoveryKind::SELECTOR};
   Phase phase_{Phase::IDLE};
   uint32_t start_delay_ms_{100};
   uint32_t frame_spacing_ms_{450};
@@ -441,17 +535,22 @@ class GreeOemBootProbe : public Component {
   char selector_description_[80]{};
   uint8_t pending_expected_command_{0};
   uint8_t selector_discovery_index_{0};
+  uint8_t module_state_discovery_index_{0};
+  uint8_t module_state_primary_selector_{0x04};
+  uint8_t module_state_secondary_selector_{0x00};
   uint8_t pending_primary_selector_{0};
   uint8_t pending_secondary_selector_{0};
   uint8_t pending_module_state_{0};
   bool restore_control_{true};
   bool query_recovered_data_{true};
   bool selector_discovery_{false};
+  bool module_state_discovery_{false};
   bool sequence_active_{false};
   bool finished_{false};
   bool pending_query_active_{false};
   bool pending_any_response_{false};
   bool energy_discovery_attempted_{false};
+  std::map<uint8_t, std::vector<uint8_t>> discovery_baselines_;
 };
 
 }  // namespace gree_oem_probe

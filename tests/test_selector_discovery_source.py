@@ -12,6 +12,11 @@ class SelectorDiscoverySourceTest(unittest.TestCase):
         self.assertIn("get_retained_payload_total_generation", header)
         self.assertIn('CONF_SELECTOR_DISCOVERY = "selector_discovery"', config)
         self.assertIn("default=False", config)
+        self.assertIn("MODULE_STATE_DISCOVERY_CASES = 8", header)
+        self.assertIn("build_rtl_report_query(this->pending_primary_selector_", header)
+        self.assertIn("payload_changed_indices", header)
+        self.assertIn('CONF_MODULE_STATE_DISCOVERY = "module_state_discovery"', config)
+        self.assertIn("module_state_primary_selector", config)
 
 
 if __name__ == "__main__":
