@@ -1,0 +1,54 @@
+name: Apply comprehensive runtime hardening
+
+on:
+  push:
+    branches:
+      - codex/add-compatibility-and-protocol-discovery-mode
+    paths:
+      - .github/workflows/one-shot-runtime-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/add-compatibility-and-protocol-discovery-mode
+          fetch-depth: 0
+
+      - name: Apply patches
+        run: |
+          python3 .github/runtime_hardening_patch.py
+          python3 .github/runtime_hardening_patch_part2.py
+
+      - name: Validate
+        run: |
+          git diff --check
+          python3 -m py_compile components/sinclair_ac/climate.py components/gree_oem_boot_probe/__init__.py
+          python3 -m unittest discover -s tests
+
+      - name: Commit final changes
+        run: |
+          rm .github/runtime_hardening_patch.py
+          rm .github/runtime_hardening_patch_part2.py
+          rm .github/workflows/one-shot-runtime-hardening.yml
+          git config user.name "OpenAI"
+          git config user.email "openai@users.noreply.github.com"
+          git add components/sinclair_ac/temperature_stabilizer.h \
+                  components/sinclair_ac/esppac.h \
+                  components/sinclair_ac/esppac.cpp \
+                  components/sinclair_ac/esppac_cnt.h \
+                  components/sinclair_ac/esppac_cnt.cpp \
+                  components/sinclair_ac/climate.py \
+                  components/gree_oem_report_sensors/gree_oem_report_sensors.h \
+                  components/gree_oem_boot_probe/gree_oem_boot_probe.h \
+                  components/gree_oem_boot_probe/__init__.py \
+                  tests/test_temperature_stabilizer.py \
+                  .github/runtime_hardening_patch.py \
+                  .github/runtime_hardening_patch_part2.py \
+                  .github/workflows/one-shot-runtime-hardening.yml
+          git commit -m "Stabilize temperatures and shorten telemetry pauses"
+          git push origin HEAD:codex/add-compatibility-and-protocol-discovery-mode
