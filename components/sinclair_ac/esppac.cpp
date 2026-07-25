@@ -187,6 +187,8 @@ void SinclairAC::retain_payload(uint8_t command, const std::vector<uint8_t> &pay
     // Raw retention is unconditional: the Last 0x31 entity must never be stale.
     this->last_payloads_[command] = payload;
     ++this->payload_generations_[command];
+    ++this->payload_total_generation_;
+    this->last_retained_command_ = command;
     if (this->telemetry_expose_raw_payload_) {
         text_sensor::TextSensor *target = nullptr;
         switch (command) {

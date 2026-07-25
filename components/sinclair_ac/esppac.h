@@ -183,6 +183,10 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
             const auto it = this->payload_generations_.find(command);
             return it == this->payload_generations_.end() ? 0 : it->second;
         }
+        uint32_t get_retained_payload_total_generation() const {
+            return this->payload_total_generation_;
+        }
+        uint8_t get_last_retained_command() const { return this->last_retained_command_; }
 
         void setup() override;
         void loop() override;
@@ -245,6 +249,8 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         std::string published_discovery_summary_, published_capture_export_;
         std::map<uint8_t, std::vector<uint8_t>> last_payloads_;
         std::map<uint8_t, uint32_t> payload_generations_;
+        uint32_t payload_total_generation_{0};
+        uint8_t last_retained_command_{0};
         std::map<uint8_t, std::vector<uint8_t>> previous_frames_;
         bool has_last_packet_diagnostics_{false};
         uint32_t last_packet_length_{0}, last_packet_type_{0};
