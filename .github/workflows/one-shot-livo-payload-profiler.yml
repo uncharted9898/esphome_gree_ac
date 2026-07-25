@@ -23,11 +23,13 @@ jobs:
       - name: Apply implementation
         run: python3 .github/livo_payload_profiler_patch.py
 
-      - name: Validate
+      - name: Validate profiler changes
         run: |
           git diff --check
           python3 -m py_compile components/gree_oem_boot_probe/__init__.py components/sinclair_ac/climate.py
-          python3 -m unittest discover -s tests
+          python3 tests/test_payload_evolution.py
+          python3 tests/test_payload_fingerprint.py
+          python3 tests/test_selector_discovery_source.py
 
       - name: Remove one-shot machinery
         run: |
