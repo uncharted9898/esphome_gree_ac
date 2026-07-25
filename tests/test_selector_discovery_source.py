@@ -17,6 +17,10 @@ class SelectorDiscoverySourceTest(unittest.TestCase):
         self.assertIn("payload_changed_indices", header)
         self.assertIn('CONF_MODULE_STATE_DISCOVERY = "module_state_discovery"', config)
         self.assertIn("module_state_primary_selector", config)
+        self.assertIn("QUERY_PROFILE_STATUS", header)
+        self.assertIn("PROFILE MAP cmd=0x%02X", header)
+        self.assertIn('CONF_OPERATING_PROFILE = "operating_profile"', config)
+        self.assertIn("operating_profile_cycles", config)
 
 
 if __name__ == "__main__":

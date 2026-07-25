@@ -12,6 +12,7 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
+#include "payload_evolution.h"
 #include "payload_fingerprint.h"
 #include "rtl_query.h"
 
@@ -31,6 +32,8 @@ class GreeOemBootProbe : public Component {
   void set_scheduled_quiesce_delay(uint32_t delay_ms) { this->scheduled_quiesce_delay_ms_ = delay_ms; }
   void set_selector_discovery(bool enabled) { this->selector_discovery_ = enabled; }
   void set_module_state_discovery(bool enabled) { this->module_state_discovery_ = enabled; }
+  void set_operating_profile(bool enabled) { this->operating_profile_ = enabled; }
+  void set_operating_profile_cycles(uint16_t cycles) { this->operating_profile_cycles_ = cycles; }
   void set_module_state_selectors(uint8_t primary, uint8_t secondary) {
     this->module_state_primary_selector_ = primary;
     this->module_state_secondary_selector_ = secondary;
@@ -162,6 +165,8 @@ class GreeOemBootProbe : public Component {
           }
           if (this->module_state_discovery_) {
             this->begin_module_state_discovery_();
+          } else if (this->operating_profile_) {
+            this->begin_operating_profile_();
           } else {
             this->phase_ = Phase::RESPONSE_DRAIN;
             this->next_action_at_ = now + RESPONSE_DRAIN_MS;
@@ -179,8 +184,44 @@ class GreeOemBootProbe : public Component {
                    static_cast<unsigned>(MODULE_STATE_DISCOVERY_CASES),
                    this->module_state_primary_selector_,
                    this->module_state_secondary_selector_);
+          if (this->operating_profile_) {
+            this->begin_operating_profile_();
+          } else {
+            this->phase_ = Phase::RESPONSE_DRAIN;
+            this->next_action_at_ = now + RESPONSE_DRAIN_MS;
+          }
+        }
+        break;
+      case Phase::QUERY_PROFILE_STATUS:
+        this->send_profile_query_and_advance_(QUERY_EXTENDED_STATUS, 0x31,
+                                              "profile extended status 0x31",
+                                              Phase::QUERY_PROFILE_COMBINED);
+        break;
+      case Phase::QUERY_PROFILE_COMBINED:
+        this->send_profile_query_and_advance_(QUERY_REPORT_COMBINED, 0x33,
+                                              "profile combined report 0x33",
+                                              Phase::QUERY_PROFILE_INDOOR);
+        break;
+      case Phase::QUERY_PROFILE_INDOOR:
+        this->send_profile_query_and_advance_(QUERY_REPORT_INDOOR, 0x34,
+                                              "profile indoor report 0x34",
+                                              Phase::QUERY_PROFILE_OUTDOOR);
+        break;
+      case Phase::QUERY_PROFILE_OUTDOOR:
+        this->send_profile_query_and_advance_(QUERY_REPORT_OUTDOOR, 0x35,
+                                              "profile outdoor report 0x35",
+                                              Phase::QUERY_PROFILE_CYCLE_END);
+        break;
+      case Phase::QUERY_PROFILE_CYCLE_END:
+        this->finish_pending_query_();
+        ++this->operating_profile_cycle_index_;
+        if (this->operating_profile_cycle_index_ >= this->operating_profile_cycles_) {
+          this->log_operating_profile_summary_();
           this->phase_ = Phase::RESPONSE_DRAIN;
           this->next_action_at_ = now + RESPONSE_DRAIN_MS;
+        } else {
+          this->phase_ = Phase::QUERY_PROFILE_STATUS;
+          this->next_action_at_ = now;
         }
         break;
       case Phase::RESPONSE_DRAIN:
@@ -203,6 +244,8 @@ class GreeOemBootProbe : public Component {
     ESP_LOGCONFIG(TAG, "  Recovered report queries: %s", YESNO(this->query_recovered_data_));
     ESP_LOGCONFIG(TAG, "  Exhaustive read-only selector discovery: %s", YESNO(this->selector_discovery_));
     ESP_LOGCONFIG(TAG, "  Read-only module-state discovery: %s", YESNO(this->module_state_discovery_));
+    ESP_LOGCONFIG(TAG, "  Full operating payload profile: %s", YESNO(this->operating_profile_));
+    ESP_LOGCONFIG(TAG, "  Operating profile cycles: %u", this->operating_profile_cycles_);
     ESP_LOGCONFIG(TAG, "  Module-state selector: primary=0x%02X secondary=0x%02X",
                   this->module_state_primary_selector_, this->module_state_secondary_selector_);
     ESP_LOGCONFIG(TAG, "  Outdoor operating repeat interval: %u ms",
@@ -233,6 +276,11 @@ class GreeOemBootProbe : public Component {
     QUERY_ENERGY,
     QUERY_SELECTOR_DISCOVERY,
     QUERY_MODULE_STATE_DISCOVERY,
+    QUERY_PROFILE_STATUS,
+    QUERY_PROFILE_COMBINED,
+    QUERY_PROFILE_INDOOR,
+    QUERY_PROFILE_OUTDOOR,
+    QUERY_PROFILE_CYCLE_END,
     RESPONSE_DRAIN,
   };
 
@@ -259,6 +307,8 @@ class GreeOemBootProbe : public Component {
     this->selector_discovery_index_ = 0;
     this->module_state_discovery_index_ = 0;
     this->discovery_baselines_.clear();
+    this->operating_profile_cycle_index_ = 0;
+    this->operating_profiles_.clear();
     this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
     this->phase_ = Phase::BOOT_IDENTITY;
     this->next_action_at_ = millis() + this->start_delay_ms_;
@@ -296,6 +346,39 @@ class GreeOemBootProbe : public Component {
 
   void finish_pending_query_() {
     if (!this->pending_query_active_) return;
+
+    if (this->pending_profile_response_) {
+      const uint32_t generation_after =
+          this->climate_->get_retained_payload_generation(this->pending_expected_command_);
+      if (generation_after != this->pending_expected_generation_) {
+        const auto *payload = this->climate_->get_retained_payload(this->pending_expected_command_);
+        if (payload != nullptr) {
+          auto &evolution = this->operating_profiles_[this->pending_expected_command_];
+          const std::string differences = evolution.observe(*payload);
+          const uint32_t hash = payload_fnv1a(*payload);
+          if (differences == "none") {
+            ESP_LOGI(TAG,
+                     "PROFILE RX cycle=%u cmd=0x%02X payload=%u hash=0x%08X diff=[none]",
+                     this->operating_profile_cycle_index_, this->pending_expected_command_,
+                     static_cast<unsigned>(payload->size()), static_cast<unsigned>(hash));
+          } else {
+            const std::string raw = payload_hex(*payload);
+            ESP_LOGI(TAG,
+                     "PROFILE RX cycle=%u cmd=0x%02X payload=%u hash=0x%08X "
+                     "diff=[%s] raw=%s",
+                     this->operating_profile_cycle_index_, this->pending_expected_command_,
+                     static_cast<unsigned>(payload->size()), static_cast<unsigned>(hash),
+                     differences.c_str(), raw.c_str());
+          }
+        }
+      } else {
+        ESP_LOGW(TAG, "PROFILE RX timeout cycle=%u cmd=0x%02X",
+                 this->operating_profile_cycle_index_, this->pending_expected_command_);
+      }
+      this->pending_profile_response_ = false;
+      this->pending_query_active_ = false;
+      return;
+    }
 
     if (this->pending_any_response_) {
       const char *kind = this->pending_discovery_kind_ == DiscoveryKind::MODULE_STATE
@@ -423,6 +506,65 @@ class GreeOemBootProbe : public Component {
     this->next_action_at_ = millis() + this->query_spacing_ms_();
   }
 
+  void begin_operating_profile_() {
+    this->operating_profile_cycle_index_ = 0;
+    this->operating_profiles_.clear();
+    this->phase_ = Phase::QUERY_PROFILE_STATUS;
+    this->next_action_at_ = millis();
+    ESP_LOGI(TAG,
+             "Starting full Livo payload evolution profile: %u cycles, "
+             "pages 0x31/0x33/0x34/0x35",
+             this->operating_profile_cycles_);
+  }
+
+  template<size_t N>
+  void send_profile_query_and_advance_(const std::array<uint8_t, N> &frame,
+                                       uint8_t expected_command,
+                                       const char *description, Phase next) {
+    this->finish_pending_query_();
+    this->pending_expected_command_ = expected_command;
+    this->pending_expected_generation_ =
+        this->climate_->get_retained_payload_generation(expected_command);
+    this->pending_description_ = description;
+    this->pending_profile_response_ = true;
+    this->pending_query_active_ = true;
+    this->send_(frame, description);
+    this->phase_ = next;
+    this->next_action_at_ = millis() + this->query_spacing_ms_();
+  }
+
+  void log_operating_profile_summary_() const {
+    ESP_LOGI(TAG, "PROFILE COMPLETE cycles=%u commands=%u",
+             this->operating_profile_cycle_index_,
+             static_cast<unsigned>(this->operating_profiles_.size()));
+    for (const auto &entry : this->operating_profiles_) {
+      const uint8_t command = entry.first;
+      const PayloadEvolution &evolution = entry.second;
+      ESP_LOGI(TAG, "PROFILE BASELINE cmd=0x%02X samples=%u raw=%s", command,
+               static_cast<unsigned>(evolution.samples()),
+               payload_hex(evolution.baseline()).c_str());
+      ESP_LOGI(TAG, "PROFILE LAST cmd=0x%02X raw=%s", command,
+               payload_hex(evolution.last()).c_str());
+      for (size_t start = 0; start < evolution.size(); start += 6) {
+        std::string line;
+        const size_t end = std::min(start + 6, evolution.size());
+        for (size_t index = start; index < end; ++index) {
+          char token[72];
+          std::snprintf(token, sizeof(token),
+                        "%u=%02X..%02X/x%02X/c%u",
+                        static_cast<unsigned>(index), evolution.minimum(index),
+                        evolution.maximum(index), evolution.xor_mask(index),
+                        static_cast<unsigned>(evolution.change_count(index)));
+          if (!line.empty()) line.push_back(' ');
+          line += token;
+        }
+        ESP_LOGI(TAG, "PROFILE MAP cmd=0x%02X bytes=%u-%u %s", command,
+                 static_cast<unsigned>(start), static_cast<unsigned>(end - 1),
+                 line.c_str());
+      }
+    }
+  }
+
   template<size_t N>
   void send_query_and_advance_(const std::array<uint8_t, N> &frame, uint8_t expected_command,
                                const char *description, Phase next) {
@@ -541,16 +683,21 @@ class GreeOemBootProbe : public Component {
   uint8_t pending_primary_selector_{0};
   uint8_t pending_secondary_selector_{0};
   uint8_t pending_module_state_{0};
+  uint16_t operating_profile_cycles_{40};
+  uint16_t operating_profile_cycle_index_{0};
   bool restore_control_{true};
   bool query_recovered_data_{true};
   bool selector_discovery_{false};
   bool module_state_discovery_{false};
+  bool operating_profile_{false};
   bool sequence_active_{false};
   bool finished_{false};
   bool pending_query_active_{false};
   bool pending_any_response_{false};
+  bool pending_profile_response_{false};
   bool energy_discovery_attempted_{false};
   std::map<uint8_t, std::vector<uint8_t>> discovery_baselines_;
+  std::map<uint8_t, PayloadEvolution> operating_profiles_;
 };
 
 }  // namespace gree_oem_probe

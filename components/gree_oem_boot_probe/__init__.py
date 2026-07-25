@@ -21,6 +21,8 @@ CONF_SELECTOR_DISCOVERY = "selector_discovery"
 CONF_MODULE_STATE_DISCOVERY = "module_state_discovery"
 CONF_MODULE_STATE_PRIMARY_SELECTOR = "module_state_primary_selector"
 CONF_MODULE_STATE_SECONDARY_SELECTOR = "module_state_secondary_selector"
+CONF_OPERATING_PROFILE = "operating_profile"
+CONF_OPERATING_PROFILE_CYCLES = "operating_profile_cycles"
 
 gree_oem_probe_ns = cg.esphome_ns.namespace("gree_oem_probe")
 GreeOemBootProbe = gree_oem_probe_ns.class_("GreeOemBootProbe", cg.Component)
@@ -52,6 +54,8 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MODULE_STATE_DISCOVERY, default=False): cv.boolean,
         cv.Optional(CONF_MODULE_STATE_PRIMARY_SELECTOR, default=0x04): cv.int_range(min=0, max=7),
         cv.Optional(CONF_MODULE_STATE_SECONDARY_SELECTOR, default=0x00): cv.int_range(min=0, max=7),
+        cv.Optional(CONF_OPERATING_PROFILE, default=False): cv.boolean,
+        cv.Optional(CONF_OPERATING_PROFILE_CYCLES, default=40): cv.int_range(min=1, max=120),
         cv.Optional(CONF_REPEAT_INTERVAL): cv.All(
             cv.positive_time_period_milliseconds,
             cv.Range(min=cv.TimePeriod(seconds=30)),
@@ -79,5 +83,7 @@ async def to_code(config):
         config[CONF_MODULE_STATE_PRIMARY_SELECTOR],
         config[CONF_MODULE_STATE_SECONDARY_SELECTOR],
     ))
+    cg.add(var.set_operating_profile(config[CONF_OPERATING_PROFILE]))
+    cg.add(var.set_operating_profile_cycles(config[CONF_OPERATING_PROFILE_CYCLES]))
     if CONF_REPEAT_INTERVAL in config:
         cg.add(var.set_repeat_interval(config[CONF_REPEAT_INTERVAL]))
