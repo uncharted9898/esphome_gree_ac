@@ -1,0 +1,43 @@
+name: one-shot-selector-discovery
+
+on:
+  push:
+    branches:
+      - codex/add-compatibility-and-protocol-discovery-mode
+    paths:
+      - .github/selector_discovery_patch.py
+      - .github/workflows/one-shot-selector-discovery.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/add-compatibility-and-protocol-discovery-mode
+          fetch-depth: 0
+
+      - name: Apply implementation
+        run: python3 .github/selector_discovery_patch.py
+
+      - name: Validate
+        run: |
+          git diff --check
+          python3 -m py_compile components/gree_oem_boot_probe/__init__.py components/sinclair_ac/climate.py
+          python3 -m unittest discover -s tests
+
+      - name: Remove one-shot machinery
+        run: |
+          rm -f .github/selector_discovery_patch.py
+          rm -f .github/workflows/one-shot-selector-discovery.yml
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add read-only selector discovery sweep"
+          git push origin HEAD:codex/add-compatibility-and-protocol-discovery-mode
