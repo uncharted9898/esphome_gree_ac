@@ -671,20 +671,16 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
     }
 
     if (payload.size() > 44) {
-        const bool refresh_due = millis() - this->last_candidate_telemetry_byte_44_publish_ >= 60000;
         const bool changed = !this->has_published_candidate_telemetry_byte_44_ ||
                              payload[44] != this->published_candidate_telemetry_byte_44_;
-        if (changed || refresh_due) {
-            if (this->candidate_telemetry_byte_44_raw_sensor_) {
-                this->candidate_telemetry_byte_44_raw_sensor_->publish_state(payload[44]);
-            }
+        if (changed) {
+            if (this->candidate_telemetry_byte_44_raw_sensor_) this->candidate_telemetry_byte_44_raw_sensor_->publish_state(payload[44]);
             if (this->candidate_byte_44_temperature_hypothesis_sensor_) {
                 this->candidate_byte_44_temperature_hypothesis_sensor_->publish_state(
                     decode_current_temperature_field(payload[44], this->uses_gree_fan_layout()));
             }
             this->published_candidate_telemetry_byte_44_ = payload[44];
             this->has_published_candidate_telemetry_byte_44_ = true;
-            this->last_candidate_telemetry_byte_44_publish_ = millis();
         }
     }
     this->report_payload_ = &payload;
@@ -716,8 +712,7 @@ bool SinclairACCNT::processUnitReport(const std::vector<uint8_t> &payload)
             protocol::REPORT_TEMP_ACT_POS);
         const float newCurrentTemperature =
             decode_current_temperature_field(raw_current_temperature, this->uses_gree_fan_layout());
-        if (this->current_temperature != newCurrentTemperature) hasChanged = true;
-        this->update_current_temperature(newCurrentTemperature);
+        if (this->update_current_temperature_from_report(newCurrentTemperature)) hasChanged = true;
     }
 
     std::string verticalSwing = determine_vertical_swing();

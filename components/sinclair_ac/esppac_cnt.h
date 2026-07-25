@@ -163,6 +163,7 @@ class SinclairACCNT : public SinclairAC {
             return this->request_lifecycle_.may_send() && !this->pending_control_.active &&
                    !this->active_control_.active && !this->control_send_queued_;
         }
+        bool temperature_stabilization_auto_enabled() const override { return this->uses_gree_fan_layout(); }
         void set_polls_sent_sensor(sensor::Sensor *s) { polls_sent_sensor_ = s; }
         void set_poll_responses_sensor(sensor::Sensor *s) { poll_responses_sensor_ = s; }
         void set_poll_response_timeouts_sensor(sensor::Sensor *s) { poll_response_timeouts_sensor_ = s; }

@@ -23,6 +23,7 @@ class GreeOemBootProbe : public Component {
   void set_query_recovered_data(bool enabled) { this->query_recovered_data_ = enabled; }
   void set_repeat_interval(uint32_t interval_ms) { this->repeat_interval_ms_ = interval_ms; }
   void set_quiesce_delay(uint32_t delay_ms) { this->quiesce_delay_ms_ = delay_ms; }
+  void set_scheduled_quiesce_delay(uint32_t delay_ms) { this->scheduled_quiesce_delay_ms_ = delay_ms; }
 
   float get_setup_priority() const override { return setup_priority::LATE; }
 
@@ -44,7 +45,7 @@ class GreeOemBootProbe : public Component {
         return;
       }
       if (!this->climate_->supplemental_query_may_start()) return;
-      ESP_LOGI(TAG, "Starting scheduled RTL8720CF outdoor operating query");
+      ESP_LOGD(TAG, "Starting scheduled RTL8720CF outdoor operating query");
       this->begin_query_sequence_(true, QueryCycle::OUTDOOR_OPERATING);
       return;
     }
@@ -154,6 +155,7 @@ class GreeOemBootProbe : public Component {
     ESP_LOGCONFIG(TAG, "  Captured boot frame spacing: %u ms", this->frame_spacing_ms_);
     ESP_LOGCONFIG(TAG, "  Query response window: %u ms", this->query_spacing_ms_());
     ESP_LOGCONFIG(TAG, "  Query quiesce delay: %u ms", this->quiesce_delay_ms_);
+    ESP_LOGCONFIG(TAG, "  Scheduled query quiesce delay: %u ms", this->scheduled_quiesce_delay_ms_);
     ESP_LOGCONFIG(TAG, "  Recovered report queries: %s", YESNO(this->query_recovered_data_));
     ESP_LOGCONFIG(TAG, "  Outdoor operating repeat interval: %u ms",
                   this->repeat_interval_ms_);
@@ -214,7 +216,10 @@ class GreeOemBootProbe : public Component {
     this->pending_query_active_ = false;
     this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
     this->phase_ = Phase::QUERY_QUIESCE;
-    this->next_action_at_ = millis() + (quiesce ? this->quiesce_delay_ms_ : 0);
+    const uint32_t delay = cycle == QueryCycle::OUTDOOR_OPERATING
+                               ? this->scheduled_quiesce_delay_ms_
+                               : (quiesce ? this->quiesce_delay_ms_ : 0);
+    this->next_action_at_ = millis() + delay;
   }
 
 
@@ -239,10 +244,19 @@ class GreeOemBootProbe : public Component {
         this->climate_->get_retained_payload_generation(this->pending_expected_command_);
     const uint32_t status_after = this->climate_->get_retained_payload_generation(0x31);
     if (expected_after != this->pending_expected_generation_) {
-      ESP_LOGI(TAG, "PROBE RX matched %s with command 0x%02X", this->pending_description_,
-               this->pending_expected_command_);
+      if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
+        ESP_LOGD(TAG, "PROBE RX matched %s with command 0x%02X", this->pending_description_,
+                 this->pending_expected_command_);
+      } else {
+        ESP_LOGI(TAG, "PROBE RX matched %s with command 0x%02X", this->pending_description_,
+                 this->pending_expected_command_);
+      }
     } else if (status_after != this->pending_status_generation_) {
-      ESP_LOGI(TAG, "PROBE RX fallback after %s: command 0x31", this->pending_description_);
+      if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
+        ESP_LOGD(TAG, "PROBE RX fallback after %s: command 0x31", this->pending_description_);
+      } else {
+        ESP_LOGI(TAG, "PROBE RX fallback after %s: command 0x31", this->pending_description_);
+      }
     } else {
       ESP_LOGW(TAG, "PROBE RX timeout after %s: expected command 0x%02X",
                this->pending_description_, this->pending_expected_command_);
@@ -268,10 +282,11 @@ class GreeOemBootProbe : public Component {
   void finish_sequence_() {
     if (this->restore_control_) {
       this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::CONTROL);
-      ESP_LOGI(TAG, "%s complete; normal climate control enabled",
-               this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING
-                   ? "Outdoor operating query"
-                   : "OEM telemetry discovery sequence");
+      if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
+        ESP_LOGD(TAG, "Outdoor operating query complete; normal climate control enabled");
+      } else {
+        ESP_LOGI(TAG, "OEM telemetry discovery sequence complete; normal climate control enabled");
+      }
     } else {
       ESP_LOGI(TAG, "OEM telemetry sequence complete; climate remains receive-only");
     }
@@ -307,8 +322,13 @@ class GreeOemBootProbe : public Component {
     }
 
     ++this->tx_sequence_;
-    ESP_LOGI(TAG, "PROBE TX #%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, frame[3],
-             static_cast<unsigned>(N), description);
+    if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
+      ESP_LOGD(TAG, "PROBE TX #%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, frame[3],
+               static_cast<unsigned>(N), description);
+    } else {
+      ESP_LOGI(TAG, "PROBE TX #%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, frame[3],
+               static_cast<unsigned>(N), description);
+    }
     // At 4800-8E1, flushing a 29-byte frame blocks the ESPHome loop for about
     // 66 ms. The 900 ms state-machine spacing makes a blocking flush needless.
     this->uart_->write_array(frame.data(), frame.size());
@@ -343,6 +363,7 @@ class GreeOemBootProbe : public Component {
   uint32_t start_delay_ms_{100};
   uint32_t frame_spacing_ms_{450};
   uint32_t quiesce_delay_ms_{1800};
+  uint32_t scheduled_quiesce_delay_ms_{150};
   uint32_t repeat_interval_ms_{0};
   uint32_t last_sequence_finished_at_{0};
   uint32_t next_action_at_{0};

@@ -346,12 +346,27 @@ void SinclairAC::log_packet_difference(const std::vector<uint8_t> &packet) {
 
 void SinclairAC::update_current_temperature(float temperature)
 {
-    if (temperature > TEMPERATURE_THRESHOLD) {
+    if (!std::isfinite(temperature) || temperature > TEMPERATURE_THRESHOLD) {
         ESP_LOGW(TAG, "Received out of range inside temperature: %f", temperature);
         return;
     }
-
     this->current_temperature = temperature;
+}
+
+bool SinclairAC::update_current_temperature_from_report(float temperature)
+{
+    if (!std::isfinite(temperature) || temperature > TEMPERATURE_THRESHOLD) {
+        ESP_LOGW(TAG, "Received out of range inside temperature: %f", temperature);
+        return false;
+    }
+    float accepted = temperature;
+    if (!this->current_temperature_stabilizer_.process(
+            temperature, millis(), this->temperature_stabilization_active(),
+            this->temperature_stabilization_settle_time_ms_,
+            this->temperature_stabilization_immediate_delta_c_, accepted)) return false;
+    if (std::isfinite(this->current_temperature) && std::fabs(this->current_temperature - accepted) < 0.01f) return false;
+    this->current_temperature = accepted;
+    return true;
 }
 
 void SinclairAC::update_target_temperature(float temperature)
@@ -410,42 +425,34 @@ void SinclairAC::update_display_unit(const std::string &display_unit)
 
 void SinclairAC::update_plasma(bool plasma)
 {
+    const bool changed = !this->has_plasma_state_ || this->plasma_state_ != plasma;
+    this->has_plasma_state_ = true;
     this->plasma_state_ = plasma;
-
-    if (this->plasma_switch_ != nullptr)
-    {
-        this->plasma_switch_->publish_state(this->plasma_state_);
-    }
+    if (changed && this->plasma_switch_ != nullptr) this->plasma_switch_->publish_state(plasma);
 }
 
 void SinclairAC::update_sleep(bool sleep)
 {
+    const bool changed = !this->has_sleep_state_ || this->sleep_state_ != sleep;
+    this->has_sleep_state_ = true;
     this->sleep_state_ = sleep;
-
-    if (this->sleep_switch_ != nullptr)
-    {
-        this->sleep_switch_->publish_state(this->sleep_state_);
-    }
+    if (changed && this->sleep_switch_ != nullptr) this->sleep_switch_->publish_state(sleep);
 }
 
 void SinclairAC::update_xfan(bool xfan)
 {
+    const bool changed = !this->has_xfan_state_ || this->xfan_state_ != xfan;
+    this->has_xfan_state_ = true;
     this->xfan_state_ = xfan;
-
-    if (this->xfan_switch_ != nullptr)
-    {
-        this->xfan_switch_->publish_state(this->xfan_state_);
-    }
+    if (changed && this->xfan_switch_ != nullptr) this->xfan_switch_->publish_state(xfan);
 }
 
 void SinclairAC::update_save(bool save)
 {
+    const bool changed = !this->has_save_state_ || this->save_state_ != save;
+    this->has_save_state_ = true;
     this->save_state_ = save;
-
-    if (this->save_switch_ != nullptr)
-    {
-        this->save_switch_->publish_state(this->save_state_);
-    }
+    if (changed && this->save_switch_ != nullptr) this->save_switch_->publish_state(save);
 }
 
 climate::ClimateAction SinclairAC::determine_action()

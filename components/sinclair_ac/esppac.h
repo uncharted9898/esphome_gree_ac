@@ -14,6 +14,7 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
 #include "telemetry_discovery.h"
+#include "temperature_stabilizer.h"
 
 namespace esphome {
 
@@ -102,6 +103,7 @@ typedef struct {
 
 enum class ProtocolMode : uint8_t { RECEIVE_ONLY, POLL_ONLY, CONTROL };
 enum class FanProfile : uint8_t { AUTO, SINCLAIR_EXTENDED, GREE_4_SPEED };
+enum class TemperatureStabilizationMode : uint8_t { OFF, AUTO, ON };
 
 class SinclairAC : public Component, public uart::UARTDevice, public climate::Climate {
     public:
@@ -121,6 +123,21 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         ProtocolMode get_protocol_mode() const { return this->protocol_mode_; }
         virtual bool supplemental_query_may_start() const { return true; }
         void set_fan_profile(FanProfile profile) { this->fan_profile_ = profile; }
+        void set_temperature_stabilization(TemperatureStabilizationMode mode,
+                                           uint32_t settle_time_ms,
+                                           float immediate_delta_c) {
+            this->temperature_stabilization_mode_ = mode;
+            this->temperature_stabilization_settle_time_ms_ = settle_time_ms;
+            this->temperature_stabilization_immediate_delta_c_ = immediate_delta_c;
+            this->current_temperature_stabilizer_.reset();
+        }
+        bool temperature_stabilization_active() const {
+            return this->temperature_stabilization_mode_ == TemperatureStabilizationMode::ON ||
+                   (this->temperature_stabilization_mode_ == TemperatureStabilizationMode::AUTO &&
+                    this->temperature_stabilization_auto_enabled());
+        }
+        uint32_t temperature_stabilization_settle_time_ms() const { return this->temperature_stabilization_settle_time_ms_; }
+        float temperature_stabilization_immediate_delta_c() const { return this->temperature_stabilization_immediate_delta_c_; }
         void set_telemetry_discovery(bool enabled, bool expose_raw_payload, bool expose_raw_bytes, bool log_changes_only, uint8_t history_depth);
         void set_supplemental_queries(bool enabled, uint8_t max_attempts) { this->supplemental_query_gate_.configure(enabled, max_attempts); }
         void set_debug(bool log_rx, bool log_tx, bool log_unknown, bool log_differences, uint16_t maximum_hex_length);
@@ -191,6 +208,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         std::string display_unit_state_;
 
         bool plasma_state_{false}; bool sleep_state_{false}; bool xfan_state_{false}; bool save_state_{false};
+        bool has_plasma_state_{false}; bool has_sleep_state_{false}; bool has_xfan_state_{false}; bool has_save_state_{false};
 
         SerialProcess_t serialProcess_;
 
@@ -202,6 +220,10 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         bool wait_response_{false};
         ProtocolMode protocol_mode_{ProtocolMode::CONTROL};
         FanProfile fan_profile_{FanProfile::AUTO};
+        TemperatureStabilizationMode temperature_stabilization_mode_{TemperatureStabilizationMode::AUTO};
+        uint32_t temperature_stabilization_settle_time_ms_{8000};
+        float temperature_stabilization_immediate_delta_c_{2.0f};
+        TemperatureStabilizer current_temperature_stabilizer_;
         bool telemetry_discovery_enabled_{false}, telemetry_expose_raw_payload_{true}, telemetry_expose_raw_bytes_{false}, telemetry_log_changes_only_{true};
         uint8_t telemetry_history_depth_{16};
         bool transmit_warning_logged_{false};
@@ -239,6 +261,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         bool is_receive_only() const { return this->protocol_mode_ == ProtocolMode::RECEIVE_ONLY; }
         bool is_poll_only() const { return this->protocol_mode_ == ProtocolMode::POLL_ONLY; }
         bool can_control() const { return this->protocol_mode_ == ProtocolMode::CONTROL; }
+        virtual bool temperature_stabilization_auto_enabled() const { return false; }
         const char *protocol_mode_name() const;
         void record_received_packet(bool known, bool establishes_health);
         void record_transmitted_packet(const std::vector<uint8_t> &packet);
@@ -254,6 +277,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void publish_discovery_capture();
 
         void update_current_temperature(float temperature);
+        bool update_current_temperature_from_report(float temperature);
         void update_target_temperature(float temperature);
 
         void update_swing_horizontal(const std::string &swing);

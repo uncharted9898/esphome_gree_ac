@@ -43,6 +43,7 @@ CONF_DIAGNOSTICS = "diagnostics"
 CONF_FAN_PROFILE = "fan_profile"
 CONF_TELEMETRY_DISCOVERY = "telemetry_discovery"
 CONF_SUPPLEMENTAL_QUERIES = "supplemental_queries"
+CONF_TEMPERATURE_STABILIZATION = "temperature_stabilization"
 
 diagnostic_sensor_schema = sensor.sensor_schema(
     sensor.Sensor, accuracy_decimals=0, state_class="total_increasing"
@@ -120,6 +121,11 @@ supplemental_queries_schema = cv.Schema({
     cv.Optional("max_attempts", default=1): cv.int_range(min=1, max=3),
     cv.Optional("queries", default=[]): cv.All(cv.ensure_list(supplemental_query_schema), cv.Length(max=8)),
 })
+temperature_stabilization_schema = cv.Schema({
+    cv.Optional("mode", default="auto"): cv.one_of("off", "auto", "on", lower=True),
+    cv.Optional("settle_time", default="8s"): cv.positive_time_period_milliseconds,
+    cv.Optional("immediate_delta", default=2.0): cv.float_range(min=0.5, max=10.0),
+})
 
 debug_schema = cv.Schema({
     cv.Optional("log_rx", default=False): cv.boolean,
@@ -190,6 +196,7 @@ SCHEMA = climate.climate_schema(climate.Climate).extend(
         cv.Optional(CONF_FAN_PROFILE, default="auto"): cv.one_of("sinclair_extended", "gree_4_speed", "auto", lower=True),
         cv.Optional(CONF_TELEMETRY_DISCOVERY, default={}): telemetry_discovery_schema,
         cv.Optional(CONF_SUPPLEMENTAL_QUERIES, default={}): supplemental_queries_schema,
+        cv.Optional(CONF_TEMPERATURE_STABILIZATION, default={}): temperature_stabilization_schema,
         cv.Optional(CONF_DEBUG, default={}): debug_schema,
         cv.Optional(CONF_DIAGNOSTICS): diagnostics_schema,
     }
@@ -226,6 +233,12 @@ async def to_code(config):
     debug = config[CONF_DEBUG]
     cg.add(var.set_debug(debug["log_rx"], debug["log_tx"], debug["log_unknown_packets"], debug["log_packet_differences"], debug["maximum_hex_length"]))
     cg.add(var.set_fan_profile({"sinclair_extended": cg.RawExpression("sinclair_ac::FanProfile::SINCLAIR_EXTENDED"), "gree_4_speed": cg.RawExpression("sinclair_ac::FanProfile::GREE_4_SPEED"), "auto": cg.RawExpression("sinclair_ac::FanProfile::AUTO")}[config[CONF_FAN_PROFILE]]))
+    stabilization = config[CONF_TEMPERATURE_STABILIZATION]
+    cg.add(var.set_temperature_stabilization(
+        {"off": cg.RawExpression("sinclair_ac::TemperatureStabilizationMode::OFF"),
+         "auto": cg.RawExpression("sinclair_ac::TemperatureStabilizationMode::AUTO"),
+         "on": cg.RawExpression("sinclair_ac::TemperatureStabilizationMode::ON")}[stabilization["mode"]],
+        stabilization["settle_time"], stabilization["immediate_delta"]))
     discovery = config[CONF_TELEMETRY_DISCOVERY]
     cg.add(var.set_telemetry_discovery(discovery["enabled"], discovery["expose_raw_payload"], discovery["expose_raw_bytes"], discovery["log_changes_only"], discovery["history_depth"]))
     queries = config[CONF_SUPPLEMENTAL_QUERIES]

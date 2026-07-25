@@ -16,6 +16,7 @@ CONF_START_DELAY = "start_delay"
 CONF_QUERY_RECOVERED_DATA = "query_recovered_data"
 CONF_REPEAT_INTERVAL = "repeat_interval"
 CONF_QUIESCE_DELAY = "quiesce_delay"
+CONF_SCHEDULED_QUIESCE_DELAY = "scheduled_quiesce_delay"
 
 gree_oem_probe_ns = cg.esphome_ns.namespace("gree_oem_probe")
 GreeOemBootProbe = gree_oem_probe_ns.class_("GreeOemBootProbe", cg.Component)
@@ -39,6 +40,10 @@ CONFIG_SCHEMA = cv.Schema(
             cv.positive_time_period_milliseconds,
             cv.Range(min=cv.TimePeriod(milliseconds=1600), max=cv.TimePeriod(seconds=5)),
         ),
+        cv.Optional(CONF_SCHEDULED_QUIESCE_DELAY, default="150ms"): cv.All(
+            cv.positive_time_period_milliseconds,
+            cv.Range(min=cv.TimePeriod(milliseconds=50), max=cv.TimePeriod(seconds=1)),
+        ),
         cv.Optional(CONF_REPEAT_INTERVAL): cv.All(
             cv.positive_time_period_milliseconds,
             cv.Range(min=cv.TimePeriod(seconds=30)),
@@ -59,5 +64,6 @@ async def to_code(config):
     cg.add(var.set_frame_spacing(config[CONF_FRAME_SPACING]))
     cg.add(var.set_query_recovered_data(config[CONF_QUERY_RECOVERED_DATA]))
     cg.add(var.set_quiesce_delay(config[CONF_QUIESCE_DELAY]))
+    cg.add(var.set_scheduled_quiesce_delay(config[CONF_SCHEDULED_QUIESCE_DELAY]))
     if CONF_REPEAT_INTERVAL in config:
         cg.add(var.set_repeat_interval(config[CONF_REPEAT_INTERVAL]))

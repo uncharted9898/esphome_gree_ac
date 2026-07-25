@@ -212,6 +212,18 @@ class GreeOemReportSensors : public PollingComponent {
     }
   }
 
+  void publish_stabilized_temperature_(sensor::Sensor *sensor,
+                                       sinclair_ac::TemperatureStabilizer &stabilizer,
+                                       float value) {
+    if (sensor == nullptr) return;
+    float accepted = value;
+    if (stabilizer.process(value, millis(), this->climate_->temperature_stabilization_active(),
+                           this->climate_->temperature_stabilization_settle_time_ms(),
+                           this->climate_->temperature_stabilization_immediate_delta_c(), accepted)) {
+      publish_sensor_(sensor, accepted);
+    }
+  }
+
   static const char *capability_state_(ElectricalEnergyCapability capability) {
     switch (capability) {
       case ElectricalEnergyCapability::NO_SYNCHRONIZATION: return "no_0x32";
@@ -274,11 +286,13 @@ class GreeOemReportSensors : public PollingComponent {
   }
 
   void publish_status_report_() {
+    const uint32_t generation = this->climate_->get_retained_payload_generation(0x31);
+    if (generation == 0 || generation == this->last_status_generation_) return;
     const auto *payload = this->climate_->get_retained_payload(0x31);
-    if (payload == nullptr || *payload == this->last_status_decoded_payload_) return;
+    if (payload == nullptr) return;
     StatusReportFields fields;
     if (!decode_status_report(*payload, fields)) return;
-    this->last_status_decoded_payload_ = *payload;
+    this->last_status_generation_ = generation;
 
     publish_sensor_(this->status_humidity_sensor_field_raw_sensor_,
                     fields.humidity_sensor_field_raw);
@@ -286,10 +300,12 @@ class GreeOemReportSensors : public PollingComponent {
                     fields.indoor_fan_port_raw);
     publish_binary_sensor_(this->status_elc_erg_sensor_, fields.elc_erg_flag);
     publish_sensor_(this->status_elc_gear_raw_sensor_, fields.elc_gear_raw);
-    publish_sensor_(this->status_indoor_temperature_sensor_,
-                    fields.indoor_temperature_c);
-    publish_sensor_(this->status_outdoor_ambient_temperature_sensor_,
-                    fields.outdoor_ambient_temperature_c);
+    publish_stabilized_temperature_(this->status_indoor_temperature_sensor_,
+                                    this->status_indoor_temperature_stabilizer_,
+                                    fields.indoor_temperature_c);
+    publish_stabilized_temperature_(this->status_outdoor_ambient_temperature_sensor_,
+                                    this->status_outdoor_temperature_stabilizer_,
+                                    fields.outdoor_ambient_temperature_c);
     publish_sensor_(this->status_elc_1kwh_raw_sensor_, fields.elc_1kwh_raw);
   }
 
@@ -429,6 +445,9 @@ class GreeOemReportSensors : public PollingComponent {
   }
 
   sinclair_ac::SinclairAC *climate_{nullptr};
+  sinclair_ac::TemperatureStabilizer status_indoor_temperature_stabilizer_;
+  sinclair_ac::TemperatureStabilizer status_outdoor_temperature_stabilizer_;
+  uint32_t last_status_generation_{0};
 
   text_sensor::TextSensor *last_0x32_payload_sensor_{nullptr};
   text_sensor::TextSensor *last_0x33_payload_sensor_{nullptr};
