@@ -1,0 +1,29 @@
+name: rtl8720cf-044-handshake-validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/audit-rtl8720cf-044-handshake
+    paths:
+      - .github/workflows/rtl8720cf-044-handshake-validation.yml
+      - components/gree_oem_boot_probe/rtl_handshake.h
+      - tests/test_rtl_handshake.cpp
+      - scripts_validate_rtl_handshake.sh
+      - docs/rtl8720cf-044-handshake.md
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the recovered handshake contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts_validate_rtl_handshake.sh
+          ./scripts_validate_rtl_handshake.sh
