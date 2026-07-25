@@ -133,6 +133,11 @@ int main() {
     assert(is_diagnostic_command(command));
     assert(parse(frame(command, 1), parsed) == Result::VALID_DIAGNOSTIC);
   }
+  // The audited RTL8720CF UART dispatcher has no receive handler for 0x47.
+  // Keep it unsupported rather than treating a cloud-layer device-info exchange
+  // as an appliance-UART report family.
+  assert(!is_diagnostic_command(0x47));
+  assert(parse(frame(0x47, 1), parsed) == Result::VALID_UNKNOWN);
   assert(!is_diagnostic_command(0x7F));
   assert(parse(frame(0x7F, 1), parsed) == Result::VALID_UNKNOWN);
   auto bad = known;
