@@ -11,6 +11,24 @@ namespace sinclair_ac {
 
 static const char *const TAG = "sinclair_ac";
 
+static void publish_sensor_if_changed(sensor::Sensor *sensor, float value) {
+    if (sensor != nullptr && (!sensor->has_state() || sensor->state != value)) {
+        sensor->publish_state(value);
+    }
+}
+
+static void publish_binary_sensor_if_changed(binary_sensor::BinarySensor *sensor, bool value) {
+    if (sensor != nullptr && (!sensor->has_state() || sensor->state != value)) {
+        sensor->publish_state(value);
+    }
+}
+
+static void publish_text_sensor_if_changed(text_sensor::TextSensor *sensor, const std::string &value) {
+    if (sensor != nullptr && (!sensor->has_state() || sensor->state != value)) {
+        sensor->publish_state(value);
+    }
+}
+
 climate::ClimateTraits SinclairAC::traits()
 {
     auto traits = climate::ClimateTraits();
@@ -208,16 +226,23 @@ void SinclairAC::publish_discovery_capture() {
     if (!this->telemetry_discovery_enabled_ || !this->discovery_capture_dirty_ ||
         (this->last_discovery_summary_publish_ != 0 && millis() - this->last_discovery_summary_publish_ < 5000)) return;
     this->last_discovery_summary_publish_ = millis();
-    const std::string summary = this->telemetry_capture_.summary();
-    const std::string capture_export = this->telemetry_capture_.export_csv();
-    if (this->discovery_summary_sensor_ && (!this->has_published_discovery_capture_ || summary != this->published_discovery_summary_)) {
-        this->discovery_summary_sensor_->publish_state(summary);
+
+    if (this->discovery_summary_sensor_ != nullptr) {
+        const std::string summary = this->telemetry_capture_.summary();
+        if (!this->has_published_discovery_capture_ || summary != this->published_discovery_summary_) {
+            publish_text_sensor_if_changed(this->discovery_summary_sensor_, summary);
+        }
+        this->published_discovery_summary_ = summary;
     }
-    if (this->capture_export_sensor_ && (!this->has_published_discovery_capture_ || capture_export != this->published_capture_export_)) {
-        this->capture_export_sensor_->publish_state(capture_export);
+
+    if (this->capture_export_sensor_ != nullptr) {
+        const std::string capture_export = this->telemetry_capture_.export_csv();
+        if (!this->has_published_discovery_capture_ || capture_export != this->published_capture_export_) {
+            publish_text_sensor_if_changed(this->capture_export_sensor_, capture_export);
+        }
+        this->published_capture_export_ = capture_export;
     }
-    this->published_discovery_summary_ = summary;
-    this->published_capture_export_ = capture_export;
+
     this->has_published_discovery_capture_ = true;
     this->discovery_capture_dirty_ = false;
 }
@@ -236,7 +261,7 @@ void SinclairAC::record_received_packet(bool known, bool establishes_health) {
     if (!known) this->unknown_packets_++;
     if (!establishes_health) return;
     this->last_packet_received_ = millis();
-    if (this->communication_sensor_) this->communication_sensor_->publish_state(true);
+    publish_binary_sensor_if_changed(this->communication_sensor_, true);
     this->publish_protocol_state("ready");
 }
 void SinclairAC::record_transmitted_packet(const std::vector<uint8_t> &packet) {
@@ -249,15 +274,15 @@ void SinclairAC::record_transmitted_packet(const std::vector<uint8_t> &packet) {
 void SinclairAC::publish_diagnostics(bool force) {
     if (!force && millis() - this->last_diagnostics_publish_ < 5000) return;
     this->last_diagnostics_publish_ = millis();
-    if (this->valid_rx_packets_sensor_) this->valid_rx_packets_sensor_->publish_state(this->valid_rx_packets_);
-    if (this->valid_tx_packets_sensor_) this->valid_tx_packets_sensor_->publish_state(this->valid_tx_packets_);
-    if (this->unknown_packets_sensor_) this->unknown_packets_sensor_->publish_state(this->unknown_packets_);
-    if (this->checksum_failures_sensor_) this->checksum_failures_sensor_->publish_state(this->checksum_failures_);
-    if (this->invalid_length_sensor_) this->invalid_length_sensor_->publish_state(this->invalid_lengths_);
-    if (this->too_short_sensor_) this->too_short_sensor_->publish_state(this->too_short_frames_);
-    if (this->parser_resync_sensor_) this->parser_resync_sensor_->publish_state(this->parser_resyncs_);
-    if (this->frame_timeout_sensor_) this->frame_timeout_sensor_->publish_state(this->frame_timeouts_);
-    this->publish_last_packet_diagnostics(true);
+    publish_sensor_if_changed(this->valid_rx_packets_sensor_, this->valid_rx_packets_);
+    publish_sensor_if_changed(this->valid_tx_packets_sensor_, this->valid_tx_packets_);
+    publish_sensor_if_changed(this->unknown_packets_sensor_, this->unknown_packets_);
+    publish_sensor_if_changed(this->checksum_failures_sensor_, this->checksum_failures_);
+    publish_sensor_if_changed(this->invalid_length_sensor_, this->invalid_lengths_);
+    publish_sensor_if_changed(this->too_short_sensor_, this->too_short_frames_);
+    publish_sensor_if_changed(this->parser_resync_sensor_, this->parser_resyncs_);
+    publish_sensor_if_changed(this->frame_timeout_sensor_, this->frame_timeouts_);
+    this->publish_last_packet_diagnostics(false);
 }
 
 void SinclairAC::record_last_packet_diagnostics(uint32_t length, uint32_t type, const std::string &description,
@@ -277,11 +302,12 @@ void SinclairAC::publish_last_packet_diagnostics(bool force) {
     if (!this->has_last_packet_diagnostics_) return;
     if (!force && millis() - this->last_packet_diagnostics_publish_ < 5000) return;
     this->last_packet_diagnostics_publish_ = millis();
-    if (this->last_packet_length_sensor_) this->last_packet_length_sensor_->publish_state(this->last_packet_length_);
-    if (this->last_packet_type_sensor_) this->last_packet_type_sensor_->publish_state(this->last_packet_type_);
-    if (this->last_packet_sensor_) this->last_packet_sensor_->publish_state(this->last_packet_description_);
-    if (this->last_unknown_packet_sensor_ && !this->last_unknown_packet_description_.empty()) {
-        this->last_unknown_packet_sensor_->publish_state(this->last_unknown_packet_description_);
+    publish_sensor_if_changed(this->last_packet_length_sensor_, this->last_packet_length_);
+    publish_sensor_if_changed(this->last_packet_type_sensor_, this->last_packet_type_);
+    publish_text_sensor_if_changed(this->last_packet_sensor_, this->last_packet_description_);
+    if (!this->last_unknown_packet_description_.empty()) {
+        publish_text_sensor_if_changed(this->last_unknown_packet_sensor_,
+                                       this->last_unknown_packet_description_);
     }
 }
 

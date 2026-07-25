@@ -191,13 +191,25 @@ class GreeOemReportSensors : public PollingComponent {
 
  protected:
   static void publish_sensor_(sensor::Sensor *sensor, float value) {
-    if (sensor != nullptr) sensor->publish_state(value);
+    if (sensor != nullptr && (!sensor->has_state() || sensor->state != value)) {
+      sensor->publish_state(value);
+    }
   }
   static void publish_finite_sensor_(sensor::Sensor *sensor, float value) {
-    if (sensor != nullptr && std::isfinite(value)) sensor->publish_state(value);
+    if (sensor != nullptr && std::isfinite(value) &&
+        (!sensor->has_state() || sensor->state != value)) {
+      sensor->publish_state(value);
+    }
   }
   static void publish_binary_sensor_(binary_sensor::BinarySensor *sensor, bool value) {
-    if (sensor != nullptr) sensor->publish_state(value);
+    if (sensor != nullptr && (!sensor->has_state() || sensor->state != value)) {
+      sensor->publish_state(value);
+    }
+  }
+  static void publish_text_sensor_(text_sensor::TextSensor *sensor, const std::string &value) {
+    if (sensor != nullptr && (!sensor->has_state() || sensor->state != value)) {
+      sensor->publish_state(value);
+    }
   }
 
   static const char *capability_state_(ElectricalEnergyCapability capability) {
@@ -357,10 +369,8 @@ class GreeOemReportSensors : public PollingComponent {
                     fields.compressor_discharge_temperature_candidate_c);
     publish_binary_sensor_(this->outdoor_report_byte_17_bit_2_sensor_,
                            fields.byte_17_bit_2);
-    if (this->outdoor_report_bytes_21_28_raw_sensor_ != nullptr) {
-      this->outdoor_report_bytes_21_28_raw_sensor_->publish_state(
-          format_bytes_(fields.bytes_21_28_raw));
-    }
+    publish_text_sensor_(this->outdoor_report_bytes_21_28_raw_sensor_,
+                         format_bytes_(fields.bytes_21_28_raw));
     publish_sensor_(this->outdoor_report_byte_30_raw_sensor_, fields.byte_30_raw);
     publish_binary_sensor_(this->outdoor_report_byte_31_bit_6_sensor_,
                            fields.byte_31_bit_6);
