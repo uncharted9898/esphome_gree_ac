@@ -90,9 +90,9 @@ int main() {
   IndoorReportFields indoor_fields;
   assert(decode_indoor_report(indoor, indoor_fields));
   assert(indoor_fields.target_temperature_c == 25.0f);
-  assert(indoor_fields.current_temperature_c == 24.0f);
-  assert(indoor_fields.evaporator_temperature_c == 20.0f);
-  assert(indoor_fields.coil_temperature_candidate_c == 20.0f);
+  assert(indoor_fields.current_temperature_c == 24.5f);
+  assert(indoor_fields.evaporator_temperature_c == 20.5f);
+  assert(indoor_fields.coil_temperature_candidate_c == 20.5f);
   assert(indoor_fields.byte_25_raw == 0x44);
   assert(std::isnan(indoor_fields.secondary_temperature_candidate_c));
   assert(indoor_fields.byte_6_raw == 0x28);
@@ -101,6 +101,32 @@ int main() {
   assert(indoor_fields.df_point_raw == 2);
   assert(indoor_fields.cps_temperature_raw == 15);
   assert(!indoor_fields.byte_14_bit_5);
+
+  // July 25 live Livo capture: byte 6 has both half-degree flags asserted.
+  const std::vector<uint8_t> live_indoor{
+      0x04, 0x00, 0x40, 0x00, 0x11, 0x01, 0x28, 0x40, 0x3F, 0x00, 0x3B, 0x01,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  };
+  assert(decode_indoor_report(live_indoor, indoor_fields));
+  assert(indoor_fields.target_temperature_c == 24.0f);
+  assert(indoor_fields.current_temperature_c == 23.5f);
+  assert(indoor_fields.evaporator_temperature_c == 19.5f);
+  assert(indoor_fields.coil_temperature_candidate_c == 19.5f);
+
+  // Verify the room and evaporator fractions are independent.
+  auto room_half_only = live_indoor;
+  room_half_only[6] = 0x08;
+  assert(decode_indoor_report(room_half_only, indoor_fields));
+  assert(indoor_fields.current_temperature_c == 23.5f);
+  assert(indoor_fields.evaporator_temperature_c == 19.0f);
+
+  auto evaporator_half_only = live_indoor;
+  evaporator_half_only[6] = 0x20;
+  assert(decode_indoor_report(evaporator_half_only, indoor_fields));
+  assert(indoor_fields.current_temperature_c == 23.0f);
+  assert(indoor_fields.evaporator_temperature_c == 19.5f);
 
   auto indoor_fault_variant = indoor;
   indoor_fault_variant[14] = 0x20;
