@@ -11,9 +11,11 @@
 #include "esphome/components/sinclair_ac/esppac.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 #include "payload_evolution.h"
 #include "payload_fingerprint.h"
+#include "rtl_handshake.h"
 #include "rtl_query.h"
 
 namespace esphome {
@@ -47,6 +49,11 @@ class GreeOemBootProbe : public Component {
       this->mark_failed();
       return;
     }
+    get_mac_address_raw(this->module_mac_.data());
+    if (!mac_address_is_valid(this->module_mac_.data())) {
+      ESP_LOGW(TAG, "ESP module MAC is invalid; the RTL command-0x04 handshake may fail");
+    }
+    this->mac_report_ = build_rtl_mac_report(this->module_mac_);
     this->begin_initial_sequence_();
   }
 
@@ -68,16 +75,26 @@ class GreeOemBootProbe : public Component {
 
     switch (this->phase_) {
       case Phase::BOOT_IDENTITY:
-        this->send_and_advance_(BOOT_IDENTITY, "captured boot identity 0x10/0x02",
-                                Phase::BOOT_MAC_1, this->frame_spacing_ms_);
+        this->send_and_advance_(RTL_BOOT_IDENTITY, "RTL boot identity 0x10/0x02",
+                                Phase::BOOT_MAC_SEND, this->frame_spacing_ms_);
         break;
-      case Phase::BOOT_MAC_1:
-        this->send_and_advance_(MAC_REPORT, "captured module report 0x05/0x04 #1",
-                                Phase::BOOT_MAC_2, this->frame_spacing_ms_);
+      case Phase::BOOT_MAC_SEND:
+        // The RTL firmware always solicits identification with at least one
+        // full-MAC command 0x04 before accepting the resulting 0x44.
+        this->send_boot_mac_attempt_(now);
         break;
-      case Phase::BOOT_MAC_2:
-        this->send_and_advance_(MAC_REPORT, "captured module report 0x05/0x04 #2",
-                                Phase::BOOT_LINK_1, this->frame_spacing_ms_);
+      case Phase::BOOT_MAC_WAIT:
+        if (this->consume_boot_information_44_()) {
+          this->begin_link_synchronization_(now);
+        } else if (this->boot_mac_attempts_ < RTL_MAC_REPORT_MAX_ATTEMPTS) {
+          this->send_boot_mac_attempt_(now);
+        } else {
+          ESP_LOGW(TAG,
+                   "No valid 0x44 after %u full-MAC command-0x04 attempts; "
+                   "continuing with the RTL firmware's MID fallback behavior",
+                   static_cast<unsigned>(this->boot_mac_attempts_));
+          this->begin_link_synchronization_(now);
+        }
         break;
       case Phase::BOOT_LINK_1:
         this->send_and_advance_(LINK_SYNC_CONNECTED, "captured link synchronization #1",
@@ -260,8 +277,8 @@ class GreeOemBootProbe : public Component {
   enum class Phase : uint8_t {
     IDLE,
     BOOT_IDENTITY,
-    BOOT_MAC_1,
-    BOOT_MAC_2,
+    BOOT_MAC_SEND,
+    BOOT_MAC_WAIT,
     BOOT_LINK_1,
     BOOT_LINK_2,
     BOOT_LINK_3,
@@ -286,6 +303,7 @@ class GreeOemBootProbe : public Component {
 
   static constexpr uint32_t MIN_QUERY_SPACING_MS = 900;
   static constexpr uint32_t RESPONSE_DRAIN_MS = 1500;
+  static constexpr uint8_t RTL_MAC_REPORT_MAX_ATTEMPTS = 6;
   static constexpr uint8_t SELECTOR_DISCOVERY_CASES = 64;
   static constexpr uint8_t MODULE_STATE_DISCOVERY_CASES = 8;
 
@@ -302,6 +320,8 @@ class GreeOemBootProbe : public Component {
     this->query_cycle_ = QueryCycle::FULL_DISCOVERY;
     this->sequence_active_ = true;
     this->tx_sequence_ = 0;
+    this->boot_mac_attempts_ = 0;
+    this->boot_0x44_generation_ = this->climate_->get_retained_payload_generation(0x44);
     this->pending_query_active_ = false;
     this->pending_any_response_ = false;
     this->selector_discovery_index_ = 0;
@@ -313,6 +333,61 @@ class GreeOemBootProbe : public Component {
     this->phase_ = Phase::BOOT_IDENTITY;
     this->next_action_at_ = millis() + this->start_delay_ms_;
     ESP_LOGI(TAG, "Starting captured adapter boot followed by RTL8720CF report queries");
+  }
+
+  void send_boot_mac_attempt_(uint32_t now) {
+    ++this->boot_mac_attempts_;
+    char description[96];
+    std::snprintf(description, sizeof(description),
+                  "RTL full-MAC command 0x04 attempt %u/%u",
+                  static_cast<unsigned>(this->boot_mac_attempts_),
+                  static_cast<unsigned>(RTL_MAC_REPORT_MAX_ATTEMPTS));
+    this->send_(this->mac_report_, description);
+    this->phase_ = Phase::BOOT_MAC_WAIT;
+    this->next_action_at_ = now + this->frame_spacing_ms_;
+  }
+
+  bool consume_boot_information_44_() {
+    const uint32_t generation = this->climate_->get_retained_payload_generation(0x44);
+    if (generation == this->boot_0x44_generation_) return false;
+    this->boot_0x44_generation_ = generation;
+
+    const auto *payload = this->climate_->get_retained_payload(0x44);
+    RtlInformation44Fields fields;
+    if (payload == nullptr || !decode_rtl_information_44(*payload, fields)) {
+      ESP_LOGW(TAG, "Received malformed RTL information response 0x44");
+      return false;
+    }
+
+    if (!fields.accepted_by_rtl_firmware) {
+      ESP_LOGW(TAG,
+               "RTL information response 0x44 did not satisfy firmware gate: "
+               "MID=0x%08lX VendorInt=0x%08lX",
+               static_cast<unsigned long>(fields.device_mid),
+               static_cast<unsigned long>(fields.vendor_id));
+      return false;
+    }
+
+    char binding_code[RTL_INFORMATION_44_BINDING_CODE_SIZE * 2 + 1];
+    static constexpr char HEX[] = "0123456789ABCDEF";
+    for (size_t i = 0; i < fields.binding_code.size(); ++i) {
+      binding_code[i * 2] = HEX[fields.binding_code[i] >> 4U];
+      binding_code[i * 2 + 1] = HEX[fields.binding_code[i] & 0x0FU];
+    }
+    binding_code[sizeof(binding_code) - 1] = '\0';
+
+    ESP_LOGI(TAG,
+             "RTL information response 0x44 accepted: MID=0x%08lX bc=%s "
+             "VendorInt=0x%08lX extension=%s",
+             static_cast<unsigned long>(fields.device_mid), binding_code,
+             static_cast<unsigned long>(fields.vendor_id),
+             fields.extension_marker_c9 ? "C9" : (fields.has_extension ? "other" : "none"));
+    return true;
+  }
+
+  void begin_link_synchronization_(uint32_t now) {
+    this->phase_ = Phase::BOOT_LINK_1;
+    this->next_action_at_ = now;
   }
 
   void begin_query_sequence_(bool quiesce, QueryCycle cycle) {
@@ -637,14 +712,9 @@ class GreeOemBootProbe : public Component {
 
   static constexpr const char *TAG = "gree.oem_boot_probe";
 
-  // These three startup frames were captured from the target installation.
-  // Report selectors below come from the independently audited RTL8720CF V2/V3
-  // firmware and deliberately use its 29-byte command-0x03 wire format.
-  static constexpr std::array<uint8_t, 19> BOOT_IDENTITY{
-      0x7E, 0x7E, 0x10, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x01, 0x00, 0x28, 0x1E, 0x19, 0x23, 0x23, 0x00, 0xB8};
-  static constexpr std::array<uint8_t, 8> MAC_REPORT{
-      0x7E, 0x7E, 0x05, 0x04, 0x07, 0x00, 0x00, 0x10};
+  // Command 0x02 and the full-MAC command 0x04 come directly from the audited
+  // RTL8720CF V2/V3 builders. The link-synchronization frame remains a separate
+  // target capture. Report selectors use the audited 29-byte command-0x03 format.
   static constexpr std::array<uint8_t, 17> LINK_SYNC_CONNECTED{
       0x7E, 0x7E, 0x0E, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x7E, 0x0F};
@@ -670,12 +740,14 @@ class GreeOemBootProbe : public Component {
   uint32_t last_sequence_finished_at_{0};
   uint32_t next_action_at_{0};
   uint32_t tx_sequence_{0};
+  uint32_t boot_0x44_generation_{0};
   uint32_t pending_expected_generation_{0};
   uint32_t pending_status_generation_{0};
   uint32_t pending_total_generation_{0};
   const char *pending_description_{nullptr};
   char selector_description_[80]{};
   uint8_t pending_expected_command_{0};
+  uint8_t boot_mac_attempts_{0};
   uint8_t selector_discovery_index_{0};
   uint8_t module_state_discovery_index_{0};
   uint8_t module_state_primary_selector_{0x04};
@@ -696,6 +768,8 @@ class GreeOemBootProbe : public Component {
   bool pending_any_response_{false};
   bool pending_profile_response_{false};
   bool energy_discovery_attempted_{false};
+  std::array<uint8_t, 6> module_mac_{};
+  std::array<uint8_t, RTL_MAC_REPORT_FRAME_SIZE> mac_report_{};
   std::map<uint8_t, std::vector<uint8_t>> discovery_baselines_;
   std::map<uint8_t, PayloadEvolution> operating_profiles_;
 };

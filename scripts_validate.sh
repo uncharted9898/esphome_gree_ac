@@ -13,6 +13,23 @@ cleanup_validation_files() {
 }
 trap cleanup_validation_files EXIT
 
+# The repository examples intentionally use a local secrets file. GitHub Actions
+# runners are ephemeral and do not have a user secrets.yaml, so create harmless
+# CI-only values when the standard CI=true environment is present. Local builds
+# still require the user's real secrets file and are never overwritten.
+if [ "${CI:-false}" = "true" ] && [ ! -f examples/secrets.yaml ]; then
+  cat > examples/secrets.yaml <<'EOF'
+wifi_ssid: ci-network
+wifi_password: ci-password
+wifi_ap_passwd: ci-ap-password
+ota_password: ci-ota-password
+gree_livo_api_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+api_encryption_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+gree_livo_web_username: ci-user
+gree_livo_web_password: ci-password
+EOF
+fi
+
 python3 -m py_compile \
   components/sinclair_ac/climate.py \
   components/gree_oem_boot_probe/__init__.py \
@@ -23,6 +40,7 @@ python3 -m py_compile \
   tools/firmware_research/setup_rtl8720cf.py \
   tools/firmware_research/load_rtl8720cf_companion.py \
   tools/firmware_research/seed_rtl8720cf_functions.py \
+  tools/firmware_research/audit_rtl8720cf_handshake.py \
   tools/gree_oem_frame_generator.py
 
 python3 -m unittest \
@@ -40,6 +58,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_rtl_report_query.cpp -o /tmp/test_rtl_report_query
 /tmp/test_rtl_report_query
+
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_rtl044_handshake.cpp -o /tmp/test_rtl044_handshake
+/tmp/test_rtl044_handshake
 
 if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
   echo 'Examples contain an unpinned or obsolete external component source' >&2
