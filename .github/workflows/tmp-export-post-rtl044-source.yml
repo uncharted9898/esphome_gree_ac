@@ -1,0 +1,34 @@
+name: tmp-export-post-rtl044-source
+
+on:
+  push:
+    branches:
+      - agent/export-post-rtl044-source
+    paths:
+      - .github/workflows/tmp-export-post-rtl044-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Record exact revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > SOURCE_HEAD
+          git status --short > SOURCE_STATUS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: post-rtl044-source
+          path: .
+          include-hidden-files: true
+          retention-days: 1
+          compression-level: 0
