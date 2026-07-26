@@ -1,4 +1,4 @@
-name: apply-recovered-rtl-telemetry
+name: remove-temporary-agent-branches
 
 on:
   pull_request:
@@ -11,83 +11,33 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: apply-recovered-rtl-telemetry
-  cancel-in-progress: false
-
 jobs:
-  apply:
+  cleanup:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: codex/add-compatibility-and-protocol-discovery-mode
-          fetch-depth: 0
-
-      - name: Reconstruct, validate, and apply reviewed patch
+      - name: Verify retained branches
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          expected_base='d1a1c7cd957172c0ec40dcade955fd0d55a1bcf5'
-          test "$(git rev-parse HEAD)" = "$expected_base"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.ref'
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/codex/add-compatibility-and-protocol-discovery-mode" --jq '.ref'
 
-          git fetch --no-tags origin agent/export-post-rtl044-source
-          transfer='.github/agent-transfer/rtl-energy-flow.patch.gz.b64'
-          {
-            git show origin/agent/export-post-rtl044-source:"${transfer}.part-00" | head -c 7000
-            for part in 01 02 03 04 05 06 07; do
-              git show origin/agent/export-post-rtl044-source:"${transfer}.part-${part}"
-            done
-          } > "$RUNNER_TEMP/rtl-energy-flow.patch.gz.b64"
-
-          base64 --decode "$RUNNER_TEMP/rtl-energy-flow.patch.gz.b64" \
-            > "$RUNNER_TEMP/rtl-energy-flow.patch.gz"
-          gzip --decompress --stdout "$RUNNER_TEMP/rtl-energy-flow.patch.gz" \
-            > "$RUNNER_TEMP/rtl-energy-flow.patch"
-          echo 'b3d1224701bb892a79aee5951a39dcd52be9895e143dcfe9c61eed3838d450af  '"$RUNNER_TEMP/rtl-energy-flow.patch" \
-            | sha256sum --check --strict
-
-          git apply --check "$RUNNER_TEMP/rtl-energy-flow.patch"
-          git apply "$RUNNER_TEMP/rtl-energy-flow.patch"
-          git diff --check
-
-      - name: Run native protocol regression tests
+      - name: Delete temporary agent branches
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile \
-            components/gree_oem_boot_probe/__init__.py \
-            components/gree_oem_report_sensors/__init__.py \
-            tools/gree_oem_frame_generator.py \
-            tools/firmware_research/audit_rtl8720cf_protocol.py
-          python3 -m unittest \
-            tests.test_gree_oem_frame_generator \
-            tests.test_selector_discovery_source \
-            tests.test_rtl8720cf_image -v
-          c++ -std=c++17 -Wall -Wextra -pedantic \
-            tests/test_protocol_frame.cpp -o /tmp/test_protocol_frame
-          /tmp/test_protocol_frame
-          c++ -std=c++17 -Wall -Wextra -pedantic \
-            tests/test_oem_report_decoder.cpp -o /tmp/test_oem_report_decoder
-          /tmp/test_oem_report_decoder
-          c++ -std=c++17 -Wall -Wextra -pedantic \
-            tests/test_rtl_report_query.cpp -o /tmp/test_rtl_report_query
-          /tmp/test_rtl_report_query
-          c++ -std=c++17 -Wall -Wextra -pedantic \
-            tests/test_rtl044_handshake.cpp -o /tmp/test_rtl044_handshake
-          /tmp/test_rtl044_handshake
-
-      - name: Publish validated source commit to recovery branch
-        shell: bash
-        run: |
-          set -euo pipefail
-          # GitHub's workflow token cannot publish modifications to workflow
-          # files. The authenticated connector applies this reviewed file after
-          # the source commit is promoted to PR #1.
-          git restore .github/workflows/rtl8720cf-firmware-audit.yml
-          git config user.name 'OpenAI'
-          git config user.email 'openai-agent@users.noreply.github.com'
-          git add -A
-          git commit -m 'Recover missing RTL telemetry request paths'
-          git push --force origin HEAD:refs/heads/agent/recovered-rtl-telemetry
+          branches=(
+            'agent/audit-rtl-command-families'
+            'agent/audit-rtl-energy-flow-command'
+            'agent/recovered-rtl-telemetry'
+            'agent/export-post-rtl044-source'
+          )
+          for branch in "${branches[@]}"; do
+            echo "Deleting ${branch}"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
+          done
