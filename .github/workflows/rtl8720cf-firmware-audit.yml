@@ -2,109 +2,170 @@ name: rtl8720cf-firmware-audit
 
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches:
-      - agent/correct-gree-telemetry-direct
+      - codex/add-compatibility-and-protocol-discovery-mode
     paths:
       - .github/workflows/rtl8720cf-firmware-audit.yml
+      - tools/firmware_research/**
+      - tests/test_rtl8720cf_image.py
+      - docs/rtl8720cf-energy-flow-command-audit.md
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 concurrency:
-  group: publish-audited-rtl8720cf-telemetry
-  cancel-in-progress: false
+  group: rtl8720cf-firmware-audit-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  publish-audited-source:
+  audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Verify and apply the reviewed implementation
-        shell: bash
-        run: |
-          set -euo pipefail
-          payload='.github/agent-transfer/rtl-telemetry-implementation.tar.gz.b64'
-          archive="$RUNNER_TEMP/rtl-telemetry-implementation.tar.gz"
-          test -s "$payload"
-          base64 --decode "$payload" > "$archive"
-          echo '1838cd88fe3317abcde452f4c897e28e73dcec5709e9802b86308fc2bad4dc2f  '"$archive" | sha256sum --check --strict
-          if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-            echo 'Unsafe archive path detected' >&2
-            exit 1
-          fi
-          tar -xzf "$archive" -C .
-
-          # The archive restores this file to the permanent read-only audit.
-          rm -f "$payload"
-          rm -f .github/workflows/publish-rtl8720cf-telemetry.yml
-          rm -f .github/workflows/export-current-source.yml
-          rm -f .github/workflows/fetch-rtl8720cf-firmware.yml
-          rmdir .github/agent-transfer 2>/dev/null || true
-          git diff --check
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Run native protocol and firmware-analysis tests
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install deterministic analysis dependencies
         shell: bash
         run: |
           set -euo pipefail
-          python -m py_compile \
-            components/sinclair_ac/climate.py \
-            components/gree_oem_report_sensors/__init__.py \
-            tools/firmware_research/rtl8720cf_image.py \
-            tools/firmware_research/analyze_rtl8720cf.py \
-            tools/firmware_research/rtl8720cf_properties.py
+          sudo apt-get update
+          sudo apt-get install -y unzip
+
+      - name: Download and verify authoritative RTL8720CF images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-research/input firmware-research/results/ghidra \
+            firmware-research/sections/v1.21 firmware-research/sections/v1.53
+          base='https://raw.githubusercontent.com/maxim-smirnov/gree-wifimodule-firmware/main/362001065279'
+          curl --fail --location --retry 5 --retry-all-errors \
+            "$base/U-WB05RT13V1.21-4307516678339185323.bin" \
+            -o firmware-research/input/rtl8720cf-v1.21.bin
+          curl --fail --location --retry 5 --retry-all-errors \
+            "$base/U-WB05RT13V1.53-17090889809932733253.bin" \
+            -o firmware-research/input/rtl8720cf-v1.53.bin
+          python - <<'PY'
+          from hashlib import sha1, sha256
+          from pathlib import Path
+
+          expected = {
+              'rtl8720cf-v1.21.bin': '7c8b864f6d5e621bfc79265ad928f5cc1c8c09a1',
+              'rtl8720cf-v1.53.bin': '0c0f46e3631fdefa0ce23eb27c14cff0ccb47c3a',
+          }
+          rows = []
+          for name, expected_blob in expected.items():
+              path = Path('firmware-research/input') / name
+              data = path.read_bytes()
+              blob = sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              if blob != expected_blob:
+                  raise SystemExit(f'{name}: Git blob {blob} != {expected_blob}')
+              rows.append(
+                  f'{name} bytes={len(data)} git_blob={blob} '
+                  f'sha256={sha256(data).hexdigest()}'
+              )
+          Path('firmware-research/results/input-manifest.txt').write_text(
+              '\n'.join(rows) + '\n'
+          )
+          print('\n'.join(rows))
+          PY
+
+      - name: Parse images and compare property registries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for version in v1.21 v1.53; do
+            python tools/firmware_research/rtl8720cf_image.py \
+              "firmware-research/input/rtl8720cf-${version}.bin" \
+              --json "firmware-research/results/${version}-manifest.json" \
+              --strings "firmware-research/results/${version}-strings.json" \
+              --frames "firmware-research/results/${version}-frames.json" \
+              --extract-dir "firmware-research/sections/${version}"
+          done
+          python tools/firmware_research/rtl8720cf_properties.py \
+            firmware-research/input/rtl8720cf-v1.21.bin \
+            firmware-research/input/rtl8720cf-v1.53.bin \
+            --json firmware-research/results/property-registry.json \
+            --markdown firmware-research/results/property-registry.md
           python -m unittest tests.test_rtl8720cf_image -v
-          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_protocol_frame.cpp -o /tmp/test_protocol_frame
-          /tmp/test_protocol_frame
-          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_oem_report_decoder.cpp -o /tmp/test_oem_report_decoder
-          /tmp/test_oem_report_decoder
-          c++ -std=c++17 -Wall -Wextra -pedantic tests/test_rtl_report_query.cpp -o /tmp/test_rtl_report_query
-          /tmp/test_rtl_report_query
+          grep -q 'EnergyFlow' firmware-research/results/property-registry.md
+          grep -q 'CompressorFqy' firmware-research/results/property-registry.md
 
-      - name: Create and push the production source commit
+      - name: Install fixed official Ghidra release
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'openai-agent'
-          git config user.email 'openai-agent@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          test -n "$(git diff --cached --name-only)"
-          git commit -m 'Recover RTL8720CF operating telemetry'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          git rev-parse HEAD | tee "$RUNNER_TEMP/published-sha"
+          ghidra_version=11.3.2
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${ghidra_version}_build/ghidra_${ghidra_version}_PUBLIC_20250415.zip" \
+            -o "$RUNNER_TEMP/ghidra.zip"
+          unzip -q "$RUNNER_TEMP/ghidra.zip" -d "$RUNNER_TEMP"
+          find "$RUNNER_TEMP" -maxdepth 3 -type f -path '*/support/analyzeHeadless' \
+            -print -quit > "$RUNNER_TEMP/analyze-headless.txt"
+          test -s "$RUNNER_TEMP/analyze-headless.txt"
 
-      - name: Validate ESPHome configuration and compile every hardware example
+      - name: Decompile both application address spaces
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install esphome==2026.7.1
-          ./scripts_validate.sh
-          esphome compile examples/gree-livo-gen3-receive-only.yaml
-          esphome compile examples/gree-livo-gen3-poll-only.yaml
-          esphome compile examples/gree-livo-gen3-control.yaml
-          esphome compile examples/gree-livo-oem-boot-probe.yaml
+          analyze_headless=$(cat "$RUNNER_TEMP/analyze-headless.txt")
+          mkdir -p "$RUNNER_TEMP/ghidra-projects"
+          for version in v1.21 v1.53; do
+            xip0=$(find "firmware-research/sections/${version}" -type f \
+              -name '*_xip_0x9B000140.bin' -print -quit)
+            xip1=$(find "firmware-research/sections/${version}" -type f \
+              -name '*_xip_0x9B800140.bin' -print -quit)
+            test -n "$xip0"
+            test -n "$xip1"
+            report="$GITHUB_WORKSPACE/firmware-research/results/ghidra/${version}-audit.txt"
+            console="$GITHUB_WORKSPACE/firmware-research/results/ghidra/${version}-console.txt"
+            "$analyze_headless" "$RUNNER_TEMP/ghidra-projects" \
+              "rtl8720cf-${version}-full-audit" \
+              -import "$xip0" \
+              -overwrite \
+              -loader BinaryLoader \
+              -processor 'ARM:LE:32:Cortex' \
+              -loader-baseAddr 0x9B000140 \
+              -scriptPath tools/firmware_research \
+              -preScript setup_rtl8720cf.py 0x9B000140 0x9B000150 \
+              -preScript load_rtl8720cf_companion.py "$xip1" 0x9B800140 rtl8720cf_xip1 true \
+              -preScript seed_rtl8720cf_functions.py 0x9B000140 \
+              -preScript seed_rtl8720cf_functions.py 0x9B800140 \
+              -analysisTimeoutPerFile 3600 \
+              -postScript audit_rtl8720cf_protocol.py "$report" "$version" \
+              > "$console" 2>&1
+            if grep -Eq 'Traceback \(most recent call last\):|SCRIPT ERROR|RuntimeError:' "$console"; then
+              cat "$console"
+              exit 1
+            fi
+            test -s "$report"
+            grep -q '53-byte EnergyFlow command-0x09 builder signature' "$report"
+            grep -q 'EnergyFlow' "$report"
+            grep -q '^=== DECOMPILED FUNCTIONS ===$' "$report"
+          done
 
-      - name: Dispatch validation and the permanent firmware audit
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Index audit results
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          ref="${GITHUB_REF_NAME}"
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/validation.yml/dispatches" \
-            -f ref="$ref"
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/rtl8720cf-firmware-audit.yml/dispatches" \
-            -f ref="$ref"
+          find firmware-research/results -type f -printf '%p %s bytes\n' \
+            | sort | tee firmware-research/results/artifact-index.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rtl8720cf-firmware-audit
+          path: firmware-research/results
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
