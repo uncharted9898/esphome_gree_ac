@@ -82,6 +82,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # GitHub's workflow token cannot publish modifications to workflow
+          # files. The authenticated connector applies this reviewed file after
+          # the source commit is promoted to PR #1.
+          git restore .github/workflows/rtl8720cf-firmware-audit.yml
           git config user.name 'OpenAI'
           git config user.email 'openai-agent@users.noreply.github.com'
           git add -A
