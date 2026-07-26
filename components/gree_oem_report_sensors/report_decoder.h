@@ -24,6 +24,13 @@ enum class ElectricalEnergyCapability : uint8_t {
   ELC_EN_ENABLED,
 };
 
+enum class EnergyFlowCapability : uint8_t {
+  NO_SYNCHRONIZATION,
+  CAPABILITY_BYTE_MISSING,
+  NOT_ADVERTISED,
+  ADVERTISED,
+};
+
 // The audited RTL8720CF receive dispatcher separates two signals:
 //   * 0x32 payload[0] bit 0 advertises whether the optional 0x40 page exists.
 //   * After a supported 0x40 arrives (payload[44] bit 0), 0x32 payload[1]
@@ -55,9 +62,26 @@ inline ElectricalEnergyCapability decode_electrical_energy_capability(
              : ElectricalEnergyCapability::ELC_EN_DISABLED;
 }
 
+// The independent command-0x09 EnergyFlow poll is not part of the command-0x03
+// selector family. Both audited RTL schedulers advertise it through command-0x32
+// payload[1] bit 1, then expect command 0x53.
+inline EnergyFlowCapability decode_energy_flow_capability(
+    const std::vector<uint8_t> *synchronization) {
+  if (synchronization == nullptr || synchronization->empty()) {
+    return EnergyFlowCapability::NO_SYNCHRONIZATION;
+  }
+  if (synchronization->size() <= 1) {
+    return EnergyFlowCapability::CAPABILITY_BYTE_MISSING;
+  }
+  return ((*synchronization)[1] & 0x02U) != 0
+             ? EnergyFlowCapability::ADVERTISED
+             : EnergyFlowCapability::NOT_ADVERTISED;
+}
+
 struct StatusReportFields {
   uint8_t humidity_sensor_field_raw{0};
   uint8_t indoor_fan_port_raw{0};
+  bool elc_all_kwh_clear_flag{false};
   bool elc_erg_flag{false};
   uint8_t elc_gear_raw{0};
   uint8_t elc_1kwh_raw{0};
@@ -100,10 +124,10 @@ struct OutdoorReportFields {
   // layout even though the cloud-property assignment was removed.
   uint8_t compressor_frequency_raw{0};
 
-  // The 0x35 payload embeds the outdoor controller's 0x31 operating page
-  // starting at payload[3]. Independent outdoor-bus captures therefore align
-  // payload[6] with the outdoor fan field, payload[9] with the valve-closing
-  // flag, and payload[10] with the electronic expansion-valve setting.
+  // These three fields are aligned from a separate, documented GREE outdoor-
+  // controller operating page. The RTL Wi-Fi parser itself only assigns
+  // payload[5], [13], and [15] to named properties, so fan and valve semantics
+  // remain cross-protocol candidates until this exact Livo changes them live.
   uint8_t outdoor_fan_speed_raw{0};
   bool expansion_valve_closing{false};
   uint8_t expansion_valve_position{0};
@@ -136,6 +160,9 @@ inline bool decode_status_report(const std::vector<uint8_t> &payload,
 
   out.humidity_sensor_field_raw = payload[0];
   out.indoor_fan_port_raw = static_cast<uint8_t>((payload[23] >> 2) & 0x03U);
+  // V2/V3 map the normalized status image payload[7] bit 3 to the named
+  // ElcAllKwhClr property. This is a clear/request flag, not an energy value.
+  out.elc_all_kwh_clear_flag = (payload[7] & 0x08U) != 0;
   out.elc_erg_flag = (payload[35] & 0x80U) != 0;
   out.elc_gear_raw = static_cast<uint8_t>((payload[35] >> 3) & 0x0FU);
   out.indoor_temperature_c = decode_offset_40_temperature(payload[42]);
@@ -215,7 +242,9 @@ inline bool decode_outdoor_report(const std::vector<uint8_t> &payload,
 
 inline bool decode_energy_flow_report(const std::vector<uint8_t> &payload,
                                        EnergyFlowReportFields &out) {
-  // Response 0x53 copies full-frame byte 0x1C (payload 24) to EnergyFlow.
+  // Response 0x53 copies full-frame byte 0x1C (payload[24]) to the named
+  // EnergyFlow property. Its physical meaning and scale are not recovered; the
+  // property sits beside air-quality/ventilation fields, not in the Elc* block.
   if (payload.size() <= 24) return false;
   out.energy_flow_raw = payload[24];
   return true;

@@ -6,11 +6,13 @@
 #include <vector>
 
 using esphome::gree_oem_report_sensors::ElectricalEnergyCapability;
+using esphome::gree_oem_report_sensors::EnergyFlowCapability;
 using esphome::gree_oem_report_sensors::EnergyFlowReportFields;
 using esphome::gree_oem_report_sensors::IndoorReportFields;
 using esphome::gree_oem_report_sensors::OutdoorReportFields;
 using esphome::gree_oem_report_sensors::StatusReportFields;
 using esphome::gree_oem_report_sensors::decode_electrical_energy_capability;
+using esphome::gree_oem_report_sensors::decode_energy_flow_capability;
 using esphome::gree_oem_report_sensors::decode_energy_flow_report;
 using esphome::gree_oem_report_sensors::decode_indoor_report;
 using esphome::gree_oem_report_sensors::decode_outdoor_report;
@@ -49,9 +51,26 @@ int main() {
                                               &electrical) ==
          ElectricalEnergyCapability::ELC_EN_ENABLED);
 
+  assert(decode_energy_flow_capability(nullptr) ==
+         EnergyFlowCapability::NO_SYNCHRONIZATION);
+  assert(decode_energy_flow_capability(&synchronization_page_disabled) ==
+         EnergyFlowCapability::CAPABILITY_BYTE_MISSING);
+  assert(decode_energy_flow_capability(&synchronization_page_advertised) ==
+         EnergyFlowCapability::CAPABILITY_BYTE_MISSING);
+  std::vector<uint8_t> synchronization_energy_flow_disabled{0x00, 0x00};
+  std::vector<uint8_t> synchronization_energy_flow_enabled{0x00, 0x02};
+  std::vector<uint8_t> synchronization_all_enabled{0x01, 0x03};
+  assert(decode_energy_flow_capability(&synchronization_energy_flow_disabled) ==
+         EnergyFlowCapability::NOT_ADVERTISED);
+  assert(decode_energy_flow_capability(&synchronization_energy_flow_enabled) ==
+         EnergyFlowCapability::ADVERTISED);
+  assert(decode_energy_flow_capability(&synchronization_all_enabled) ==
+         EnergyFlowCapability::ADVERTISED);
+
   std::vector<uint8_t> status(47, 0);
   status[0] = 0x04;
   status[23] = 0x0C;
+  status[7] = 0x08;   // ElcAllKwhClr=1.
   status[35] = 0xA8;  // ElcErg=1, ElcGear=5.
   status[42] = 0x41;
   status[44] = 0x3F;
@@ -60,6 +79,7 @@ int main() {
   assert(decode_status_report(status, status_fields));
   assert(status_fields.humidity_sensor_field_raw == 4);
   assert(status_fields.indoor_fan_port_raw == 3);
+  assert(status_fields.elc_all_kwh_clear_flag);
   assert(status_fields.elc_erg_flag);
   assert(status_fields.elc_gear_raw == 5);
   assert(status_fields.indoor_temperature_c == 25.0f);
@@ -143,6 +163,9 @@ int main() {
   assert(indoor_fields.byte_37_raw == 0x78);
   assert(indoor_fields.byte_38_raw == 0x9A);
 
+  // Synthetic cross-protocol alignment fixture. Only payload[5], [13], and
+  // [15] are directly named by the RTL V2 parser; [6], [9], and [10] remain
+  // outdoor-controller-page candidates until the Livo changes them live.
   const std::vector<uint8_t> outdoor{
       0x04, 0x00, 0x40, 0x00, 0x11, 0x37, 0x03, 0x00, 0x00, 0x01, 0xC8, 0x00,
       0x00, 0x40, 0x46, 0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -170,6 +193,27 @@ int main() {
   assert(outdoor_fields.byte_30_raw == 0x00);
   assert(!outdoor_fields.byte_31_bit_6);
   assert(outdoor_fields.byte_36_raw == 0x00);
+
+  // Real sustained-cooling Livo capture. Thermodynamics prove the compressor
+  // was operating, yet the Wi-Fi-facing page supplied zero for compressor
+  // frequency, fan candidate, and valve-closing candidate while byte 10 stayed
+  // fixed at 200. Preserve that evidence rather than validating only fabricated
+  // non-zero operating fields.
+  const std::vector<uint8_t> live_outdoor{
+      0x04, 0x00, 0x40, 0x00, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC8, 0x00,
+      0x00, 0x3F, 0x46, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  };
+  assert(decode_outdoor_report(live_outdoor, outdoor_fields));
+  assert(outdoor_fields.byte_4_raw == 0x11);
+  assert(outdoor_fields.compressor_frequency_raw == 0);
+  assert(outdoor_fields.outdoor_fan_speed_raw == 0);
+  assert(!outdoor_fields.expansion_valve_closing);
+  assert(outdoor_fields.expansion_valve_position == 200);
+  assert(outdoor_fields.ambient_temperature_candidate_c == 23.0f);
+  assert(outdoor_fields.coil_temperature_candidate_c == 30.0f);
+  assert(outdoor_fields.compressor_discharge_temperature_candidate_c == 40.0f);
 
   auto outdoor_fault_variant = outdoor;
   outdoor_fault_variant[17] = 0x04;

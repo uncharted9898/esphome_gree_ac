@@ -1,8 +1,11 @@
 # Gree Livo Gen3 power-data discovery
 
-This component exposes firmware-confirmed compressor frequency plus the matching
-outdoor-controller fan and EEV fields. It still does **not** assign volts, amps,
-watts, watt-hours or fan RPM to an unverified scale.
+This component exposes the RTL V2 field named `CompressorFqy` and retains the
+matching outdoor-controller fan and EEV candidate bytes. Only the frequency
+property name is a direct RTL assignment; the fan and valve labels come from a
+separate GREE outdoor-bus layout and remain provisional. The component still
+does **not** assign volts, amps, watts, watt-hours or fan RPM to an unverified
+scale.
 
 ## What the July 23 capture proves
 
@@ -17,23 +20,51 @@ With the established `raw - 40` temperature encoding:
 - `0x35[13] = 0x3F` -> outdoor ambient candidate, 23 C
 - `0x35[14] = 0x48` -> outdoor coil candidate, 32 C
 - `0x35[15] = 0x55` -> compressor discharge candidate, 45 C
-- `0x35[10] = 0xC8` -> EEV position/setting raw value, 200
+- `0x35[10] = 0xC8` -> EEV position/setting candidate, raw 200
 
 The ambient field stayed nearly constant while coil and compressor values rose
-under cooling load. The RTL8720CF parser confirms compressor frequency at byte
-5, and an independent outdoor-bus map identifies byte 10 as the EEV setting.
+under cooling load. The RTL8720CF parser directly assigns byte 5 to
+`CompressorFqy`. The byte-10 EEV interpretation comes from alignment with a
+separate GREE outdoor-controller page and remains a candidate until this exact
+Livo changes it live.
 
-## Why command `0x40` matters
+## Two different energy-related request families
 
-Recovered OEM firmware contains an energy-report path and sends a neutral command-`0x03` request intended to produce response command `0x40`. Some Livo Gen3 captures have not returned an identifiable `0x40` frame. The full discovery YAML therefore:
+Command `0x40` is the optional extended/monthly electrical page selected through
+command `0x03`. The earlier Livo capture's one-byte `0x32 = 00` left that page
+unadvertised, but that capture preceded the corrected four-frame RTL startup
+sequence and used malformed time-context bytes in the selector request. The
+full-power build therefore performs exactly one corrected, forced `0x40` read;
+normal builds still honor the capability bit.
 
-1. performs the full report sweep once, then refreshes only `0x35` at the configured interval;
-2. retains the last `0x40` payload;
-3. publishes a compact `power_discovery_summary`;
-4. exposes compressor frequency, outdoor-fan raw value, valve-closing state and EEV position;
-5. retains `0x40`, `0x41` and `0x42` as raw pages for correlation.
+The deeper V2/V3 audit recovered a second read path that the old selector sweep
+never sent:
 
-The summary is deliberately mechanical. It helps compare fields without asserting their units.
+```text
+7E 7E 32 09 [48 zero bytes] 3B  -> expected response 0x53
+```
+
+The firmware names payload byte 24 of response `0x53` `EnergyFlow`, but does not
+establish a unit or scale. The full discovery configuration therefore:
+
+1. sends one bounded forced command-`0x09` request because the Livo's short
+   `0x32` omits the byte that carries this capability;
+2. retains the complete `0x53` payload;
+3. publishes payload byte 24 as `EnergyFlow Raw`;
+4. reports `received_0x53`, `fallback_0x31`, another command, or `timeout`;
+5. refreshes `0x53` periodically only if the appliance advertises it or a real
+   response has already proven support.
+
+The same audit corrected two other material problems:
+
+- after a valid `0x44`, the RTL scheduler sends four complete 29-byte command-
+  `0x03` startup frames; the previous component sent a 17-byte frame from a
+  different adapter generation;
+- selector-request bytes
+`8..10` and `11..13` are time-context triples. The older probe wrote lone
+`0x3B` values into their seconds positions and called them RSSI. Correct neutral
+requests leave all six bytes zero, so prior zero-frequency captures do not close
+the question of what a byte-exact OEM request returns.
 
 ## Controlled test sequence
 
@@ -76,9 +107,12 @@ Do not select a scale merely because one sample looks plausible.
 
 ## Current implementation status
 
-- `0x35[5]` is exposed as compressor frequency in hertz.
-- `0x35[6]`, `[9]` and `[10]` expose outdoor fan raw, valve-closing and EEV position raw value.
-- `0x40` remains a raw retained payload because its electrical scales are unresolved.
+- `0x35[5]` is exposed as the firmware-named `CompressorFqy` field; the target
+  must still demonstrate a non-zero live value after the corrected request.
+- `0x35[6]`, `[9]` and `[10]` expose outdoor-fan and valve/EEV candidates as raw values.
+- `0x40` remains raw; the previous capture reported it unadvertised, and the
+  full-power build now performs one corrected-frame retest.
+- `0x53` is retained raw for the newly recovered `EnergyFlow` read path.
 - `power_discovery_summary` reports the recovered operating fields and capability state.
 - `0x34[6]` and bit 5 are exposed because the byte changed from `0x20` in an earlier capture to `0x00` during active cooling.
 - No electrical Home Assistant device classes are assigned yet.
@@ -86,6 +120,6 @@ Do not select a scale merely because one sample looks plausible.
 ## Refresh cadence
 
 The full discovery sequence runs once at startup. Every configured repeat
-interval now requests only `0x35`, and it waits for the climate request lifecycle
-to become idle before taking the UART. This is the page that contains the live
-compressor, outdoor-fan, valve and thermistor fields.
+interval requests `0x35`; it also refreshes `0x53` only after advertised or
+proven support. The probe waits for the climate request lifecycle to become idle
+before taking the UART.

@@ -37,6 +37,9 @@ class GreeOemReportSensors : public PollingComponent {
   void set_electrical_energy_capability_sensor(text_sensor::TextSensor *s) {
     this->electrical_energy_capability_sensor_ = s;
   }
+  void set_energy_flow_capability_sensor(text_sensor::TextSensor *s) {
+    this->energy_flow_capability_sensor_ = s;
+  }
   void set_power_discovery_summary_sensor(text_sensor::TextSensor *s) {
     this->power_discovery_summary_sensor_ = s;
   }
@@ -52,6 +55,9 @@ class GreeOemReportSensors : public PollingComponent {
   }
   void set_status_indoor_fan_port_raw_sensor(sensor::Sensor *s) {
     this->status_indoor_fan_port_raw_sensor_ = s;
+  }
+  void set_status_elc_all_kwh_clear_sensor(binary_sensor::BinarySensor *s) {
+    this->status_elc_all_kwh_clear_sensor_ = s;
   }
   void set_status_elc_erg_sensor(binary_sensor::BinarySensor *s) {
     this->status_elc_erg_sensor_ = s;
@@ -108,8 +114,9 @@ class GreeOemReportSensors : public PollingComponent {
   void set_indoor_report_byte_37_raw_sensor(sensor::Sensor *s) { this->indoor_report_byte_37_raw_sensor_ = s; }
   void set_indoor_report_byte_38_raw_sensor(sensor::Sensor *s) { this->indoor_report_byte_38_raw_sensor_ = s; }
 
-  // Legacy alias retained for existing YAML. RTL8720CF plus the matching
-  // outdoor-controller page identify this byte as the EEV position/setting.
+  // Legacy alias retained for existing YAML. A separate GREE outdoor-controller
+  // page aligns this byte with an EEV setting, but the RTL parser does not name
+  // it; keep the value raw and the interpretation explicitly provisional.
   void set_outdoor_operating_value_raw_sensor(sensor::Sensor *s) {
     this->outdoor_operating_value_raw_sensor_ = s;
   }
@@ -182,6 +189,7 @@ class GreeOemReportSensors : public PollingComponent {
     this->publish_payload_(0x53, this->last_0x53_payload_sensor_, this->last_0x53_payload_);
 
     this->publish_capability_();
+    this->publish_energy_flow_capability_();
     this->publish_status_report_();
     this->publish_indoor_report_();
     this->publish_outdoor_report_();
@@ -238,6 +246,17 @@ class GreeOemReportSensors : public PollingComponent {
     }
   }
 
+  static const char *energy_flow_capability_state_(EnergyFlowCapability capability) {
+    switch (capability) {
+      case EnergyFlowCapability::NO_SYNCHRONIZATION: return "no_0x32";
+      case EnergyFlowCapability::CAPABILITY_BYTE_MISSING:
+        return "capability_byte_missing";
+      case EnergyFlowCapability::NOT_ADVERTISED: return "not_advertised";
+      case EnergyFlowCapability::ADVERTISED: return "advertised";
+      default: return "unknown";
+    }
+  }
+
   static std::string format_payload_(const std::vector<uint8_t> &payload) {
     static const char digits[] = "0123456789ABCDEF";
     std::string out;
@@ -285,6 +304,20 @@ class GreeOemReportSensors : public PollingComponent {
         capability_state_(capability));
   }
 
+  void publish_energy_flow_capability_() {
+    if (this->energy_flow_capability_sensor_ == nullptr) return;
+    const auto capability = decode_energy_flow_capability(
+        this->climate_->get_retained_payload(0x32));
+    if (this->has_published_energy_flow_capability_ &&
+        capability == this->last_energy_flow_capability_) {
+      return;
+    }
+    this->last_energy_flow_capability_ = capability;
+    this->has_published_energy_flow_capability_ = true;
+    this->energy_flow_capability_sensor_->publish_state(
+        energy_flow_capability_state_(capability));
+  }
+
   void publish_status_report_() {
     const uint32_t generation = this->climate_->get_retained_payload_generation(0x31);
     if (generation == 0 || generation == this->last_status_generation_) return;
@@ -298,6 +331,8 @@ class GreeOemReportSensors : public PollingComponent {
                     fields.humidity_sensor_field_raw);
     publish_sensor_(this->status_indoor_fan_port_raw_sensor_,
                     fields.indoor_fan_port_raw);
+    publish_binary_sensor_(this->status_elc_all_kwh_clear_sensor_,
+                           fields.elc_all_kwh_clear_flag);
     publish_binary_sensor_(this->status_elc_erg_sensor_, fields.elc_erg_flag);
     publish_sensor_(this->status_elc_gear_raw_sensor_, fields.elc_gear_raw);
     publish_stabilized_temperature_(this->status_indoor_temperature_sensor_,
@@ -409,33 +444,45 @@ class GreeOemReportSensors : public PollingComponent {
     const auto *electrical = this->climate_->get_retained_payload(0x40);
     const auto capability =
         decode_electrical_energy_capability(sync, electrical);
+    const auto energy_flow_capability = decode_energy_flow_capability(sync);
     std::ostringstream out;
-    out << "ElectricalPage=" << capability_state_(capability);
+    out << "ElcPage=" << capability_state_(capability)
+        << "; FlowCap="
+        << energy_flow_capability_state_(energy_flow_capability);
 
     const auto *status = this->climate_->get_retained_payload(0x31);
     StatusReportFields status_fields;
     if (status != nullptr && decode_status_report(*status, status_fields)) {
-      out << "; 0x31 ElcErg=" << unsigned(status_fields.elc_erg_flag)
-          << " ElcGear=" << unsigned(status_fields.elc_gear_raw)
-          << " Elc1KwhRaw=" << unsigned(status_fields.elc_1kwh_raw)
-          << " UDFanPort=" << unsigned(status_fields.indoor_fan_port_raw);
+      out << "; 31:Erg=" << unsigned(status_fields.elc_erg_flag)
+          << " Gear=" << unsigned(status_fields.elc_gear_raw)
+          << " 1KWh=" << unsigned(status_fields.elc_1kwh_raw)
+          << " IFan=" << unsigned(status_fields.indoor_fan_port_raw);
     }
 
     const auto *outdoor = this->climate_->get_retained_payload(0x35);
     OutdoorReportFields outdoor_fields;
     if (outdoor != nullptr && decode_outdoor_report(*outdoor, outdoor_fields)) {
-      out << "; 0x35 CompressorFqy="
-          << unsigned(outdoor_fields.compressor_frequency_raw)
-          << "Hz OutdoorFanRaw=" << unsigned(outdoor_fields.outdoor_fan_speed_raw)
-          << " ValveClosing=" << unsigned(outdoor_fields.expansion_valve_closing)
-          << " EEV=" << unsigned(outdoor_fields.expansion_valve_position);
+      out << "; 35:Fqy=" << unsigned(outdoor_fields.compressor_frequency_raw)
+          << "Hz Fan?=" << unsigned(outdoor_fields.outdoor_fan_speed_raw)
+          << " Close?=" << unsigned(outdoor_fields.expansion_valve_closing)
+          << " EEV?=" << unsigned(outdoor_fields.expansion_valve_position);
     }
 
+    out << "; 40=";
     if (electrical != nullptr) {
-      out << "; 0x40 len=" << electrical->size()
-          << " raw=" << format_payload_(*electrical);
+      out << "len" << electrical->size();
     } else {
-      out << "; 0x40=no-response";
+      out << "none";
+    }
+
+    const auto *energy_flow = this->climate_->get_retained_payload(0x53);
+    EnergyFlowReportFields energy_flow_fields;
+    if (energy_flow != nullptr &&
+        decode_energy_flow_report(*energy_flow, energy_flow_fields)) {
+      out << "; 53=len" << energy_flow->size()
+          << " FlowRaw=" << unsigned(energy_flow_fields.energy_flow_raw);
+    } else {
+      out << "; 53=none";
     }
 
     const std::string state = out.str();
@@ -460,6 +507,7 @@ class GreeOemReportSensors : public PollingComponent {
   text_sensor::TextSensor *last_0x42_payload_sensor_{nullptr};
   text_sensor::TextSensor *last_0x53_payload_sensor_{nullptr};
   text_sensor::TextSensor *electrical_energy_capability_sensor_{nullptr};
+  text_sensor::TextSensor *energy_flow_capability_sensor_{nullptr};
   text_sensor::TextSensor *power_discovery_summary_sensor_{nullptr};
   text_sensor::TextSensor *outdoor_report_bytes_21_28_raw_sensor_{nullptr};
 
@@ -505,6 +553,7 @@ class GreeOemReportSensors : public PollingComponent {
   sensor::Sensor *outdoor_report_byte_36_raw_sensor_{nullptr};
   sensor::Sensor *energy_flow_raw_sensor_{nullptr};
 
+  binary_sensor::BinarySensor *status_elc_all_kwh_clear_sensor_{nullptr};
   binary_sensor::BinarySensor *status_elc_erg_sensor_{nullptr};
   binary_sensor::BinarySensor *expansion_valve_closing_sensor_{nullptr};
   binary_sensor::BinarySensor *indoor_report_byte_6_bit_3_sensor_{nullptr};
@@ -530,7 +579,10 @@ class GreeOemReportSensors : public PollingComponent {
   std::vector<uint8_t> last_energy_flow_decoded_payload_;
   ElectricalEnergyCapability last_capability_{
       ElectricalEnergyCapability::NO_SYNCHRONIZATION};
+  EnergyFlowCapability last_energy_flow_capability_{
+      EnergyFlowCapability::NO_SYNCHRONIZATION};
   bool has_published_capability_{false};
+  bool has_published_energy_flow_capability_{false};
   std::string last_power_discovery_summary_;
 };
 

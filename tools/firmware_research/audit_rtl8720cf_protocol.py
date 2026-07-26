@@ -28,10 +28,44 @@ KEYWORDS = [
     "bus", "phase", "module", "protocol", "cloud", "upload", "download",
 ]
 
-RESPONSE_COMMANDS = set([0x31, 0x32, 0x33, 0x34, 0x35, 0x40, 0x44, 0x45, 0x46, 0x47])
-REQUEST_COMMANDS = set([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0A, 0x0B])
+# Commands recovered from the V2/V3 appliance-UART dispatchers and builders.
+# 0x47 is intentionally absent: both RTL dispatchers leave it unhandled.
+RESPONSE_COMMANDS = set([
+    0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x3C,
+    0x40, 0x41, 0x42, 0x44, 0x45, 0x46, 0x4D, 0x52, 0x53,
+])
+REQUEST_COMMANDS = set([
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x08, 0x09,
+    0x0C, 0x0D,
+])
+FRAME_LENGTH_CONSTANTS = set([
+    0x07, 0x0D, 0x10, 0x1A, 0x2D, 0x2F, 0x30, 0x32, 0x37,
+])
 MAX_DECOMPILED_FUNCTIONS = 500
 CALL_GRAPH_DEPTH = 2
+
+# Stable function entry points recovered from the two archived images. Seeding
+# these roots prevents broad scalar/string heuristics from missing the scheduler
+# that performs the four post-0x44 command-0x03 transmissions or the independent
+# command-0x09 EnergyFlow path.
+VERSION_TARGETS = {
+    "v1.21": [
+        (0x9B025548, "command buffers initialized; command 0x03 is 29 bytes"),
+        (0x9B026DB8, "startup/request scheduler; state 3 sends command 0x03 four times"),
+        (0x9B0274DC, "appliance-UART receive dispatcher"),
+        (0x9B027C14, "command-0x03 context-field builder"),
+        (0x9B027ED0, "module connection-state mapper"),
+        (0x9B02E438, "command-0x09 EnergyFlow request builder"),
+    ],
+    "v1.53": [
+        (0x9B02A650, "command buffers initialized; command 0x03 is 29 bytes"),
+        (0x9B02BDF8, "startup/request scheduler; state 3 sends command 0x03 four times"),
+        (0x9B02C794, "appliance-UART receive dispatcher"),
+        (0x9B02D128, "command-0x03 context-field builder"),
+        (0x9B02D7D4, "module connection-state mapper"),
+        (0x9B0338F4, "command-0x09 EnergyFlow request builder"),
+    ],
+}
 
 out = open(OUT_PATH, "w")
 
@@ -193,6 +227,16 @@ emit()
 selected = {}
 pointer_records = []
 
+for version, targets in VERSION_TARGETS.items():
+    if not LABEL.startswith(version):
+        continue
+    for address, reason in targets:
+        select_function(
+            function_at_pointer(address | 1),
+            "firmware root %s: %s" % (version, reason),
+            selected,
+        )
+
 for string_address, text, matches in keyword_strings:
     # Normal Ghidra references to the string address.
     for ref in references_to(string_address):
@@ -263,14 +307,19 @@ while function_iterator.hasNext():
     # Broad candidates for frame constructors and receive dispatchers.
     if len(response_hits) >= 4:
         select_function(function, "response-command-dispatch constants=%s" % response_hits, selected)
-    if 0x7E in scalars and (request_hits or response_hits) and (0x19 in scalars or 0x2C in scalars or 0x2F in scalars):
+    if (0x7E in scalars and (request_hits or response_hits) and
+            FRAME_LENGTH_CONSTANTS.intersection(scalars)):
         select_function(
             function,
             "frame-builder constants req=%s resp=%s" % (request_hits, response_hits),
             selected,
         )
-    if 0x7E in scalars and 0x03 in scalars and 0x19 in scalars:
-        select_function(function, "long-command-0x03 builder signature", selected)
+    if 0x7E in scalars and 0x03 in scalars and 0x1A in scalars:
+        select_function(function, "29-byte command-0x03 builder signature", selected)
+    if 0x7E in scalars and 0x09 in scalars and 0x32 in scalars:
+        select_function(function, "53-byte EnergyFlow command-0x09 builder signature", selected)
+    if 0x53 in response_hits and 0x18A in scalars:
+        select_function(function, "EnergyFlow response/property assignment candidate", selected)
 
 # Expand the call graph. Wrappers, checksums, UART writes, and response handlers
 # frequently contain no strings themselves.

@@ -37,8 +37,10 @@ The RTL8720CF V2 parser confirms payload 5 as `CompressorFqy`, payload 13 as
 [`mkaluza/gree-hacking`](https://github.com/mkaluza/gree-hacking/blob/87965e596c15a509d62d5987cdc446c85accccfd/data_frame/packet.md)
 independently aligns payload 6 with the outdoor-fan field, payload 9 with the
 expansion-valve closing flag, and payload 10 with the EEV setting. The
-captured `0xC8` therefore represents an EEV position/setting of 200 rather than
-an electrical or generic operating value.
+captured `0xC8` is therefore a strong EEV position/setting candidate rather
+than a confirmed electrical or generic operating value. The RTL parser itself
+does not assign a named property to payload 6, 9, or 10, so those three fields
+remain explicitly provisional until they change under a controlled capture.
 
 ## Firmware-confirmed change regions
 

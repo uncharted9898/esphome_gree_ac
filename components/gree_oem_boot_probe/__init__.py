@@ -1,7 +1,9 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID
-from esphome.components import uart
+from esphome.components import text_sensor, uart
+
+AUTO_LOAD = ["text_sensor"]
 
 # sinclair_ac is a climate platform rather than a top-level ESPHome component
 # domain, so listing it in DEPENDENCIES causes a false validation failure. The
@@ -23,6 +25,10 @@ CONF_MODULE_STATE_PRIMARY_SELECTOR = "module_state_primary_selector"
 CONF_MODULE_STATE_SECONDARY_SELECTOR = "module_state_secondary_selector"
 CONF_OPERATING_PROFILE = "operating_profile"
 CONF_OPERATING_PROFILE_CYCLES = "operating_profile_cycles"
+CONF_QUERY_ENERGY_FLOW = "query_energy_flow"
+CONF_FORCE_ELECTRICAL_PAGE_DISCOVERY = "force_electrical_page_discovery"
+CONF_FORCE_ENERGY_FLOW_DISCOVERY = "force_energy_flow_discovery"
+CONF_ENERGY_FLOW_QUERY_RESULT = "energy_flow_query_result"
 
 gree_oem_probe_ns = cg.esphome_ns.namespace("gree_oem_probe")
 GreeOemBootProbe = gree_oem_probe_ns.class_("GreeOemBootProbe", cg.Component)
@@ -56,6 +62,12 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MODULE_STATE_SECONDARY_SELECTOR, default=0x00): cv.int_range(min=0, max=7),
         cv.Optional(CONF_OPERATING_PROFILE, default=False): cv.boolean,
         cv.Optional(CONF_OPERATING_PROFILE_CYCLES, default=40): cv.int_range(min=1, max=120),
+        cv.Optional(CONF_QUERY_ENERGY_FLOW, default=True): cv.boolean,
+        cv.Optional(CONF_FORCE_ELECTRICAL_PAGE_DISCOVERY, default=False): cv.boolean,
+        cv.Optional(CONF_FORCE_ENERGY_FLOW_DISCOVERY, default=False): cv.boolean,
+        cv.Optional(CONF_ENERGY_FLOW_QUERY_RESULT): text_sensor.text_sensor_schema(
+            text_sensor.TextSensor
+        ),
         cv.Optional(CONF_REPEAT_INTERVAL): cv.All(
             cv.positive_time_period_milliseconds,
             cv.Range(min=cv.TimePeriod(seconds=30)),
@@ -85,5 +97,17 @@ async def to_code(config):
     ))
     cg.add(var.set_operating_profile(config[CONF_OPERATING_PROFILE]))
     cg.add(var.set_operating_profile_cycles(config[CONF_OPERATING_PROFILE_CYCLES]))
+    cg.add(var.set_query_energy_flow(config[CONF_QUERY_ENERGY_FLOW]))
+    cg.add(
+        var.set_force_electrical_page_discovery(
+            config[CONF_FORCE_ELECTRICAL_PAGE_DISCOVERY]
+        )
+    )
+    cg.add(var.set_force_energy_flow_discovery(config[CONF_FORCE_ENERGY_FLOW_DISCOVERY]))
+    if CONF_ENERGY_FLOW_QUERY_RESULT in config:
+        result_sensor = await text_sensor.new_text_sensor(
+            config[CONF_ENERGY_FLOW_QUERY_RESULT]
+        )
+        cg.add(var.set_energy_flow_query_result_sensor(result_sensor))
     if CONF_REPEAT_INTERVAL in config:
         cg.add(var.set_repeat_interval(config[CONF_REPEAT_INTERVAL]))

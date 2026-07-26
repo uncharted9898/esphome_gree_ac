@@ -18,12 +18,14 @@ CONF_LAST_0X41_PAYLOAD = "last_0x41_payload"
 CONF_LAST_0X42_PAYLOAD = "last_0x42_payload"
 CONF_LAST_0X53_PAYLOAD = "last_0x53_payload"
 CONF_ELECTRICAL_ENERGY_CAPABILITY = "electrical_energy_capability"
+CONF_ENERGY_FLOW_CAPABILITY = "energy_flow_capability"
 CONF_POWER_DISCOVERY_SUMMARY = "power_discovery_summary"
 
 CONF_STATUS_INDOOR_TEMPERATURE = "status_indoor_temperature"
 CONF_STATUS_OUTDOOR_AMBIENT_TEMPERATURE = "status_outdoor_ambient_temperature"
 CONF_STATUS_HUMIDITY_SENSOR_FIELD_RAW = "status_humidity_sensor_field_raw"
 CONF_STATUS_INDOOR_FAN_PORT_RAW = "status_indoor_fan_port_raw"
+CONF_STATUS_ELC_ALL_KWH_CLEAR = "status_elc_all_kwh_clear"
 CONF_STATUS_ELC_ERG = "status_elc_erg"
 CONF_STATUS_ELC_GEAR_RAW = "status_elc_gear_raw"
 CONF_STATUS_ELC_1KWH_RAW = "status_elc_1kwh_raw"
@@ -128,11 +130,13 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_LAST_0X42_PAYLOAD): payload_schema,
         cv.Optional(CONF_LAST_0X53_PAYLOAD): payload_schema,
         cv.Optional(CONF_ELECTRICAL_ENERGY_CAPABILITY): payload_schema,
+        cv.Optional(CONF_ENERGY_FLOW_CAPABILITY): payload_schema,
         cv.Optional(CONF_POWER_DISCOVERY_SUMMARY): payload_schema,
         cv.Optional(CONF_STATUS_INDOOR_TEMPERATURE): temperature_schema,
         cv.Optional(CONF_STATUS_OUTDOOR_AMBIENT_TEMPERATURE): temperature_schema,
         cv.Optional(CONF_STATUS_HUMIDITY_SENSOR_FIELD_RAW): raw_schema,
         cv.Optional(CONF_STATUS_INDOOR_FAN_PORT_RAW): raw_schema,
+        cv.Optional(CONF_STATUS_ELC_ALL_KWH_CLEAR): bit_schema,
         cv.Optional(CONF_STATUS_ELC_ERG): bit_schema,
         cv.Optional(CONF_STATUS_ELC_GEAR_RAW): raw_schema,
         cv.Optional(CONF_STATUS_ELC_1KWH_RAW): raw_schema,
@@ -200,6 +204,7 @@ async def to_code(config):
         CONF_LAST_0X42_PAYLOAD: "set_last_0x42_payload_sensor",
         CONF_LAST_0X53_PAYLOAD: "set_last_0x53_payload_sensor",
         CONF_ELECTRICAL_ENERGY_CAPABILITY: "set_electrical_energy_capability_sensor",
+        CONF_ENERGY_FLOW_CAPABILITY: "set_energy_flow_capability_sensor",
         CONF_POWER_DISCOVERY_SUMMARY: "set_power_discovery_summary_sensor",
         CONF_OUTDOOR_REPORT_BYTES_21_28_RAW: "set_outdoor_report_bytes_21_28_raw_sensor",
     }
@@ -256,6 +261,7 @@ async def to_code(config):
             cg.add(getattr(var, method)(entity))
 
     binary_entities = {
+        CONF_STATUS_ELC_ALL_KWH_CLEAR: "set_status_elc_all_kwh_clear_sensor",
         CONF_STATUS_ELC_ERG: "set_status_elc_erg_sensor",
         CONF_EXPANSION_VALVE_CLOSING: "set_expansion_valve_closing_sensor",
         CONF_INDOOR_REPORT_BYTE_6_BIT_3: "set_indoor_report_byte_6_bit_3_sensor",

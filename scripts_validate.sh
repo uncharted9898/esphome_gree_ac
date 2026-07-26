@@ -40,12 +40,11 @@ python3 -m py_compile \
   tools/firmware_research/setup_rtl8720cf.py \
   tools/firmware_research/load_rtl8720cf_companion.py \
   tools/firmware_research/seed_rtl8720cf_functions.py \
+  tools/firmware_research/audit_rtl8720cf_protocol.py \
   tools/firmware_research/audit_rtl8720cf_handshake.py \
   tools/gree_oem_frame_generator.py
 
-python3 -m unittest \
-  tests/test_rtl8720cf_image.py \
-  tests/test_gree_oem_frame_generator.py
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_protocol_frame.cpp -o /tmp/test_protocol_frame

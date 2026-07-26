@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Generate checksum-valid Gree RTL8720CF HVAC UART research frames.
 
-The report-query layout is recovered independently from the archived RTL8720CF
-V2 and V3 module firmware. This utility never opens a serial port or sends a
-packet; it only builds and validates byte vectors for review, tests, and
-explicitly controlled hardware probes.
+The command-0x03 selector layout and the independent command-0x09 EnergyFlow
+request are recovered from the archived RTL8720CF V2 and V3 module firmware.
+This utility never opens a serial port or sends a packet; it only builds and
+validates byte vectors for review, tests, and explicitly controlled probes.
 """
 
 from __future__ import annotations
@@ -18,6 +18,10 @@ RTL_REPORT_QUERY_SIZE = 29
 RTL_REPORT_QUERY_LENGTH = 0x1A
 RTL_REPORT_QUERY_COMMAND = 0x03
 RTL_REPORT_QUERY_RESERVED_INDEX = 27
+RTL_ENERGY_FLOW_QUERY_SIZE = 53
+RTL_ENERGY_FLOW_QUERY_LENGTH = 0x32
+RTL_ENERGY_FLOW_QUERY_COMMAND = 0x09
+RTL_MAC_REPORT_SIZE = 16
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,16 @@ class ExtendedQuery:
     primary_selector: int
     extended_selector: int
     expected_response: int
+
+
+@dataclass(frozen=True)
+class RtlDateTimeContext:
+    year: int = 0
+    month: int = 0
+    day: int = 0
+    hour: int = 0
+    minute: int = 0
+    second: int = 0
 
 
 QUERIES = {
@@ -59,7 +73,7 @@ def validate_frame(frame: list[int]) -> None:
 
 
 def validate_extended_query(frame: list[int]) -> None:
-    """Validate the exact RTL8720CF report-query envelope."""
+    """Validate the RTL8720CF command-0x03 report-query envelope."""
 
     validate_frame(frame)
     if len(frame) != RTL_REPORT_QUERY_SIZE:
@@ -68,6 +82,15 @@ def validate_extended_query(frame: list[int]) -> None:
         raise ValueError("unexpected RTL report-query length or command")
     if frame[RTL_REPORT_QUERY_RESERVED_INDEX] != 0x00:
         raise ValueError("RTL report-query reserved byte must be zero")
+
+    first_context = frame[8:11]
+    second_context = frame[11:14]
+    expected_first = [0x17, 0x3B, 0x3B] if frame[4] & 0x80 else [0x00] * 3
+    expected_second = [0x17, 0x3B, 0x3B] if frame[4] & 0x40 else [0x00] * 3
+    if first_context != expected_first:
+        raise ValueError("first RTL time-context triple does not match byte-4 bit 7")
+    if second_context != expected_second:
+        raise ValueError("second RTL time-context triple does not match byte-4 bit 6")
 
 
 def build_extended_query(
@@ -78,10 +101,13 @@ def build_extended_query(
 ) -> list[int]:
     """Build the audited 29-byte command-0x03 report request.
 
-    `state_flags` occupies full-frame byte 4 bits 7:6. `module_state` occupies
-    full-frame byte 26. Full-frame byte 27 is the reserved byte that the older
-    28-byte experiment omitted. The defaults reproduce a neutral,
-    checksum-valid RTL8720CF request.
+    ``state_flags`` occupies full-frame byte 4 bits 7:6. The firmware uses those
+    two bits to enable the corresponding HH:MM:SS context triples at bytes
+    8..10 and 11..13; the triples become ``17 3B 3B`` (23:59:59). They are not
+    RSSI fields. Neutral read-only selector requests leave both triples zero.
+
+    ``module_state`` occupies full-frame byte 26. Full-frame byte 27 is the
+    reserved byte omitted by the older 28-byte experiment.
     """
 
     if not 0 <= module_state <= 0xFF:
@@ -96,14 +122,81 @@ def build_extended_query(
     frame = [0x7E, 0x7E, RTL_REPORT_QUERY_LENGTH, RTL_REPORT_QUERY_COMMAND]
     frame.extend([0x00] * (RTL_REPORT_QUERY_SIZE - len(frame)))
     frame[4] = state_flags | query.primary_selector
-    frame[10] = 0x3B
-    frame[13] = 0x3B
+    if state_flags & 0x80:
+        frame[8:11] = [0x17, 0x3B, 0x3B]
+    if state_flags & 0x40:
+        frame[11:14] = [0x17, 0x3B, 0x3B]
     frame[14] = query.extended_selector
     frame[26] = module_state
     frame[RTL_REPORT_QUERY_RESERVED_INDEX] = 0x00
     frame[-1] = checksum(frame[:-1])
     validate_extended_query(frame)
     return frame
+
+
+def build_startup_sync(
+    *, module_state: int = 1, date_time: RtlDateTimeContext = RtlDateTimeContext()
+) -> list[int]:
+    """Build the post-0x44 RTL startup command-0x03 frame.
+
+    V2 and V3 send the initialized selector buffer four times after a valid
+    identity response. The calendar occupies bytes 15..20. All-zero calendar
+    fields are the normal representation before time synchronization.
+    """
+
+    if not 0 <= date_time.year <= 0xFFF:
+        raise ValueError("year must fit the RTL 12-bit field")
+    if not 0 <= date_time.month <= 0x0F:
+        raise ValueError("month must fit the RTL four-bit field")
+    for name, value in (
+        ("day", date_time.day),
+        ("hour", date_time.hour),
+        ("minute", date_time.minute),
+        ("second", date_time.second),
+    ):
+        if not 0 <= value <= 0xFF:
+            raise ValueError(f"{name} must fit in one byte")
+
+    frame = build_extended_query(QUERIES["status"], module_state=module_state)
+    frame[15] = (date_time.year >> 4) & 0xFF
+    frame[16] = ((date_time.year & 0x0F) << 4) | (date_time.month & 0x0F)
+    frame[17] = date_time.day
+    frame[18] = date_time.hour
+    frame[19] = date_time.minute
+    frame[20] = date_time.second
+    frame[-1] = checksum(frame[:-1])
+    validate_extended_query(frame)
+    return frame
+
+
+def build_energy_flow_query() -> list[int]:
+    """Build the independent V2/V3 command-0x09 -> command-0x53 request."""
+
+    frame = [0x00] * RTL_ENERGY_FLOW_QUERY_SIZE
+    frame[:4] = [
+        0x7E,
+        0x7E,
+        RTL_ENERGY_FLOW_QUERY_LENGTH,
+        RTL_ENERGY_FLOW_QUERY_COMMAND,
+    ]
+    frame[-1] = checksum(frame[:-1])
+    validate_energy_flow_query(frame)
+    return frame
+
+
+def validate_energy_flow_query(frame: list[int]) -> None:
+    validate_frame(frame)
+    if len(frame) != RTL_ENERGY_FLOW_QUERY_SIZE:
+        raise ValueError(
+            f"RTL EnergyFlow query must contain {RTL_ENERGY_FLOW_QUERY_SIZE} bytes"
+        )
+    if (
+        frame[2] != RTL_ENERGY_FLOW_QUERY_LENGTH
+        or frame[3] != RTL_ENERGY_FLOW_QUERY_COMMAND
+    ):
+        raise ValueError("unexpected RTL EnergyFlow length or command")
+    if any(frame[4:-1]):
+        raise ValueError("RTL EnergyFlow request payload must be zero-filled")
 
 
 def parse_mac(value: str) -> bytes:
@@ -117,11 +210,15 @@ def parse_mac(value: str) -> bytes:
 
 
 def build_full_mac_report(mac: bytes) -> list[int]:
+    """Build the audited 16-byte command-0x04 full-MAC solicitation."""
+
     if len(mac) != 6:
         raise ValueError("MAC must contain exactly six bytes")
-    frame = [0x7E, 0x7E, 0x0C, 0x04, 0x07, 0x00, 0x00, 0x00, *mac, 0x00]
+    frame = [0x7E, 0x7E, 0x0D, 0x04, 0x07, 0x00, 0x00, 0x00, *mac, 0x00, 0x00]
     frame[-1] = checksum(frame[:-1])
     validate_frame(frame)
+    if len(frame) != RTL_MAC_REPORT_SIZE:
+        raise ValueError("RTL full-MAC report must contain 16 bytes")
     return frame
 
 
@@ -138,6 +235,21 @@ def main() -> int:
     query_parser.add_argument("--module-state", type=lambda value: int(value, 0), default=1)
     query_parser.add_argument("--state-flags", type=lambda value: int(value, 0), default=0)
 
+    sub.add_parser(
+        "energy-flow", help="generate the independent command-0x09 EnergyFlow query"
+    )
+
+    startup_parser = sub.add_parser(
+        "startup-sync", help="generate the post-0x44 RTL command-0x03 startup frame"
+    )
+    startup_parser.add_argument("--module-state", type=lambda value: int(value, 0), default=1)
+    startup_parser.add_argument("--year", type=int, default=0)
+    startup_parser.add_argument("--month", type=int, default=0)
+    startup_parser.add_argument("--day", type=int, default=0)
+    startup_parser.add_argument("--hour", type=int, default=0)
+    startup_parser.add_argument("--minute", type=int, default=0)
+    startup_parser.add_argument("--second", type=int, default=0)
+
     mac_parser = sub.add_parser("mac", help="generate the recovered full MAC report")
     mac_parser.add_argument("address")
 
@@ -149,6 +261,21 @@ def main() -> int:
         )
         print(format_hex(frame))
         print(f"expected response command: 0x{query.expected_response:02X}")
+    elif args.operation == "energy-flow":
+        print(format_hex(build_energy_flow_query()))
+        print("expected response command: 0x53")
+    elif args.operation == "startup-sync":
+        date_time = RtlDateTimeContext(
+            args.year, args.month, args.day, args.hour, args.minute, args.second
+        )
+        print(
+            format_hex(
+                build_startup_sync(
+                    module_state=args.module_state, date_time=date_time
+                )
+            )
+        )
+        print("OEM firmware transmits this frame four times after valid 0x44")
     else:
         print(format_hex(build_full_mac_report(parse_mac(args.address))))
     return 0

@@ -48,7 +48,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: agent/rtl8720cf-operating-telemetry
+      ref: agent/audit-rtl-energy-flow-command
     refresh: 5min
     components:
       - sinclair_ac
@@ -139,9 +139,10 @@ climate:
 
 # The captured startup exchange is followed by the exact 29-byte RTL8720CF
 # command-0x03 report requests. The probe asks for 0x33, 0x34, 0x35, an
-# extended 0x31, and the opaque 0x42/0x41 pages. It requests 0x40 only when
-# 0x32 payload[0] advertises that report page, with one discovery attempt when
-# no synchronization report has arrived yet.
+# extended 0x31, and the opaque 0x42/0x41 pages. This normal probe requests 0x40
+# only when 0x32 payload[0] advertises that report page, with one discovery
+# attempt when no synchronization report has arrived yet. The full-power
+# research example explicitly enables one corrected-frame unadvertised retry.
 gree_oem_boot_probe:
   id: gree_boot_probe
   uart_id: gree_uart
@@ -150,8 +151,17 @@ gree_oem_boot_probe:
   frame_spacing: 450ms
   quiesce_delay: 1800ms
   query_recovered_data: true
+  force_electrical_page_discovery: false
+  # Query command 0x09 only when 0x32 advertises EnergyFlow. The full-power
+  # discovery example enables the separate one-shot forced probe.
+  query_energy_flow: true
+  force_energy_flow_discovery: false
+  energy_flow_query_result:
+    name: ${friendly_name} OEM EnergyFlow Query Result
+    entity_category: diagnostic
   # The complete discovery sweep runs once; scheduled cycles refresh only the 0x35
-  # outdoor operating page after climate traffic becomes idle.
+  # outdoor operating page after climate traffic becomes idle. Advertised or
+  # previously confirmed EnergyFlow support is refreshed in the same cycle.
   repeat_interval: 30s
   restore_control: true
 
@@ -170,11 +180,11 @@ gree_oem_report_sensors:
     name: ${friendly_name} Last 0x35 Outdoor Report Payload
     entity_category: diagnostic
   last_0x36_payload:
-    name: ${friendly_name} Last 0x36 Diagnostic Payload
+    name: ${friendly_name} Last 0x36 CO2 Payload
     entity_category: diagnostic
     disabled_by_default: true
   last_0x3c_payload:
-    name: ${friendly_name} Last 0x3C Service Payload
+    name: ${friendly_name} Last 0x3C Smart Sleep Payload
     entity_category: diagnostic
     disabled_by_default: true
 
@@ -191,12 +201,15 @@ gree_oem_report_sensors:
     entity_category: diagnostic
     disabled_by_default: true
   last_0x53_payload:
-    name: ${friendly_name} Last 0x53 Energy Flow Payload
+    name: ${friendly_name} Last 0x53 OEM EnergyFlow Payload
     entity_category: diagnostic
     disabled_by_default: true
 
   electrical_energy_capability:
     name: ${friendly_name} Electrical Energy Capability
+    entity_category: diagnostic
+  energy_flow_capability:
+    name: ${friendly_name} OEM EnergyFlow Capability
     entity_category: diagnostic
   power_discovery_summary:
     name: ${friendly_name} Operating Telemetry Summary
@@ -214,6 +227,10 @@ gree_oem_report_sensors:
     disabled_by_default: true
   status_indoor_fan_port_raw:
     name: ${friendly_name} Indoor Fan Port Raw
+    entity_category: diagnostic
+    disabled_by_default: true
+  status_elc_all_kwh_clear:
+    name: ${friendly_name} ElcAllKwhClr Flag
     entity_category: diagnostic
     disabled_by_default: true
   status_elc_erg:
@@ -245,13 +262,13 @@ gree_oem_report_sensors:
     name: ${friendly_name} Compressor Frequency
     entity_category: diagnostic
   outdoor_fan_speed_raw:
-    name: ${friendly_name} Outdoor Fan Speed Raw
+    name: ${friendly_name} Outdoor Fan Candidate Raw
     entity_category: diagnostic
   expansion_valve_position:
-    name: ${friendly_name} Expansion Valve Position Raw
+    name: ${friendly_name} Expansion Valve Position Candidate Raw
     entity_category: diagnostic
   expansion_valve_closing:
-    name: ${friendly_name} Expansion Valve Closing
+    name: ${friendly_name} Expansion Valve Closing Candidate
     entity_category: diagnostic
   outdoor_operating_state_raw:
     name: ${friendly_name} Outdoor Operating State Raw
@@ -292,6 +309,6 @@ gree_oem_report_sensors:
     entity_category: diagnostic
     disabled_by_default: true
   energy_flow_raw:
-    name: ${friendly_name} Energy Flow Raw
+    name: ${friendly_name} OEM EnergyFlow Raw (Meaning Unknown)
     entity_category: diagnostic
     disabled_by_default: true
