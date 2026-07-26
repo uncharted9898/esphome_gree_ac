@@ -2,19 +2,22 @@ name: rtl8720cf-044-handshake-audit
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - agent/audit-rtl8720cf-044-handshake
+  pull_request:
     paths:
       - .github/workflows/rtl8720cf-044-handshake-audit.yml
       - tools/firmware_research/audit_rtl8720cf_handshake.py
+      - tools/firmware_research/rtl8720cf_image.py
+      - tools/firmware_research/setup_rtl8720cf.py
+      - tools/firmware_research/load_rtl8720cf_companion.py
+      - tools/firmware_research/seed_rtl8720cf_functions.py
+      - docs/rtl8720cf-044-handshake.md
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: rtl8720cf-044-handshake-audit
-  cancel-in-progress: false
+  group: rtl8720cf-044-handshake-audit-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   audit:
@@ -22,9 +25,6 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: agent/audit-rtl8720cf-044-handshake
 
       - uses: actions/setup-python@v5
         with:
@@ -166,26 +166,6 @@ jobs:
             grep '^=== ' "$report" \
               >> firmware-research/results/handshake/section-index.txt || true
           done
-
-      - name: Commit reviewable text evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          destination='docs/research/rtl8720cf-044-handshake/generated'
-          mkdir -p "$destination"
-          cp firmware-research/results/handshake/input-manifest.txt "$destination/"
-          cp firmware-research/results/handshake/v1.21-044-handshake.txt "$destination/"
-          cp firmware-research/results/handshake/v1.53-044-handshake.txt "$destination/"
-          cp firmware-research/results/handshake/artifact-index.txt "$destination/"
-          cp firmware-research/results/handshake/section-index.txt "$destination/"
-          git config user.name 'openai-agent'
-          git config user.email 'openai-agent@users.noreply.github.com'
-          git add "$destination"
-          if ! git diff --cached --quiet; then
-            git diff --cached --check
-            git commit -m 'Publish RTL8720CF 0x44 handshake evidence'
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
