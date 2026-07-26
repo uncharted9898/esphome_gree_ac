@@ -130,7 +130,7 @@ struct EnergyFlowReportFields {
 };
 
 inline bool decode_status_report(const std::vector<uint8_t> &payload,
-                                 StatusReportFields &out) {
+                                  StatusReportFields &out) {
   // Highest recovered field is Elc1Kwh at payload byte 45.
   if (payload.size() <= 45) return false;
 
@@ -145,21 +145,25 @@ inline bool decode_status_report(const std::vector<uint8_t> &payload,
 }
 
 inline bool decode_indoor_report(const std::vector<uint8_t> &payload,
-                                 IndoorReportFields &out) {
+                                  IndoorReportFields &out) {
   // Highest retained OEM change-detection field is payload byte 38.
   if (payload.size() <= 38) return false;
-
-  out.target_temperature_c = decode_offset_40_temperature(payload[7]);
-  out.current_temperature_c = decode_offset_40_temperature(payload[8]);
-  out.evaporator_temperature_c = decode_offset_40_temperature(payload[10]);
-  out.coil_temperature_candidate_c = out.evaporator_temperature_c;
-  out.byte_25_raw = payload[25];
-  out.secondary_temperature_candidate_c =
-      std::numeric_limits<float>::quiet_NaN();
 
   out.byte_6_raw = payload[6];
   out.byte_6_bit_3 = (payload[6] & 0x08U) != 0;
   out.byte_6_bit_5 = (payload[6] & 0x20U) != 0;
+
+  out.target_temperature_c = decode_offset_40_temperature(payload[7]);
+  out.current_temperature_c =
+      decode_offset_40_temperature(payload[8]) +
+      (out.byte_6_bit_3 ? 0.5f : 0.0f);
+  out.evaporator_temperature_c =
+      decode_offset_40_temperature(payload[10]) +
+      (out.byte_6_bit_5 ? 0.5f : 0.0f);
+  out.coil_temperature_candidate_c = out.evaporator_temperature_c;
+  out.byte_25_raw = payload[25];
+  out.secondary_temperature_candidate_c =
+      std::numeric_limits<float>::quiet_NaN();
 
   // Exact property bit extractions recovered from v1.21.
   out.df_point_raw = static_cast<uint8_t>(((payload[6] >> 4) & 0x0CU) |
@@ -177,7 +181,7 @@ inline bool decode_indoor_report(const std::vector<uint8_t> &payload,
 }
 
 inline bool decode_outdoor_report(const std::vector<uint8_t> &payload,
-                                  OutdoorReportFields &out) {
+                                   OutdoorReportFields &out) {
   // Highest retained OEM change-detection field is payload byte 36.
   if (payload.size() <= 36) return false;
 
@@ -210,7 +214,7 @@ inline bool decode_outdoor_report(const std::vector<uint8_t> &payload,
 }
 
 inline bool decode_energy_flow_report(const std::vector<uint8_t> &payload,
-                                      EnergyFlowReportFields &out) {
+                                       EnergyFlowReportFields &out) {
   // Response 0x53 copies full-frame byte 0x1C (payload 24) to EnergyFlow.
   if (payload.size() <= 24) return false;
   out.energy_flow_raw = payload[24];
