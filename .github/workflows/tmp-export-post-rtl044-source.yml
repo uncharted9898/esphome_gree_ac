@@ -1,4 +1,4 @@
-name: tmp-export-post-rtl044-source
+name: apply-recovered-rtl-telemetry
 
 on:
   push:
@@ -6,34 +6,84 @@ on:
       - agent/export-post-rtl044-source
     paths:
       - .github/workflows/tmp-export-post-rtl044-source.yml
-  pull_request:
-    branches:
-      - codex/add-compatibility-and-protocol-discovery-mode
-    paths:
-      - .github/workflows/tmp-export-post-rtl044-source.yml
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: apply-recovered-rtl-telemetry
+  cancel-in-progress: false
 
 jobs:
-  export:
+  apply:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: codex/add-compatibility-and-protocol-discovery-mode
           fetch-depth: 0
-      - name: Record exact revision
+
+      - name: Reconstruct, validate, and apply reviewed patch
         shell: bash
         run: |
           set -euo pipefail
-          git rev-parse HEAD > SOURCE_HEAD
-          git status --short > SOURCE_STATUS
-      - uses: actions/upload-artifact@v4
-        with:
-          name: post-rtl044-source
-          path: .
-          include-hidden-files: true
-          retention-days: 1
-          compression-level: 0
+          expected_base='d1a1c7cd957172c0ec40dcade955fd0d55a1bcf5'
+          test "$(git rev-parse HEAD)" = "$expected_base"
+
+          git fetch --no-tags origin agent/export-post-rtl044-source
+          transfer='.github/agent-transfer/rtl-energy-flow.patch.gz.b64'
+          {
+            git show origin/agent/export-post-rtl044-source:"${transfer}.part-00" | head -c 7000
+            for part in 01 02 03 04 05 06 07; do
+              git show origin/agent/export-post-rtl044-source:"${transfer}.part-${part}"
+            done
+          } > "$RUNNER_TEMP/rtl-energy-flow.patch.gz.b64"
+
+          base64 --decode "$RUNNER_TEMP/rtl-energy-flow.patch.gz.b64" \
+            > "$RUNNER_TEMP/rtl-energy-flow.patch.gz"
+          gzip --decompress --stdout "$RUNNER_TEMP/rtl-energy-flow.patch.gz" \
+            > "$RUNNER_TEMP/rtl-energy-flow.patch"
+          echo 'b3d1224701bb892a79aee5951a39dcd52be9895e143dcfe9c61eed3838d450af  '"$RUNNER_TEMP/rtl-energy-flow.patch" \
+            | sha256sum --check --strict
+
+          git apply --check "$RUNNER_TEMP/rtl-energy-flow.patch"
+          git apply "$RUNNER_TEMP/rtl-energy-flow.patch"
+          git diff --check
+
+      - name: Run native protocol regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            components/gree_oem_boot_probe/__init__.py \
+            components/gree_oem_report_sensors/__init__.py \
+            tools/gree_oem_frame_generator.py \
+            tools/firmware_research/audit_rtl8720cf_protocol.py
+          python3 -m unittest \
+            tests.test_gree_oem_frame_generator \
+            tests.test_selector_discovery_source \
+            tests.test_rtl8720cf_image -v
+          c++ -std=c++17 -Wall -Wextra -pedantic \
+            tests/test_protocol_frame.cpp -o /tmp/test_protocol_frame
+          /tmp/test_protocol_frame
+          c++ -std=c++17 -Wall -Wextra -pedantic \
+            tests/test_oem_report_decoder.cpp -o /tmp/test_oem_report_decoder
+          /tmp/test_oem_report_decoder
+          c++ -std=c++17 -Wall -Wextra -pedantic \
+            tests/test_rtl_report_query.cpp -o /tmp/test_rtl_report_query
+          /tmp/test_rtl_report_query
+          c++ -std=c++17 -Wall -Wextra -pedantic \
+            tests/test_rtl044_handshake.cpp -o /tmp/test_rtl044_handshake
+          /tmp/test_rtl044_handshake
+
+      - name: Publish clean source commit to active PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'OpenAI'
+          git config user.email 'openai-agent@users.noreply.github.com'
+          git add -A
+          git commit -m 'Recover missing RTL telemetry request paths'
+          git push origin HEAD:codex/add-compatibility-and-protocol-discovery-mode
