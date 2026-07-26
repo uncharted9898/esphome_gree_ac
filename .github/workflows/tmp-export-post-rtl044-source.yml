@@ -6,6 +6,11 @@ on:
       - agent/export-post-rtl044-source
     paths:
       - .github/workflows/tmp-export-post-rtl044-source.yml
+  pull_request:
+    branches:
+      - codex/add-compatibility-and-protocol-discovery-mode
+    paths:
+      - .github/workflows/tmp-export-post-rtl044-source.yml
   workflow_dispatch:
 
 permissions:
@@ -32,5 +37,3 @@ jobs:
           include-hidden-files: true
           retention-days: 1
           compression-level: 0
-
-# Registration trigger for the temporary source-export workflow.
