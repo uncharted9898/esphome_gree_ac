@@ -32,3 +32,5 @@ jobs:
           include-hidden-files: true
           retention-days: 1
           compression-level: 0
+
+# Registration trigger for the temporary source-export workflow.
