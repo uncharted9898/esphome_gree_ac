@@ -4,9 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+ci_secrets_created=0
 cleanup_validation_files() {
   if [ "${KEEP_VALIDATION_YAML:-0}" != "1" ]; then
     rm -f examples/.validation-*.yaml
+  fi
+  if [ "$ci_secrets_created" = "1" ]; then
+    rm -f examples/secrets.yaml
   fi
   find . -type d -name __pycache__ -prune -exec rm -rf {} +
   find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
@@ -28,6 +32,7 @@ api_encryption_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 gree_livo_web_username: ci-user
 gree_livo_web_password: ci-password
 EOF
+  ci_secrets_created=1
 fi
 
 python3 -m py_compile \
