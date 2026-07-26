@@ -1,0 +1,243 @@
+name: publish-rtl8720cf-telemetry
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/correct-gree-telemetry-direct
+    paths:
+      - .github/workflows/publish-rtl8720cf-telemetry.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-rtl8720cf-telemetry
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify and apply reviewed source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          part_dir='.github/agent-transfer'
+          archive_b64="$RUNNER_TEMP/rtl-telemetry-runtime.tar.gz.b64"
+          archive="$RUNNER_TEMP/rtl-telemetry-runtime.tar.gz"
+
+          expected_parts=(
+            '3ea8a616f2df4eb10f96c076ab90a020fb7f6134a27df2da14bf195b5b65cf67  .github/agent-transfer/runtime.part-00'
+            'a929ec906592fdc625f5355231a908087bd95c84969a45837cd360ed7eed2bed  .github/agent-transfer/runtime.part-01'
+            '05e31083b7788d58b66cba579c7cae8ca34807b9e09010ffd1ad23240c1d027c  .github/agent-transfer/runtime.part-02'
+            'd6e78c626fede77569c6c6aeef4fb500558081174cc9487dcb1d0bea67cb17d3  .github/agent-transfer/runtime.part-03'
+            '9f6fb73a43b02e21862ca5f2bc3be6a683e82b206ce92f46b72ec78ee70dffd5  .github/agent-transfer/runtime.part-04'
+            '7c81f4eb6b0e6f831b989dca8e36a88b992bce0d52fb9bdecee130efde0b29f3  .github/agent-transfer/runtime.part-05'
+          )
+          printf '%s\n' "${expected_parts[@]}" | sha256sum --check --strict
+
+          cat "$part_dir"/runtime.part-* > "$archive_b64"
+          base64 --decode "$archive_b64" > "$archive"
+          echo '979dddd40516affa0d734a6f1bee9ed149784172d2a0801578ee76c937907161  '"$archive" | \
+            sha256sum --check --strict
+
+          tar -tzf "$archive" | LC_ALL=C sort > "$RUNNER_TEMP/archive-files"
+          cat > "$RUNNER_TEMP/expected-archive-files" <<'FILES'
+          .github/workflows/validation.yml
+          components/gree_oem_boot_probe/gree_oem_boot_probe.h
+          components/gree_oem_boot_probe/rtl_query.h
+          components/gree_oem_report_sensors/__init__.py
+          components/gree_oem_report_sensors/gree_oem_report_sensors.h
+          components/gree_oem_report_sensors/report_decoder.h
+          components/sinclair_ac/esppac.cpp
+          components/sinclair_ac/esppac.h
+          components/sinclair_ac/esppac_cnt.cpp
+          components/sinclair_ac/esppac_cnt.h
+          components/sinclair_ac/protocol_frame.h
+          components/sinclair_ac/target_temperature.h
+          docs/rtl8720cf-telemetry-map.md
+          examples/gree-livo-gen3-full-power-discovery.yaml
+          examples/gree-livo-gen3-refined-discovery.yaml
+          examples/gree-livo-oem-boot-probe.yaml
+          scripts_validate.sh
+          tests/test_oem_report_decoder.cpp
+          tests/test_protocol_frame.cpp
+          tests/test_rtl_report_query.cpp
+          tools/firmware_research/rtl8720cf_properties.py
+          FILES
+          sed -i 's/^          //' "$RUNNER_TEMP/expected-archive-files"
+          diff -u "$RUNNER_TEMP/expected-archive-files" "$RUNNER_TEMP/archive-files"
+
+          if grep -Eq '(^/|(^|/)\.\.(/|$))' "$RUNNER_TEMP/archive-files"; then
+            echo 'Unsafe archive path detected' >&2
+            exit 1
+          fi
+
+          tar -xzf "$archive" -C .
+
+          rm -f .github/agent-transfer/rtl-telemetry-implementation.tar.gz.b64
+          rm -f .github/agent-transfer/runtime.part-*
+          rm -f .github/workflows/export-current-source.yml
+          rm -f .github/workflows/publish-rtl8720cf-telemetry.yml
+          rmdir .github/agent-transfer
+
+          test ! -e .github/agent-transfer
+          test ! -e .github/workflows/export-current-source.yml
+          test ! -e .github/workflows/publish-rtl8720cf-telemetry.yml
+          test -e .github/workflows/fetch-rtl8720cf-firmware.yml
+          test -e .github/workflows/rtl8720cf-firmware-audit.yml
+          git diff --check
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ESPHome validation toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install esphome==2026.7.1
+          esphome --version
+
+      - name: Create validation-only secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > examples/secrets.yaml <<'SECRETS'
+          wifi_ssid: validation-network
+          wifi_password: validation-password
+          ota_password: validation-ota-password
+          api_encryption_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          gree_livo_api_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          gree_livo_web_username: validation
+          gree_livo_web_password: validation-password
+          SECRETS
+          sed -i 's/^          //' examples/secrets.yaml
+
+      - name: Run protocol, decoder, firmware-analysis and ESPHome config tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts_validate.sh
+
+      - name: Compile every hardware example against the reviewed local source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for example in \
+            examples/gree-livo-gen3-receive-only.yaml \
+            examples/gree-livo-gen3-poll-only.yaml \
+            examples/gree-livo-gen3-control.yaml; do
+            esphome compile "$example"
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          component_path = Path('components').resolve()
+          examples = [
+              Path('examples/gree-livo-oem-boot-probe.yaml'),
+              Path('examples/gree-livo-gen3-refined-discovery.yaml'),
+              Path('examples/gree-livo-gen3-full-power-discovery.yaml'),
+          ]
+          pattern = re.compile(
+              r'(?m)^  - source:\n'
+              r'      type: git\n'
+              r'      url: https://github\.com/uncharted9898/esphome_gree_ac\n'
+              r'      ref: agent/correct-gree-telemetry-direct\n'
+          )
+          replacement = (
+              '  - source:\n'
+              '      type: local\n'
+              f'      path: {component_path}\n'
+          )
+          for source in examples:
+              target = source.with_name(f'.compile-{source.name}')
+              localized, count = pattern.subn(replacement, source.read_text(), count=1)
+              if count != 1:
+                  raise SystemExit(f'{source}: expected one branch source, found {count}')
+              target.write_text(localized)
+              print(target)
+          PY
+
+          for example in examples/.compile-*.yaml; do
+            esphome compile "$example"
+          done
+
+      - name: Clean generated validation files and verify the production diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f examples/secrets.yaml examples/.compile-*.yaml examples/.validation-*.yaml
+          rm -rf .esphome examples/.esphome
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          git clean -fdX
+          git diff --check
+          test ! -e examples/secrets.yaml
+          test ! -e .github/agent-transfer
+          test ! -e .github/workflows/export-current-source.yml
+          test ! -e .github/workflows/publish-rtl8720cf-telemetry.yml
+
+      - name: Publish the validated production source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'openai-agent'
+          git config user.email 'openai-agent@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git diff --cached --name-status
+          git diff --cached --name-only | LC_ALL=C sort > "$RUNNER_TEMP/actual-production-files"
+          cat > "$RUNNER_TEMP/expected-production-files" <<'FILES'
+          .github/agent-transfer/rtl-telemetry-implementation.tar.gz.b64
+          .github/agent-transfer/runtime.part-00
+          .github/agent-transfer/runtime.part-01
+          .github/agent-transfer/runtime.part-02
+          .github/agent-transfer/runtime.part-03
+          .github/agent-transfer/runtime.part-04
+          .github/agent-transfer/runtime.part-05
+          .github/workflows/export-current-source.yml
+          .github/workflows/publish-rtl8720cf-telemetry.yml
+          .github/workflows/validation.yml
+          components/gree_oem_boot_probe/gree_oem_boot_probe.h
+          components/gree_oem_boot_probe/rtl_query.h
+          components/gree_oem_report_sensors/__init__.py
+          components/gree_oem_report_sensors/gree_oem_report_sensors.h
+          components/gree_oem_report_sensors/report_decoder.h
+          components/sinclair_ac/esppac.cpp
+          components/sinclair_ac/esppac.h
+          components/sinclair_ac/esppac_cnt.cpp
+          components/sinclair_ac/esppac_cnt.h
+          components/sinclair_ac/protocol_frame.h
+          components/sinclair_ac/target_temperature.h
+          docs/rtl8720cf-telemetry-map.md
+          examples/gree-livo-gen3-full-power-discovery.yaml
+          examples/gree-livo-gen3-refined-discovery.yaml
+          examples/gree-livo-oem-boot-probe.yaml
+          scripts_validate.sh
+          tests/test_oem_report_decoder.cpp
+          tests/test_protocol_frame.cpp
+          tests/test_rtl_report_query.cpp
+          tools/firmware_research/rtl8720cf_properties.py
+          FILES
+          sed -i 's/^          //' "$RUNNER_TEMP/expected-production-files"
+          diff -u "$RUNNER_TEMP/expected-production-files" "$RUNNER_TEMP/actual-production-files"
+          git commit -m 'Expose RTL8720CF operating telemetry'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          {
+            echo '### Published RTL8720CF telemetry implementation'
+            echo
+            echo '```text'
+            git rev-parse HEAD
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

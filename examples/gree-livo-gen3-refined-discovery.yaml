@@ -1,0 +1,383 @@
+substitutions:
+  device_name: gree-livo-gen3
+  friendly_name: Gree Livo Gen3
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+logger:
+  baud_rate: 0
+  level: DEBUG
+  logs:
+    api: INFO
+    sensor: INFO
+    text_sensor: INFO
+    sinclair_ac: DEBUG
+    sinclair_ac.serial: DEBUG
+    gree.oem_boot_probe: DEBUG
+    gree.oem_report_sensors: DEBUG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+
+uart:
+  id: gree_uart
+  tx_pin: GPIO6
+  rx_pin: GPIO4
+  baud_rate: 4800
+  data_bits: 8
+  parity: EVEN
+  stop_bits: 1
+  rx_buffer_size: 2048
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/uncharted9898/esphome_gree_ac
+      ref: agent/audit-rtl-energy-flow-command
+    refresh: 5min
+    components:
+      - sinclair_ac
+      - gree_oem_boot_probe
+      - gree_oem_report_sensors
+
+climate:
+  - platform: sinclair_ac
+    id: gree_ac
+    name: ${friendly_name}
+    uart_id: gree_uart
+    protocol_mode: receive_only
+    fan_profile: gree_4_speed
+
+    telemetry_discovery:
+      enabled: true
+      expose_raw_payload: true
+      expose_raw_bytes: false
+      log_changes_only: true
+      # Twelve retained records are enough for one complete five-query cycle
+      # plus changed 0x31 traffic and remain below the API JSON text limit.
+      history_depth: 12
+
+    debug:
+      log_rx: false
+      log_tx: false
+      log_unknown_packets: true
+      log_packet_differences: true
+      maximum_hex_length: 256
+
+    horizontal_swing_select:
+      name: ${friendly_name} Horizontal Swing
+    vertical_swing_select:
+      name: ${friendly_name} Vertical Swing
+    display_select:
+      name: ${friendly_name} Display
+    display_unit_select:
+      name: ${friendly_name} Display Unit
+    plasma_switch:
+      name: ${friendly_name} Plasma
+    sleep_switch:
+      name: ${friendly_name} Sleep
+    xfan_switch:
+      name: ${friendly_name} X-Fan
+    save_switch:
+      name: ${friendly_name} Save and 8C Heat
+
+    diagnostics:
+      communication:
+        name: ${friendly_name} HVAC Communication
+        entity_category: diagnostic
+      valid_rx_packets:
+        name: ${friendly_name} Valid RX Packets
+        entity_category: diagnostic
+      valid_tx_packets:
+        name: ${friendly_name} Valid TX Packets
+        entity_category: diagnostic
+      unknown_packets:
+        name: ${friendly_name} Unknown Valid Packets
+        entity_category: diagnostic
+      checksum_failures:
+        name: ${friendly_name} Checksum Failures
+        entity_category: diagnostic
+      invalid_length_packets:
+        name: ${friendly_name} Invalid Length Packets
+        entity_category: diagnostic
+      too_short_frames:
+        name: ${friendly_name} Too Short Frames
+        entity_category: diagnostic
+      parser_resynchronizations:
+        name: ${friendly_name} Parser Resynchronizations
+        entity_category: diagnostic
+      frame_timeouts:
+        name: ${friendly_name} Frame Timeouts
+        entity_category: diagnostic
+      last_packet_length:
+        name: ${friendly_name} Last Packet Length
+        entity_category: diagnostic
+      last_packet_type:
+        name: ${friendly_name} Last Packet Command
+        entity_category: diagnostic
+      last_packet:
+        name: ${friendly_name} Last Packet
+        entity_category: diagnostic
+      last_unknown_packet:
+        name: ${friendly_name} Last Unsupported Frame
+        entity_category: diagnostic
+        disabled_by_default: true
+      last_0x31_payload:
+        id: gree_status_0x31
+        name: ${friendly_name} Last 0x31 Status Payload
+        entity_category: diagnostic
+      last_0x33_payload:
+        name: ${friendly_name} Last 0x33 Combined Report Payload
+        entity_category: diagnostic
+      last_0x40_payload:
+        name: ${friendly_name} Last 0x40 Extended Energy Payload
+        entity_category: diagnostic
+      last_0x44_payload:
+        name: ${friendly_name} Last 0x44 Information Payload
+        entity_category: diagnostic
+        disabled_by_default: true
+      last_unknown_payload:
+        name: ${friendly_name} Last Unsupported Payload
+        entity_category: diagnostic
+        disabled_by_default: true
+      discovery_summary:
+        name: ${friendly_name} Discovery Summary
+        entity_category: diagnostic
+      capture_export_csv:
+        name: ${friendly_name} Capture Export CSV
+        entity_category: diagnostic
+        disabled_by_default: true
+      polls_sent:
+        name: ${friendly_name} Polls Sent
+        entity_category: diagnostic
+      poll_responses:
+        name: ${friendly_name} Poll Responses
+        entity_category: diagnostic
+      poll_response_timeouts:
+        name: ${friendly_name} Poll Response Timeouts
+        entity_category: diagnostic
+      consecutive_poll_timeouts:
+        name: ${friendly_name} Consecutive Poll Timeouts
+        entity_category: diagnostic
+      last_poll_response_ms:
+        name: ${friendly_name} Last Poll Response Time
+        entity_category: diagnostic
+      min_poll_response_ms:
+        name: ${friendly_name} Minimum Poll Response Time
+        entity_category: diagnostic
+      max_poll_response_ms:
+        name: ${friendly_name} Maximum Poll Response Time
+        entity_category: diagnostic
+      average_poll_response_ms:
+        name: ${friendly_name} Average Poll Response Time
+        entity_category: diagnostic
+
+# The probe sends combined, indoor, outdoor, selector-zero extended-status,
+# and monthly-energy requests. Selector zero expects 0x31. Monthly energy
+# expects 0x40, although this Livo has repeatedly returned 0x31 as a fallback.
+gree_oem_boot_probe:
+  id: gree_boot_probe
+  uart_id: gree_uart
+  climate_id: gree_ac
+  start_delay: 100ms
+  frame_spacing: 450ms
+  quiesce_delay: 1800ms
+  query_recovered_data: true
+  force_electrical_page_discovery: false
+  # Query command 0x09 only when 0x32 advertises EnergyFlow. The full-power
+  # discovery example enables the separate one-shot forced probe.
+  query_energy_flow: true
+  force_energy_flow_discovery: false
+  energy_flow_query_result:
+    name: ${friendly_name} OEM EnergyFlow Query Result
+    entity_category: diagnostic
+  # The complete discovery sweep runs once; scheduled cycles refresh only the 0x35
+  # outdoor operating page after climate traffic becomes idle. Advertised or
+  # previously confirmed EnergyFlow support is refreshed in the same cycle.
+  repeat_interval: 30s
+  restore_control: true
+
+gree_oem_report_sensors:
+  id: gree_oem_reports
+  climate_id: gree_ac
+  update_interval: 1s
+
+  last_0x33_payload:
+    id: gree_report_0x33
+    name: ${friendly_name} Last 0x33 Combined Report Payload Copy
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x34_payload:
+    id: gree_report_0x34
+    name: ${friendly_name} Last 0x34 Indoor Report Payload
+    entity_category: diagnostic
+  last_0x35_payload:
+    id: gree_report_0x35
+    name: ${friendly_name} Last 0x35 Outdoor Report Payload
+    entity_category: diagnostic
+  last_0x36_payload:
+    name: ${friendly_name} Last 0x36 CO2 Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x3c_payload:
+    name: ${friendly_name} Last 0x3C Smart Sleep Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  last_0x40_payload:
+    name: ${friendly_name} Last 0x40 Extended Energy Payload Copy
+    entity_category: diagnostic
+    disabled_by_default: true
+  last_0x53_payload:
+    name: ${friendly_name} Last 0x53 OEM EnergyFlow Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  energy_flow_capability:
+    name: ${friendly_name} OEM EnergyFlow Capability
+    entity_category: diagnostic
+
+  power_discovery_summary:
+    name: ${friendly_name} OEM Telemetry Discovery Summary
+    entity_category: diagnostic
+
+
+  status_elc_all_kwh_clear:
+    name: ${friendly_name} ElcAllKwhClr Flag
+    entity_category: diagnostic
+    disabled_by_default: true
+  status_elc_erg:
+    name: ${friendly_name} ElcErg Flag
+    entity_category: diagnostic
+  status_elc_gear_raw:
+    name: ${friendly_name} ElcGear Raw
+    entity_category: diagnostic
+  status_elc_1kwh_raw:
+    name: ${friendly_name} Elc1Kwh Raw
+    entity_category: diagnostic
+
+  indoor_report_target_temperature:
+    name: ${friendly_name} Indoor Report Target Temperature
+    entity_category: diagnostic
+  indoor_report_current_temperature:
+    name: ${friendly_name} Indoor Report Current Temperature
+    entity_category: diagnostic
+  indoor_coil_temperature_candidate:
+    name: ${friendly_name} Indoor Evaporator Temperature
+    entity_category: diagnostic
+
+  compressor_frequency:
+    name: ${friendly_name} Compressor Frequency
+    entity_category: diagnostic
+  outdoor_fan_speed_raw:
+    name: ${friendly_name} Outdoor Fan Candidate Raw
+    entity_category: diagnostic
+  expansion_valve_position:
+    name: ${friendly_name} Expansion Valve Position Candidate Raw
+    entity_category: diagnostic
+  expansion_valve_closing:
+    name: ${friendly_name} Expansion Valve Closing Candidate
+    entity_category: diagnostic
+  outdoor_ambient_temperature_candidate:
+    name: ${friendly_name} Outdoor Ambient Temperature
+    entity_category: diagnostic
+  outdoor_coil_temperature_candidate:
+    name: ${friendly_name} Outdoor Coil Temperature
+    entity_category: diagnostic
+  compressor_discharge_temperature_candidate:
+    name: ${friendly_name} Compressor Discharge Temperature
+    entity_category: diagnostic
+  energy_flow_raw:
+    name: ${friendly_name} OEM EnergyFlow Raw (Meaning Unknown)
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  indoor_report_byte_6_raw:
+    name: ${friendly_name} Indoor Report Byte 6 Raw
+    entity_category: diagnostic
+  indoor_report_byte_6_bit_5:
+    name: ${friendly_name} Indoor Report Byte 6 Bit 5
+    entity_category: diagnostic
+
+sensor:
+  # 0x31 payload[44] synchronously matches 0x35 payload[13]. The correct
+  # transform is raw - 40, not the indoor half-degree transform.
+  - platform: template
+    name: ${friendly_name} Status Outdoor Ambient Temperature
+    id: gree_status_outdoor_temperature
+    unit_of_measurement: °C
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      const std::string &s = id(gree_status_0x31).state;
+      size_t start = 0;
+      for (size_t i = 0; i < 44; ++i) {
+        start = s.find('.', start);
+        if (start == std::string::npos) return NAN;
+        ++start;
+      }
+      if (start + 2 > s.size()) return NAN;
+      return static_cast<float>(strtol(s.substr(start, 2).c_str(), nullptr, 16) - 40);
+
+  - platform: uptime
+    name: ${friendly_name} Uptime
+    entity_category: diagnostic
+    update_interval: 60s
+  - platform: wifi_signal
+    name: ${friendly_name} WiFi Signal
+    entity_category: diagnostic
+    update_interval: 60s
+
+binary_sensor:
+  - platform: status
+    name: ${friendly_name} ESP Status
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: version
+    name: ${friendly_name} ESPHome Version
+    entity_category: diagnostic
+  - platform: wifi_info
+    ip_address:
+      name: ${friendly_name} IP Address
+      entity_category: diagnostic
+    ssid:
+      name: ${friendly_name} Connected SSID
+      entity_category: diagnostic
+    bssid:
+      name: ${friendly_name} Connected BSSID
+      entity_category: diagnostic
+    mac_address:
+      name: ${friendly_name} MAC Address
+      entity_category: diagnostic
+
+button:
+  - platform: restart
+    name: ${friendly_name} Restart
+    entity_category: config
+  - platform: safe_mode
+    name: ${friendly_name} Restart in Safe Mode
+    entity_category: config

@@ -1,0 +1,116 @@
+substitutions:
+  device_name: gree-livo-telemetry
+  friendly_name: Gree Livo Telemetry
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+logger:
+  baud_rate: 0
+  level: INFO
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+uart:
+  id: gree_uart
+  tx_pin: GPIO6
+  rx_pin: GPIO4
+  baud_rate: 4800
+  data_bits: 8
+  parity: EVEN
+  stop_bits: 1
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/uncharted9898/esphome_gree_ac
+      ref: research/historical-uart-telemetry
+    refresh: 5min
+    components: [sinclair_ac]
+
+climate:
+  - platform: sinclair_ac
+    name: ${friendly_name}
+    uart_id: gree_uart
+    protocol_mode: control
+    fan_profile: gree_4_speed
+
+    # This records observations only. It does not invent or transmit supplemental
+    # requests. Home Assistant Recorder supplies the long-term storage.
+    telemetry_discovery:
+      enabled: true
+      expose_raw_payload: true
+      expose_raw_bytes: false
+      log_changes_only: true
+      history_depth: 64
+
+    debug:
+      log_rx: false
+      log_tx: false
+      log_unknown_packets: true
+      log_packet_differences: true
+      maximum_hex_length: 256
+
+    diagnostics:
+      communication:
+        name: ${friendly_name} Communication
+      protocol_mode:
+        name: ${friendly_name} Protocol Mode
+      protocol_state:
+        name: ${friendly_name} Protocol State
+      valid_rx_packets:
+        name: ${friendly_name} Valid RX Packets
+      unknown_packets:
+        name: ${friendly_name} Unknown Packets
+      checksum_failures:
+        name: ${friendly_name} Checksum Failures
+      parser_resynchronizations:
+        name: ${friendly_name} Parser Resynchronizations
+      frame_timeouts:
+        name: ${friendly_name} Frame Timeouts
+
+      # Home Assistant records a new state whenever one of these payload strings
+      # changes. The exporter in tools/ converts those historical states into
+      # byte-indexed CSV and per-byte change statistics.
+      last_0x31_payload:
+        name: ${friendly_name} Last 0x31 Payload
+      last_0x33_payload:
+        name: ${friendly_name} Last 0x33 Payload
+      last_0x40_payload:
+        name: ${friendly_name} Last 0x40 Payload
+      last_0x44_payload:
+        name: ${friendly_name} Last 0x44 Payload
+      last_unknown_payload:
+        name: ${friendly_name} Last Unknown Payload
+      discovery_summary:
+        name: ${friendly_name} Discovery Summary
+
+      candidate_telemetry_byte_44_raw:
+        name: ${friendly_name} Candidate Byte 44 Raw
+      candidate_byte_44_temperature_hypothesis:
+        name: ${friendly_name} Candidate Byte 44 Temperature Hypothesis
+
+      fan_speed_field_1_raw:
+        name: ${friendly_name} Fan Field 1 Raw
+      fan_speed_field_2_raw:
+        name: ${friendly_name} Fan Field 2 Raw
+      fan_quiet_raw:
+        name: ${friendly_name} Quiet Raw
+      fan_turbo_raw:
+        name: ${friendly_name} Turbo Raw
+      fan_decode_status:
+        name: ${friendly_name} Fan Decode Status

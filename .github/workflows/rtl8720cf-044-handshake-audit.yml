@@ -1,0 +1,177 @@
+name: rtl8720cf-044-handshake-audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/rtl8720cf-044-handshake-audit.yml
+      - tools/firmware_research/audit_rtl8720cf_handshake.py
+      - tools/firmware_research/rtl8720cf_image.py
+      - tools/firmware_research/setup_rtl8720cf.py
+      - tools/firmware_research/load_rtl8720cf_companion.py
+      - tools/firmware_research/seed_rtl8720cf_functions.py
+      - docs/rtl8720cf-044-handshake.md
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rtl8720cf-044-handshake-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install deterministic analysis dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y unzip
+
+      - name: Download and verify authoritative RTL8720CF images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-research/input firmware-research/results/handshake firmware-research/sections
+          base='https://raw.githubusercontent.com/maxim-smirnov/gree-wifimodule-firmware/main/362001065279'
+          curl --fail --location --retry 5 --retry-all-errors \
+            "$base/U-WB05RT13V1.21-4307516678339185323.bin" \
+            -o firmware-research/input/rtl8720cf-v1.21.bin
+          curl --fail --location --retry 5 --retry-all-errors \
+            "$base/U-WB05RT13V1.53-17090889809932733253.bin" \
+            -o firmware-research/input/rtl8720cf-v1.53.bin
+          python - <<'PY'
+          from hashlib import sha1, sha256
+          from pathlib import Path
+
+          expected = {
+              'rtl8720cf-v1.21.bin': '7c8b864f6d5e621bfc79265ad928f5cc1c8c09a1',
+              'rtl8720cf-v1.53.bin': '0c0f46e3631fdefa0ce23eb27c14cff0ccb47c3a',
+          }
+          rows = []
+          for name, expected_blob in expected.items():
+              path = Path('firmware-research/input') / name
+              data = path.read_bytes()
+              blob = sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              if blob != expected_blob:
+                  raise SystemExit(f'{name}: Git blob {blob} != {expected_blob}')
+              rows.append(
+                  f'{name} bytes={len(data)} git_blob={blob} sha256={sha256(data).hexdigest()}'
+              )
+          Path('firmware-research/results/handshake/input-manifest.txt').write_text(
+              '\n'.join(rows) + '\n'
+          )
+          print('\n'.join(rows))
+          PY
+
+      - name: Parse containers and extract executable images
+        shell: bash
+        run: |
+          set -euo pipefail
+          for version in v1.21 v1.53; do
+            python tools/firmware_research/rtl8720cf_image.py \
+              "firmware-research/input/rtl8720cf-${version}.bin" \
+              --json "firmware-research/results/handshake/${version}-manifest.json" \
+              --extract-dir "firmware-research/sections/${version}"
+          done
+
+      - name: Install fixed official Ghidra release
+        shell: bash
+        run: |
+          set -euo pipefail
+          ghidra_version=11.3.2
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${ghidra_version}_build/ghidra_${ghidra_version}_PUBLIC_20250415.zip" \
+            -o "$RUNNER_TEMP/ghidra.zip"
+          unzip -q "$RUNNER_TEMP/ghidra.zip" -d "$RUNNER_TEMP"
+          find "$RUNNER_TEMP" -maxdepth 3 -type f -path '*/support/analyzeHeadless' \
+            -print -quit > "$RUNNER_TEMP/analyze-headless.txt"
+          test -s "$RUNNER_TEMP/analyze-headless.txt"
+
+      - name: Decompile the V2 and V3 startup handshake state machines
+        shell: bash
+        run: |
+          set -euo pipefail
+          analyze_headless=$(cat "$RUNNER_TEMP/analyze-headless.txt")
+          mkdir -p "$RUNNER_TEMP/ghidra-projects"
+
+          for version in v1.21 v1.53; do
+            xip0=$(find "firmware-research/sections/${version}" -type f \
+              -name '*_xip_0x9B000140.bin' -print -quit)
+            xip1=$(find "firmware-research/sections/${version}" -type f \
+              -name '*_xip_0x9B800140.bin' -print -quit)
+            test -n "$xip0"
+            test -n "$xip1"
+
+            case "$version" in
+              v1.21)
+                roots='0x9b027924,0x9b0278c4,0x9b0274dc,0x9b026db8,0x9b026b38,0x9b025548,0x9b02d5bc,0x9b02d600,0x9b02d62c,0x9b02e020,0x9b02bdc4,0x9b028da0,0x9b02a4c0,0x9b02aa6c'
+                ;;
+              v1.53)
+                roots='0x9b02cdcc,0x9b02cd6c,0x9b02c794,0x9b02bdf8,0x9b02bb78,0x9b02a650,0x9b032aa8,0x9b032aec,0x9b032b18,0x9b0334dc,0x9b0315a4,0x9b029edc,0x9b02e5e0,0x9b02fce4,0x9b0302b4'
+                ;;
+            esac
+
+            report="$GITHUB_WORKSPACE/firmware-research/results/handshake/${version}-044-handshake.txt"
+            console="$GITHUB_WORKSPACE/firmware-research/results/handshake/${version}-console.txt"
+
+            "$analyze_headless" "$RUNNER_TEMP/ghidra-projects" \
+              "rtl8720cf-${version}-044-handshake" \
+              -import "$xip0" \
+              -overwrite \
+              -loader BinaryLoader \
+              -processor 'ARM:LE:32:Cortex' \
+              -loader-baseAddr 0x9B000140 \
+              -scriptPath tools/firmware_research \
+              -preScript setup_rtl8720cf.py 0x9B000140 0x9B000150 \
+              -preScript load_rtl8720cf_companion.py "$xip1" 0x9B800140 rtl8720cf_xip1 true \
+              -preScript seed_rtl8720cf_functions.py 0x9B000140 \
+              -preScript seed_rtl8720cf_functions.py 0x9B800140 \
+              -analysisTimeoutPerFile 3600 \
+              -postScript audit_rtl8720cf_handshake.py "$report" "$version" "$roots" 1 \
+              > "$console" 2>&1
+
+            if grep -Eq 'Traceback \(most recent call last\):|SCRIPT ERROR|RuntimeError:' "$console"; then
+              cat "$console"
+              exit 1
+            fi
+            test -s "$report"
+            grep -q '^=== DECOMPILED FUNCTIONS ===$' "$report"
+          done
+
+      - name: Index targeted evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          find firmware-research/results/handshake -type f -printf '%p %s bytes\n' \
+            | sort | tee firmware-research/results/handshake/artifact-index.txt
+          for report in firmware-research/results/handshake/*-044-handshake.txt; do
+            test -f "$report" || continue
+            printf '\n===== %s =====\n' "$report" \
+              >> firmware-research/results/handshake/section-index.txt
+            grep '^=== ' "$report" \
+              >> firmware-research/results/handshake/section-index.txt || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rtl8720cf-044-handshake-audit
+          path: firmware-research/results/handshake
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
