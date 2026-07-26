@@ -1,9 +1,9 @@
 name: apply-recovered-rtl-telemetry
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/export-post-rtl044-source
+      - codex/add-compatibility-and-protocol-discovery-mode
     paths:
       - .github/workflows/tmp-export-post-rtl044-source.yml
   workflow_dispatch:
