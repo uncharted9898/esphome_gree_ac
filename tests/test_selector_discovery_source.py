@@ -22,6 +22,17 @@ class SelectorDiscoverySourceTest(unittest.TestCase):
         self.assertIn('CONF_OPERATING_PROFILE = "operating_profile"', config)
         self.assertIn("operating_profile_cycles", config)
 
+    def test_scheduled_operating_cycle_refreshes_indoor_and_outdoor_reports(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        header = (root / "components/gree_oem_boot_probe/gree_oem_boot_probe.h").read_text()
+        self.assertIn("QueryCycle::OPERATING_TELEMETRY", header)
+        self.assertIn(
+            "? Phase::QUERY_INDOOR\n                           : Phase::QUERY_COMBINED",
+            header,
+        )
+        self.assertIn('"indoor report selector -> 0x34"', header)
+        self.assertIn('"outdoor operating report selector -> 0x35"', header)
+
     def test_rtl_startup_uses_full_command_03_envelope(self):
         root = pathlib.Path(__file__).resolve().parents[1]
         header = (root / "components/gree_oem_boot_probe/gree_oem_boot_probe.h").read_text()
