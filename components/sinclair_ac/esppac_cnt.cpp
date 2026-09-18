@@ -566,8 +566,14 @@ void SinclairACCNT::send_packet()
     this->verify_packet_changes(packet, update);
     if (update == ACUpdate::NoUpdate) this->verify_no_change_packet(packet);
     else {
-        ESP_LOGD(TAG, "Command build: fields=0x%03X envelope=%s", this->active_control_.requested_fields, update == ACUpdate::UpdateStart ? "apply" : "clear");
-        for (size_t i = 0; i < packet.size() && i < this->last_report_payload_.size(); ++i) if (packet[i] != this->last_report_payload_[i]) ESP_LOGD(TAG, "TX build changed payload[%u]: 0x%02X -> 0x%02X", static_cast<unsigned>(i), this->last_report_payload_[i], packet[i]);
+        ESP_LOGD(TAG, "Command build: fields=0x%03X envelope=%s", this->active_control_.requested_fields,
+                 update == ACUpdate::UpdateStart ? "apply" : "clear");
+        for (size_t i = 0; i < packet.size() && i < this->last_report_payload_.size(); ++i) {
+            if (packet[i] != this->last_report_payload_[i]) {
+                ESP_LOGD(TAG, "TX build changed payload[%u]: 0x%02X -> 0x%02X",
+                         static_cast<unsigned>(i), this->last_report_payload_[i], packet[i]);
+            }
+        }
     }
 
     packet.insert(packet.begin(), protocol::CMD_OUT_PARAMS_SET);
