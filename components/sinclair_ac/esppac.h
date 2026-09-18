@@ -1,12 +1,20 @@
 // based on: https://github.com/DomiStyle/esphome-panasonic-ac
 #pragma once
 
+#include <algorithm>
+#include <map>
+#include <vector>
+
 #include "esphome/components/climate/climate.h"
 #include "esphome/components/select/select.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
+#include "telemetry_discovery.h"
+#include "temperature_stabilizer.h"
 
 namespace esphome {
 
@@ -14,7 +22,9 @@ namespace sinclair_ac {
 
 static const char *const VERSION = "0.0.1";
 
-static const uint8_t READ_TIMEOUT = 20;  // The maximum time to wait before considering a packet complete
+static const uint32_t UART_BAUD = 4800;
+static const uint8_t UART_BITS_PER_CHARACTER = 11;  // 8E1
+static const uint32_t FRAME_TIMEOUT_MARGIN_MS = 150;
 
 static const uint8_t MIN_TEMPERATURE = 16;   // Minimum temperature as reported by EWPE SMART APP
 static const uint8_t MAX_TEMPERATURE = 30;   // Maximum temperature as supported by EWPE SMART APP
@@ -86,10 +96,14 @@ static const uint8_t DATA_MAX = 200;
 
 typedef struct {
         std::vector<uint8_t> data;
-        uint8_t data_cnt;
-        uint8_t frame_size;
-        SerialProcessState_t state;
+        uint16_t frame_size{0};
+        uint32_t started_at{0};
+        SerialProcessState_t state{STATE_WAIT_SYNC};
 } SerialProcess_t;
+
+enum class ProtocolMode : uint8_t { RECEIVE_ONLY, POLL_ONLY, CONTROL };
+enum class FanProfile : uint8_t { AUTO, SINCLAIR_EXTENDED, GREE_4_SPEED };
+enum class TemperatureStabilizationMode : uint8_t { OFF, AUTO, ON };
 
 class SinclairAC : public Component, public uart::UARTDevice, public climate::Climate {
     public:
@@ -105,6 +119,74 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void set_save_switch(switch_::Switch *plasma_switch);
 
         void set_current_temperature_sensor(sensor::Sensor *current_temperature_sensor);
+        void set_protocol_mode(ProtocolMode mode) { this->protocol_mode_ = mode; }
+        ProtocolMode get_protocol_mode() const { return this->protocol_mode_; }
+        virtual bool supplemental_query_may_start() const { return true; }
+        void set_fan_profile(FanProfile profile) { this->fan_profile_ = profile; }
+        void set_temperature_stabilization(TemperatureStabilizationMode mode,
+                                           uint32_t settle_time_ms,
+                                           float immediate_delta_c) {
+            this->temperature_stabilization_mode_ = mode;
+            this->temperature_stabilization_settle_time_ms_ = settle_time_ms;
+            this->temperature_stabilization_immediate_delta_c_ = immediate_delta_c;
+            this->current_temperature_stabilizer_.reset();
+        }
+        bool temperature_stabilization_active() const {
+            return this->temperature_stabilization_mode_ == TemperatureStabilizationMode::ON ||
+                   (this->temperature_stabilization_mode_ == TemperatureStabilizationMode::AUTO &&
+                    this->temperature_stabilization_auto_enabled());
+        }
+        uint32_t temperature_stabilization_settle_time_ms() const { return this->temperature_stabilization_settle_time_ms_; }
+        float temperature_stabilization_immediate_delta_c() const { return this->temperature_stabilization_immediate_delta_c_; }
+        void set_telemetry_discovery(bool enabled, bool expose_raw_payload, bool expose_raw_bytes, bool log_changes_only, uint8_t history_depth);
+        void set_supplemental_queries(bool enabled, uint8_t max_attempts) { this->supplemental_query_gate_.configure(enabled, max_attempts); }
+        void set_debug(bool log_rx, bool log_tx, bool log_unknown, bool log_differences, uint16_t maximum_hex_length);
+        void set_valid_rx_packets_sensor(sensor::Sensor *sensor) { this->valid_rx_packets_sensor_ = sensor; }
+        void set_valid_tx_packets_sensor(sensor::Sensor *sensor) { this->valid_tx_packets_sensor_ = sensor; }
+        void set_unknown_packets_sensor(sensor::Sensor *sensor) { this->unknown_packets_sensor_ = sensor; }
+        void set_checksum_failures_sensor(sensor::Sensor *sensor) { this->checksum_failures_sensor_ = sensor; }
+        void set_invalid_length_sensor(sensor::Sensor *sensor) { this->invalid_length_sensor_ = sensor; }
+        void set_too_short_sensor(sensor::Sensor *sensor) { this->too_short_sensor_ = sensor; }
+        void set_frame_timeout_sensor(sensor::Sensor *sensor) { this->frame_timeout_sensor_ = sensor; }
+        void set_parser_resync_sensor(sensor::Sensor *sensor) { this->parser_resync_sensor_ = sensor; }
+        void set_last_packet_length_sensor(sensor::Sensor *sensor) { this->last_packet_length_sensor_ = sensor; }
+        void set_last_packet_type_sensor(sensor::Sensor *sensor) { this->last_packet_type_sensor_ = sensor; }
+        void set_communication_sensor(binary_sensor::BinarySensor *sensor) { this->communication_sensor_ = sensor; }
+        void set_receive_only_sensor(binary_sensor::BinarySensor *sensor) { this->receive_only_sensor_ = sensor; }
+        void set_poll_only_sensor(binary_sensor::BinarySensor *sensor) { this->poll_only_sensor_ = sensor; }
+        void set_protocol_mode_sensor(text_sensor::TextSensor *sensor) { this->protocol_mode_sensor_ = sensor; }
+        void set_protocol_state_sensor(text_sensor::TextSensor *sensor) { this->protocol_state_sensor_ = sensor; }
+        void set_last_packet_sensor(text_sensor::TextSensor *sensor) { this->last_packet_sensor_ = sensor; }
+        void set_last_unknown_packet_sensor(text_sensor::TextSensor *sensor) { this->last_unknown_packet_sensor_ = sensor; }
+        void set_fan_speed_field_1_raw_sensor(sensor::Sensor *sensor) { this->fan_speed_field_1_raw_sensor_ = sensor; }
+        void set_fan_speed_field_1_low_3_bits_sensor(sensor::Sensor *sensor) { this->fan_speed_field_1_low_3_bits_sensor_ = sensor; }
+        void set_fan_speed_field_2_raw_sensor(sensor::Sensor *sensor) { this->fan_speed_field_2_raw_sensor_ = sensor; }
+        void set_fan_quiet_raw_sensor(sensor::Sensor *sensor) { this->fan_quiet_raw_sensor_ = sensor; }
+        void set_fan_turbo_raw_sensor(sensor::Sensor *sensor) { this->fan_turbo_raw_sensor_ = sensor; }
+        void set_fan_decode_status_sensor(text_sensor::TextSensor *sensor) { this->fan_decode_status_sensor_ = sensor; }
+        void set_fan_decode_profile_sensor(text_sensor::TextSensor *sensor) { this->fan_decode_profile_sensor_ = sensor; }
+        void set_last_0x31_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x31_payload_sensor_ = sensor; }
+        void set_last_0x33_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x33_payload_sensor_ = sensor; }
+        void set_last_0x44_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x44_payload_sensor_ = sensor; }
+        void set_last_0x40_payload_sensor(text_sensor::TextSensor *sensor) { this->last_0x40_payload_sensor_ = sensor; }
+        void set_last_unknown_payload_sensor(text_sensor::TextSensor *sensor) { this->last_unknown_payload_sensor_ = sensor; }
+        void set_candidate_telemetry_byte_44_raw_sensor(sensor::Sensor *sensor) { this->candidate_telemetry_byte_44_raw_sensor_ = sensor; }
+        void set_candidate_byte_44_temperature_hypothesis_sensor(sensor::Sensor *sensor) { this->candidate_byte_44_temperature_hypothesis_sensor_ = sensor; }
+        void set_discovery_summary_sensor(text_sensor::TextSensor *sensor) { this->discovery_summary_sensor_ = sensor; }
+        void set_capture_export_sensor(text_sensor::TextSensor *sensor) { this->capture_export_sensor_ = sensor; }
+
+        const std::vector<uint8_t> *get_retained_payload(uint8_t command) const {
+            const auto it = this->last_payloads_.find(command);
+            return it == this->last_payloads_.end() ? nullptr : &it->second;
+        }
+        uint32_t get_retained_payload_generation(uint8_t command) const {
+            const auto it = this->payload_generations_.find(command);
+            return it == this->payload_generations_.end() ? 0 : it->second;
+        }
+        uint32_t get_retained_payload_total_generation() const {
+            return this->payload_total_generation_;
+        }
+        uint8_t get_last_retained_command() const { return this->last_retained_command_; }
 
         void setup() override;
         void loop() override;
@@ -129,24 +211,79 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         std::string display_state_;
         std::string display_unit_state_;
 
-        bool plasma_state_;
-        bool sleep_state_;
-        bool xfan_state_;
-        bool save_state_;
+        bool plasma_state_{false}; bool sleep_state_{false}; bool xfan_state_{false}; bool save_state_{false};
+        bool has_plasma_state_{false}; bool has_sleep_state_{false}; bool has_xfan_state_{false}; bool has_save_state_{false};
 
         SerialProcess_t serialProcess_;
 
-        uint32_t init_time_;   // Stores the current time
+        uint32_t init_time_{0};   // Stores the current time
         // uint32_t last_read_;   // Stores the time at which the last read was done
-        uint32_t last_packet_sent_;  // Stores the time at which the last packet was sent
-        uint32_t last_packet_received_;  // Stores the time at which the last packet was received
-        bool wait_response_;
+        uint32_t last_packet_sent_{0};
+        uint32_t last_packet_received_{0};
+        std::string protocol_state_;
+        bool wait_response_{false};
+        ProtocolMode protocol_mode_{ProtocolMode::CONTROL};
+        FanProfile fan_profile_{FanProfile::AUTO};
+        TemperatureStabilizationMode temperature_stabilization_mode_{TemperatureStabilizationMode::AUTO};
+        uint32_t temperature_stabilization_settle_time_ms_{8000};
+        float temperature_stabilization_immediate_delta_c_{2.0f};
+        TemperatureStabilizer current_temperature_stabilizer_;
+        bool telemetry_discovery_enabled_{false}, telemetry_expose_raw_payload_{true}, telemetry_expose_raw_bytes_{false}, telemetry_log_changes_only_{true};
+        uint8_t telemetry_history_depth_{16};
+        bool transmit_warning_logged_{false};
+        bool log_rx_{false}, log_tx_{false}, log_unknown_{false}, log_differences_{false};
+        uint16_t maximum_hex_length_{128};
+        uint32_t valid_rx_packets_{0}, valid_tx_packets_{0}, unknown_packets_{0}, checksum_failures_{0}, invalid_lengths_{0}, too_short_frames_{0}, parser_resyncs_{0}, frame_timeouts_{0};
+        uint32_t last_diagnostics_publish_{0};
+        uint32_t last_packet_diagnostics_publish_{0};
+        sensor::Sensor *valid_rx_packets_sensor_{nullptr}, *valid_tx_packets_sensor_{nullptr}, *unknown_packets_sensor_{nullptr}, *checksum_failures_sensor_{nullptr}, *invalid_length_sensor_{nullptr}, *too_short_sensor_{nullptr}, *parser_resync_sensor_{nullptr}, *frame_timeout_sensor_{nullptr}, *last_packet_length_sensor_{nullptr}, *last_packet_type_sensor_{nullptr}, *candidate_telemetry_byte_44_raw_sensor_{nullptr}, *candidate_byte_44_temperature_hypothesis_sensor_{nullptr};
+        sensor::Sensor *fan_speed_field_1_raw_sensor_{nullptr}, *fan_speed_field_1_low_3_bits_sensor_{nullptr}, *fan_speed_field_2_raw_sensor_{nullptr}, *fan_quiet_raw_sensor_{nullptr}, *fan_turbo_raw_sensor_{nullptr};
+        binary_sensor::BinarySensor *communication_sensor_{nullptr}, *receive_only_sensor_{nullptr}, *poll_only_sensor_{nullptr};
+        text_sensor::TextSensor *protocol_mode_sensor_{nullptr}, *protocol_state_sensor_{nullptr}, *last_packet_sensor_{nullptr}, *last_unknown_packet_sensor_{nullptr}, *fan_decode_status_sensor_{nullptr}, *fan_decode_profile_sensor_{nullptr};
+        text_sensor::TextSensor *last_0x31_payload_sensor_{nullptr}, *last_0x33_payload_sensor_{nullptr}, *last_0x44_payload_sensor_{nullptr}, *last_0x40_payload_sensor_{nullptr}, *last_unknown_payload_sensor_{nullptr}, *discovery_summary_sensor_{nullptr}, *capture_export_sensor_{nullptr};
+        TelemetryDiscovery telemetry_capture_{16};
+        SupplementalQueryGate supplemental_query_gate_;
+        uint32_t last_discovery_summary_publish_{0};
+        bool discovery_capture_dirty_{false};
+        bool has_published_discovery_capture_{false};
+        std::string published_discovery_summary_, published_capture_export_;
+        std::map<uint8_t, std::vector<uint8_t>> last_payloads_;
+        std::map<uint8_t, uint32_t> payload_generations_;
+        uint32_t payload_total_generation_{0};
+        uint8_t last_retained_command_{0};
+        std::map<uint8_t, std::vector<uint8_t>> previous_frames_;
+        bool has_last_packet_diagnostics_{false};
+        uint32_t last_packet_length_{0}, last_packet_type_{0};
+        std::string last_packet_description_, last_unknown_packet_description_;
+        bool has_fan_diagnostics_{false};
+        uint8_t fan_speed_field_1_raw_{0}, fan_speed_field_1_low_3_bits_{0}, fan_speed_field_2_raw_{0}, fan_quiet_raw_{0}, fan_turbo_raw_{0};
+        std::string fan_decode_status_;
 
         climate::ClimateTraits traits() override;
 
         void read_data();
+        void reset_parser(bool resynchronized = false);
+        uint32_t frame_timeout_ms() const;
+        bool is_receive_only() const { return this->protocol_mode_ == ProtocolMode::RECEIVE_ONLY; }
+        bool is_poll_only() const { return this->protocol_mode_ == ProtocolMode::POLL_ONLY; }
+        bool can_control() const { return this->protocol_mode_ == ProtocolMode::CONTROL; }
+        virtual bool temperature_stabilization_auto_enabled() const { return false; }
+        const char *protocol_mode_name() const;
+        void record_received_packet(bool known, bool establishes_health);
+        void record_transmitted_packet(const std::vector<uint8_t> &packet);
+        void publish_diagnostics(bool force = false);
+        void record_last_packet_diagnostics(uint32_t length, uint32_t type, const std::string &description, const std::string *unknown_description = nullptr);
+        void publish_last_packet_diagnostics(bool force = false);
+        void record_fan_diagnostics(uint8_t speed_field_1_raw, uint8_t speed_field_1_low_3_bits, uint8_t speed_field_2_raw, bool quiet, bool turbo, const char *decode_status);
+        void publish_protocol_state(const char *state);
+        void log_packet_difference(const std::vector<uint8_t> &packet);
+        const char *fan_profile_name() const;
+        void retain_payload(uint8_t command, const std::vector<uint8_t> &payload);
+        void capture_packet(bool transmitted, uint8_t command, const std::vector<uint8_t> &payload);
+        void publish_discovery_capture();
 
         void update_current_temperature(float temperature);
+        bool update_current_temperature_from_report(float temperature);
         void update_target_temperature(float temperature);
 
         void update_swing_horizontal(const std::string &swing);
@@ -173,7 +310,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
 
         climate::ClimateAction determine_action();
 
-        void log_packet(std::vector<uint8_t> data, bool outgoing = false);
+        void log_packet(const std::vector<uint8_t> &data, bool outgoing = false);
 };
 
 }  // namespace sinclair_ac

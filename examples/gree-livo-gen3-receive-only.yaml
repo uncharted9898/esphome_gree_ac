@@ -1,0 +1,27 @@
+esphome:
+  name: gree-livo-receive-only
+esp32:
+  board: esp32-c3-devkitm-1
+  framework: {type: arduino}
+logger: {baud_rate: 0}
+uart:
+  rx_pin: GPIO20
+  baud_rate: 4800
+  data_bits: 8
+  parity: EVEN
+  stop_bits: 1
+external_components:
+  - source: {type: local, path: ../components}
+    components: [sinclair_ac]
+climate:
+  - platform: sinclair_ac
+    name: Gree Livo receive only
+    protocol_mode: receive_only
+    diagnostics:
+      communication: {name: Gree communication}
+      receive_only: {name: Gree receive-only active}
+      protocol_mode: {name: Gree protocol mode}
+      valid_rx_packets: {name: Gree valid RX frames}
+wifi: {ssid: !secret wifi_ssid, password: !secret wifi_password}
+api: {}
+ota: {platform: esphome, password: !secret ota_password}

@@ -29,7 +29,9 @@ time:
   - platform: sntp
 
 external_components:
-  - source: github://piotrva/esphome_gree_ac
+  - source:
+      type: local
+      path: ../components
     components: [sinclair_ac]
     refresh: 0s
 

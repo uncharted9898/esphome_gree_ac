@@ -1,0 +1,71 @@
+name: fetch-rtl8720cf-firmware
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - codex/add-compatibility-and-protocol-discovery-mode
+    paths:
+      - .github/workflows/fetch-rtl8720cf-firmware.yml
+  push:
+    branches:
+      - agent/correct-gree-telemetry-direct
+    paths:
+      - .github/workflows/fetch-rtl8720cf-firmware.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify archived firmware images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-inputs
+
+          v121='U-WB05RT13V1.21-4307516678339185323.bin'
+          v153='U-WB05RT13V1.53-17090889809932733253.bin'
+          base='https://raw.githubusercontent.com/maxim-smirnov/gree-wifimodule-firmware/main/362001065279'
+
+          curl --fail --location --silent --show-error \
+            --retry 5 --retry-all-errors \
+            "$base/$v121" -o "firmware-inputs/$v121"
+          curl --fail --location --silent --show-error \
+            --retry 5 --retry-all-errors \
+            "$base/$v153" -o "firmware-inputs/$v153"
+
+          test "$(git hash-object "firmware-inputs/$v121")" = \
+            '7c8b864f6d5e621bfc79265ad928f5cc1c8c09a1'
+          test "$(git hash-object "firmware-inputs/$v153")" = \
+            '0c0f46e3631fdefa0ce23eb27c14cff0ccb47c3a'
+
+          {
+            echo '# RTL8720CF firmware acquisition manifest'
+            echo
+            printf 'source_repository=%s\n' \
+              'https://github.com/maxim-smirnov/gree-wifimodule-firmware'
+            printf 'source_directory=%s\n' '362001065279'
+            echo
+            wc -c firmware-inputs/*.bin
+            echo
+            sha256sum firmware-inputs/*.bin
+            echo
+            git hash-object firmware-inputs/*.bin
+            echo
+            file firmware-inputs/*.bin
+          } | tee firmware-inputs/MANIFEST.txt
+
+      - name: Upload verified firmware inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtl8720cf-firmware-inputs
+          path: firmware-inputs
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

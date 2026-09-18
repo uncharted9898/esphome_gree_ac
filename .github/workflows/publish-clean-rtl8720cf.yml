@@ -1,0 +1,214 @@
+name: publish-clean-rtl8720cf
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - codex/add-compatibility-and-protocol-discovery-mode
+    paths:
+      - .github/workflows/publish-clean-rtl8720cf.yml
+      - .github/clean-publish/**
+  push:
+    branches:
+      - agent/rtl8720cf-telemetry-publisher
+    paths:
+      - .github/workflows/publish-clean-rtl8720cf.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-clean-rtl8720cf
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      BASE_SHA: 664c71d87e4fd3931c2c19aebe43bc124f218c59
+      TARGET_BRANCH: agent/rtl8720cf-operating-telemetry
+      ARCHIVE_SHA256: 6f4a451768f84936b56700fee7bde0bbeb95206e63ed911bc18d58bcbd84c6a2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rtl8720cf-telemetry-publisher
+          fetch-depth: 0
+
+      - name: Reconstruct and verify reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$RUNNER_TEMP/rtl8720cf-latest-implementation.tar.gz"
+          cat .github/clean-publish/latest-part-* | base64 --decode > "$payload"
+          echo "$ARCHIVE_SHA256  $payload" | sha256sum --check --strict
+          test "$(wc -c < "$payload")" -eq 82612
+
+          python - "$payload" <<'PY'
+          import pathlib
+          import sys
+          import tarfile
+
+          archive = pathlib.Path(sys.argv[1])
+          with tarfile.open(archive, "r:gz") as bundle:
+              for member in bundle.getmembers():
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(f"unsafe archive path: {member.name}")
+          PY
+
+      - name: Create clean source tree from reviewed base
+        shell: bash
+        run: |
+          set -euo pipefail
+          clean="$RUNNER_TEMP/clean-source"
+          git worktree add --detach "$clean" "$BASE_SHA"
+          tar -xzf "$RUNNER_TEMP/rtl8720cf-latest-implementation.tar.gz" -C "$clean"
+
+          cd "$clean"
+          git diff --check
+          test ! -e .github/clean-publish
+          test ! -e .github/agent-transfer
+          test ! -e .github/workflows/export-current-source.yml
+          test ! -e .github/workflows/fetch-rtl8720cf-firmware.yml
+          test ! -e .github/workflows/publish-clean-rtl8720cf.yml
+          test ! -e .github/workflows/publish-rtl8720cf-telemetry.yml
+          test -z "$(find . -type d -name __pycache__ -print -quit)"
+          test -z "$(find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit)"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run native protocol and firmware-analysis tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          export PYTHONDONTWRITEBYTECODE=1
+
+          python -m py_compile \
+            components/sinclair_ac/climate.py \
+            components/gree_oem_boot_probe/__init__.py \
+            components/gree_oem_report_sensors/__init__.py \
+            tools/firmware_research/rtl8720cf_image.py \
+            tools/firmware_research/analyze_rtl8720cf.py \
+            tools/firmware_research/rtl8720cf_properties.py \
+            tools/firmware_research/setup_rtl8720cf.py \
+            tools/firmware_research/load_rtl8720cf_companion.py \
+            tools/firmware_research/seed_rtl8720cf_functions.py \
+            tools/gree_oem_frame_generator.py
+
+          python -m unittest \
+            tests/test_rtl8720cf_image.py \
+            tests/test_gree_oem_frame_generator.py
+
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            tests/test_protocol_frame.cpp -o "$RUNNER_TEMP/test_protocol_frame"
+          "$RUNNER_TEMP/test_protocol_frame"
+
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            tests/test_oem_report_decoder.cpp -o "$RUNNER_TEMP/test_oem_report_decoder"
+          "$RUNNER_TEMP/test_oem_report_decoder"
+
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            tests/test_rtl_report_query.cpp -o "$RUNNER_TEMP/test_rtl_report_query"
+          "$RUNNER_TEMP/test_rtl_report_query"
+
+          git diff --check
+          test -z "$(find . -type d -name __pycache__ -print -quit)"
+          test -z "$(find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit)"
+
+      - name: Create and push clean implementation commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          git config user.name openai-agent
+          git config user.email openai-agent@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'Recover RTL8720CF operating telemetry'
+
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" -eq 1
+          test -z "$(git ls-tree -r --name-only HEAD | grep -E '^\.github/(clean-publish|agent-transfer)/|^\.github/workflows/(export-current-source|fetch-rtl8720cf-firmware|publish-clean-rtl8720cf|publish-rtl8720cf-telemetry)\.yml$' || true)"
+
+          git push --force origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/final-sha"
+
+      - name: Install ESPHome 2026.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install esphome==2026.7.1
+          esphome --version
+
+      - name: Create validation-only secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          cat > examples/secrets.yaml <<'SECRETS'
+          wifi_ssid: validation-network
+          wifi_password: validation-password
+          ota_password: validation-ota-password
+          api_encryption_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          gree_livo_api_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          gree_livo_web_username: validation
+          gree_livo_web_password: validation-password
+          SECRETS
+          sed -i 's/^          //' examples/secrets.yaml
+
+      - name: Run repository validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          export PYTHONDONTWRITEBYTECODE=1
+          KEEP_VALIDATION_YAML=1 ./scripts_validate.sh
+
+      - name: Compile standard hardware examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          for example in \
+            examples/gree-livo-gen3-receive-only.yaml \
+            examples/gree-livo-gen3-poll-only.yaml \
+            examples/gree-livo-gen3-control.yaml; do
+            esphome compile "$example"
+          done
+
+      - name: Compile RTL8720CF telemetry examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          for example in examples/.validation-*.yaml; do
+            esphome compile "$example"
+          done
+
+      - name: Clean generated validation files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/clean-source"
+          rm -f examples/secrets.yaml examples/.validation-*.yaml
+          rm -rf .esphome examples/.esphome
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          git clean -fdX
+          git diff --check
+
+      - name: Report published revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Published $TARGET_BRANCH at $(cat "$RUNNER_TEMP/final-sha")"

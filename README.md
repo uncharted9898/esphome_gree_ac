@@ -44,3 +44,170 @@ On some stock WiFi PCBs AC unit connector pins are marked on silkscreen.
 **TODO**
 * Support Timers - maybe unnecessray as timers can be managed by Home Assistant
 * Support Time sync - maybe unnecessray as timers can be managed by Home Assistant
+
+## Receive-only compatibility and protocol discovery
+
+The `sinclair_ac` component can safely observe candidate Gree Livo Gen3 and Gen4
+units before it controls them. Set `transmit_enabled: false`; this is a software
+TX lock and no UART write path (including polling or state packets) is used. Keep
+the physical TX wire disconnected during initial work as an additional safeguard.
+See [`examples/gree-livo-gen3-debug.yaml`](examples/gree-livo-gen3-debug.yaml).
+
+Known `0x31` reports decode the existing Sinclair-compatible common prefix. Valid
+frames with other command bytes are retained, counted, and optionally logged; they
+never update climate state or cause a response. Additional bytes in a longer report
+remain visible in raw packet logs, but are not assigned inferred meanings.
+
+Before connecting any revision, verify connector orientation and logic/power
+voltages. In particular, **never connect USB 5 V and HVAC 5 V simultaneously**.
+After observing stable traffic and verifying pinout/voltage, explicitly enable TX
+and reconnect it only when ready for controlled testing.
+
+Useful captures include startup, power on/off, every operating and fan mode, each
+vane position, display changes, sleep, X-Fan, save/8 °C heat, IR remote changes,
+and fault states. Submit the labelled packet logs or serial captures with all Wi-Fi
+credentials, API keys, MAC addresses, and location details removed. Climate action
+is inferred from selected mode and room/target temperatures; it is not a compressor
+running indication.
+
+## Connector safety and staged compatibility process
+
+This component is for the **blue Gree `WIFI` connector only**: it is a TTL UART (normally 4800 baud, 8E1) used by the factory Wi-Fi module. The red **`COM-MANUAL` connector is a separate RS-485 wired-controller bus**. The ports share neither electrical signaling nor packet format; do not connect this component to COM-MANUAL or treat it as compatible.
+
+Use the following staged process on a live unit:
+
+1. Meter and confirm connector orientation.
+2. Confirm ground, supply, indoor RX, and indoor TX.
+3. Confirm indoor-TX voltage and fit the required divider before connecting ESP RX.
+4. Start with `protocol_mode: receive_only` and the physical TX wire disconnected.
+5. Move to `poll_only` only after voltage verification.
+6. Confirm repeated valid reports and stable checksums.
+7. Move to `control` only after poll-only validation.
+8. Power down before changing any wiring.
+9. Never connect USB 5 V and HVAC 5 V simultaneously unless a verified power-selection circuit is present.
+
+`receive_only` never calls a UART write method and ignores every Home Assistant control request. `poll_only` sends only the established no-change poll (never the `0xAF` apply marker) and ignores Home Assistant controls. `control` is the backward-compatible default. The old `transmit_enabled` option is deprecated (`false` maps to receive-only and `true` to control); it cannot be combined with `protocol_mode`.
+
+### Mode and diagnostics configuration
+
+`protocol_mode` belongs directly under the `platform: sinclair_ac` climate entry.
+The diagnostic entities belong one level below its `diagnostics:` key. For example:
+
+```yaml
+climate:
+  - platform: sinclair_ac
+    name: Bedroom AC
+    protocol_mode: receive_only
+    diagnostics:
+      communication:
+        name: Bedroom AC communication
+      receive_only:
+        name: Bedroom AC receive-only active
+      poll_only:
+        name: Bedroom AC poll-only active
+      protocol_mode:
+        name: Bedroom AC protocol mode
+      too_short_frames:
+        name: Bedroom AC too-short frames
+      frame_timeouts:
+        name: Bedroom AC frame timeouts
+      fan_speed_field_1_raw:
+        name: Bedroom AC fan speed field 1 raw
+      fan_speed_field_1_low_3_bits:
+        name: Bedroom AC fan speed field 1 low 3 bits
+      fan_speed_field_2_raw:
+        name: Bedroom AC fan speed field 2 raw
+      fan_quiet_raw:
+        name: Bedroom AC fan quiet raw
+      fan_turbo_raw:
+        name: Bedroom AC fan turbo raw
+      fan_decode_status:
+        name: Bedroom AC fan decode status
+```
+
+If ESPHome reports any of these keys as invalid (especially suggesting
+`protocol_state` for `diagnostics.protocol_mode`), it has loaded a pre-mode
+revision of this external component. Update the external-component source to a
+revision containing the mode support, or remove the cached external component
+and run validation again. Do not move the keys to a different indentation level:
+the layout above is the supported schema.
+
+For Livo fan-field discovery, leave `protocol_mode: poll_only` enabled and use the
+IR remote to change only the fan setting. Enable `debug.log_packet_differences`
+to identify changes at payload bytes 18, 4, 16, and 6. The fan diagnostics retain
+the raw byte 18 value, its low three bits, byte 4, quiet/turbo flags, and whether
+the current decoder recognizes the combination. The component deliberately keeps
+the established four-bit fan-speed mask until labelled captures demonstrate that
+bit `0x08` has a different meaning on all affected units.
+
+For local development the examples use `type: local` sources. Real installations should pin the revision being tested, for example `source: github://OWNER/esphome_gree_ac@BRANCH_OR_TAG`, rather than demonstrating an unpinned upstream `main`. When using a Git source while iterating on a branch, set a short `refresh` interval or clear ESPHome's external-component cache so that the schema and C++ implementation are updated together.
+
+## Protocol capture guide
+
+Label captures with startup, power, mode, setpoint, fan, horizontal and vertical vane positions, display, sleep, X-Fan, save/8 °C heat, IR-remote changes, and faults. Capture repeated transitions and retain raw frames. Climate action remains inferred from selected mode and temperatures; it is **not** compressor-run telemetry. Do not assign meanings to unknown bytes without repeatable evidence. COM-MANUAL remains a separate RS-485 research project.
+
+## Livo fan profile, telemetry discovery, and local API
+
+For a Livo four-speed unit, set `fan_profile: gree_4_speed`. It decodes the low
+four bits of report payload byte 4 as its packed fan field: Auto, Low, Medium,
+and High currently use values 0 through 3. Byte 18 is retained only as a
+diagnostic field because it is not a fan-speed field on this profile. The same
+byte's mode field is independently decoded by the existing common mode decoder.
+`fan_profile: auto` and `sinclair_extended` use the legacy dual-field
+seven-speed mapping; select `gree_4_speed` explicitly for a confirmed Livo
+profile.
+Quiet and Turbo remain independent overlay flags.
+
+Set `telemetry_discovery.enabled: true` to retain the most recent valid payload
+for commands `0x31`, `0x33`, `0x44`, `0x40`, and other valid unknown commands.
+The optional text diagnostics expose raw payloads without assigning physical
+meanings to unverified bytes. Changes only at `0x31` payload byte 42 are
+suppressed from discovery updates because that byte is the known indoor
+temperature telemetry. GREE four-speed units decode it as `raw - 40`; legacy
+Sinclair layouts retain their half-degree decode. The core discovery recorder
+is deliberately observational: it does not create guessed pressure or
+electrical entities. The optional OEM report component adds only fields
+recovered from the audited RTL8720CF report parsers.
+Capture repeated labelled transitions before adding a decoded sensor.
+
+### Read-only telemetry capture
+
+`telemetry_discovery` records command and per-byte observations without naming
+unverified fields. It tracks first/last-seen times, packet/change counts, raw
+payloads, byte ranges, changed-bit masks, and a bounded RX/TX capture history.
+Expose `diagnostics.discovery_summary` for a rate-limited summary and
+`diagnostics.capture_export_csv` for a copyable CSV capture through the normal
+ESPHome text-sensor interfaces. `history_depth` is bounded (1–64).
+
+Payload byte 42 is the confirmed indoor/return-air temperature. On GREE
+four-speed units it uses `raw - 40`. Payload byte 44 is the GREE outdoor
+ambient field with the same transform; on other Sinclair layouts it remains a
+diagnostic candidate. The OEM report component additionally exposes compressor
+frequency, outdoor-fan raw value and raw expansion-valve state from command
+`0x35`. The full discovery sweep runs once; scheduled refreshes query only
+`0x35` after the normal climate UART becomes idle.
+
+`supplemental_queries` is experimental and disabled by default. It accepts
+only byte-for-byte OEM-captured query templates and is gated so an active
+climate transaction or normal poll takes priority. The current release records
+and validates these templates but does not schedule transmission, preserving a
+read-only discovery posture until an OEM query/response mapping is confirmed.
+
+The Livo poll-only example enables encrypted ESPHome native API access and the
+ESP-hosted authenticated web REST/SSE API. Add these values to your local
+`secrets.yaml` (do not commit real credentials):
+
+```yaml
+gree_livo_api_key: "32-BYTE-BASE64-KEY"
+gree_livo_web_username: "gree"
+gree_livo_web_password: "LONG-UNIQUE-PASSWORD"
+```
+
+Keep the web API on an isolated IoT network; it must not be exposed directly to
+the public internet. `local: true` embeds its assets so normal local operation
+does not require an external frontend host.
+
+Polling is one-request/one-response: a second poll is never written while a
+valid response is outstanding. A missing response is timed out after one second
+and then retried. Control updates preserve the latest valid `0x31` payload as a
+baseline and advance the apply/clear sequence only after a valid report arrives.
