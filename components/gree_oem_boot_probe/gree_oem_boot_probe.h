@@ -79,7 +79,7 @@ class GreeOemBootProbe : public Component {
       }
       if (!this->climate_->supplemental_query_may_start()) return;
       ESP_LOGD(TAG, "Starting scheduled RTL8720CF operating telemetry query");
-      this->begin_query_sequence_(true, QueryCycle::OUTDOOR_OPERATING);
+      this->begin_query_sequence_(true, QueryCycle::OPERATING_TELEMETRY);
       return;
     }
 
@@ -131,8 +131,8 @@ class GreeOemBootProbe : public Component {
         }
         break;
       case Phase::QUERY_QUIESCE:
-        this->phase_ = this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING
-                           ? Phase::QUERY_OUTDOOR
+        this->phase_ = this->query_cycle_ == QueryCycle::OPERATING_TELEMETRY
+                           ? Phase::QUERY_INDOOR
                            : Phase::QUERY_COMBINED;
         this->next_action_at_ = now;
         break;
@@ -148,7 +148,7 @@ class GreeOemBootProbe : public Component {
         break;
       case Phase::QUERY_OUTDOOR: {
         const Phase next =
-            this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING
+            this->query_cycle_ == QueryCycle::OPERATING_TELEMETRY
                 ? (this->should_query_energy_flow_() ? Phase::QUERY_ENERGY_FLOW
                                                      : Phase::RESPONSE_DRAIN)
                 : Phase::QUERY_STATUS;
@@ -190,7 +190,7 @@ class GreeOemBootProbe : public Component {
         if (this->should_query_energy_flow_()) {
           this->energy_flow_discovery_attempted_ = true;
           const bool advertised = this->energy_flow_advertised_();
-          const Phase next = this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING
+          const Phase next = this->query_cycle_ == QueryCycle::OPERATING_TELEMETRY
                                  ? Phase::RESPONSE_DRAIN
                                  : Phase::QUERY_SELECTOR_DISCOVERY;
           this->send_query_and_advance_(
@@ -211,7 +211,7 @@ class GreeOemBootProbe : public Component {
             this->publish_energy_flow_query_result_(
                 this->energy_flow_skip_state_());
           }
-          this->phase_ = this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING
+          this->phase_ = this->query_cycle_ == QueryCycle::OPERATING_TELEMETRY
                              ? Phase::RESPONSE_DRAIN
                              : Phase::QUERY_SELECTOR_DISCOVERY;
           this->next_action_at_ = now;
@@ -320,13 +320,13 @@ class GreeOemBootProbe : public Component {
     ESP_LOGCONFIG(TAG, "  Operating profile cycles: %u", this->operating_profile_cycles_);
     ESP_LOGCONFIG(TAG, "  Module-state selector: primary=0x%02X secondary=0x%02X",
                   this->module_state_primary_selector_, this->module_state_secondary_selector_);
-    ESP_LOGCONFIG(TAG, "  Outdoor operating repeat interval: %u ms",
+    ESP_LOGCONFIG(TAG, "  Indoor/outdoor telemetry repeat interval: %u ms",
                   this->repeat_interval_ms_);
     ESP_LOGCONFIG(TAG, "  Restore control: %s", YESNO(this->restore_control_));
   }
 
  protected:
-  enum class QueryCycle : uint8_t { FULL_DISCOVERY, OUTDOOR_OPERATING };
+  enum class QueryCycle : uint8_t { FULL_DISCOVERY, OPERATING_TELEMETRY };
   enum class DiscoveryKind : uint8_t { SELECTOR, MODULE_STATE };
   enum class EnergyFlowAdvertisement : uint8_t {
     NO_SYNCHRONIZATION,
@@ -472,7 +472,7 @@ class GreeOemBootProbe : public Component {
     this->pending_description_ = nullptr;
     this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::RECEIVE_ONLY);
     this->phase_ = Phase::QUERY_QUIESCE;
-    const uint32_t delay = cycle == QueryCycle::OUTDOOR_OPERATING
+    const uint32_t delay = cycle == QueryCycle::OPERATING_TELEMETRY
                                ? this->scheduled_quiesce_delay_ms_
                                : (quiesce ? this->quiesce_delay_ms_ : 0);
     this->next_action_at_ = millis() + delay;
@@ -659,7 +659,7 @@ class GreeOemBootProbe : public Component {
         this->energy_flow_response_seen_ = true;
         this->publish_energy_flow_query_result_("received_0x53");
       }
-      if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
+      if (this->query_cycle_ == QueryCycle::OPERATING_TELEMETRY) {
         ESP_LOGD(TAG, "PROBE RX matched %s with command 0x%02X", this->pending_description_,
                  this->pending_expected_command_);
       } else {
@@ -670,7 +670,7 @@ class GreeOemBootProbe : public Component {
       if (energy_flow_query) {
         this->publish_energy_flow_query_result_("fallback_0x31");
       }
-      if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
+      if (this->query_cycle_ == QueryCycle::OPERATING_TELEMETRY) {
         ESP_LOGD(TAG, "PROBE RX fallback after %s: command 0x31", this->pending_description_);
       } else {
         ESP_LOGI(TAG, "PROBE RX fallback after %s: command 0x31", this->pending_description_);
@@ -831,8 +831,8 @@ class GreeOemBootProbe : public Component {
   void finish_sequence_() {
     if (this->restore_control_) {
       this->climate_->set_protocol_mode(sinclair_ac::ProtocolMode::CONTROL);
-      if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
-        ESP_LOGD(TAG, "Scheduled operating telemetry query complete; normal climate control enabled");
+      if (this->query_cycle_ == QueryCycle::OPERATING_TELEMETRY) {
+        ESP_LOGD(TAG, "Scheduled indoor/outdoor telemetry query complete; normal climate control enabled");
       } else {
         ESP_LOGI(TAG, "OEM telemetry discovery sequence complete; normal climate control enabled");
       }
@@ -875,7 +875,7 @@ class GreeOemBootProbe : public Component {
     }
 
     ++this->tx_sequence_;
-    if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
+    if (this->query_cycle_ == QueryCycle::OPERATING_TELEMETRY) {
       ESP_LOGD(TAG, "PROBE TX #%lu cmd=0x%02X bytes=%u: %s",
                static_cast<unsigned long>(this->tx_sequence_), frame[3],
                static_cast<unsigned>(N), description);
