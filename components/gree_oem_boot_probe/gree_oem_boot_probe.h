@@ -876,10 +876,12 @@ class GreeOemBootProbe : public Component {
 
     ++this->tx_sequence_;
     if (this->query_cycle_ == QueryCycle::OUTDOOR_OPERATING) {
-      ESP_LOGD(TAG, "PROBE TX #%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, frame[3],
+      ESP_LOGD(TAG, "PROBE TX #%lu cmd=0x%02X bytes=%u: %s",
+               static_cast<unsigned long>(this->tx_sequence_), frame[3],
                static_cast<unsigned>(N), description);
     } else {
-      ESP_LOGI(TAG, "PROBE TX #%u cmd=0x%02X bytes=%u: %s", this->tx_sequence_, frame[3],
+      ESP_LOGI(TAG, "PROBE TX #%lu cmd=0x%02X bytes=%u: %s",
+               static_cast<unsigned long>(this->tx_sequence_), frame[3],
                static_cast<unsigned>(N), description);
     }
     // At 4800-8E1, flushing the 29-byte selector frame blocks for about 66 ms
