@@ -71,7 +71,7 @@ if ! command -v esphome >/dev/null 2>&1; then
   echo 'esphome is required for YAML validation' >&2
   exit 1
 fi
-esphome --version | grep -F '2026.7.1'
+esphome --version | grep -F '2026.9.0'
 
 python3 - <<'PY'
 from pathlib import Path
@@ -112,3 +112,8 @@ for example in \
   examples/.validation-gree-livo-oem-boot-probe.yaml; do
   esphome config "$example"
 done
+
+# Compile the localized OEM boot-probe path as well. This is the ESP-IDF/C3
+# configuration that exercises the recovered telemetry query components and
+# catches integration issues that config validation alone cannot see.
+esphome compile examples/.validation-gree-livo-oem-boot-probe.yaml
