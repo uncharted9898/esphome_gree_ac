@@ -209,7 +209,10 @@ void SinclairAC::retain_payload(uint8_t command, const std::vector<uint8_t> &pay
         }
     }
     if (!this->telemetry_discovery_enabled_) return;
-    if (meaningful_changed || !this->telemetry_log_changes_only_) ESP_LOGD(TAG, "Telemetry discovery: cmd=0x%02X payload changed (%u bytes)", command, payload.size());
+    if (meaningful_changed || !this->telemetry_log_changes_only_) {
+        ESP_LOGD(TAG, "Telemetry discovery: cmd=0x%02X payload changed (%u bytes)", command,
+                 static_cast<unsigned>(payload.size()));
+    }
     this->publish_discovery_capture();
 }
 
@@ -341,8 +344,23 @@ void SinclairAC::record_fan_diagnostics(uint8_t speed_field_1_raw, uint8_t speed
 void SinclairAC::log_packet_difference(const std::vector<uint8_t> &packet) {
     if (!this->log_differences_ || packet.size() < 4) return;
     auto &old = this->previous_frames_[packet[3]];
-    if (!old.empty() && old.size() != packet.size()) ESP_LOGD(TAG, "RX cmd=0x%02X frame length changed: %u -> %u", packet[3], old.size(), packet.size());
-    for (size_t i = 0; i < old.size() && i < packet.size(); i++) if (old[i] != packet[i]) { const char *field = i < 2 ? "sync" : i == 2 ? "length" : i == 3 ? "command" : i + 1 == packet.size() ? "checksum" : "payload"; ESP_LOGD(TAG, "changed %s%s%u: 0x%02X -> 0x%02X xor=0x%02X", field, std::string(field) == "payload" ? "[" : "", std::string(field) == "payload" ? static_cast<unsigned>(i - 4) : static_cast<unsigned>(i), old[i], packet[i], old[i] ^ packet[i]); }
+    if (!old.empty() && old.size() != packet.size()) {
+        ESP_LOGD(TAG, "RX cmd=0x%02X frame length changed: %u -> %u", packet[3],
+                 static_cast<unsigned>(old.size()), static_cast<unsigned>(packet.size()));
+    }
+    for (size_t i = 0; i < old.size() && i < packet.size(); i++) {
+        if (old[i] == packet[i]) continue;
+        const char *field = i < 2 ? "sync"
+                                  : i == 2 ? "length"
+                                  : i == 3 ? "command"
+                                  : i + 1 == packet.size() ? "checksum"
+                                                           : "payload";
+        const bool payload_field = std::string(field) == "payload";
+        ESP_LOGD(TAG, "changed %s%s%u: 0x%02X -> 0x%02X xor=0x%02X", field,
+                 payload_field ? "[" : "",
+                 payload_field ? static_cast<unsigned>(i - 4) : static_cast<unsigned>(i),
+                 old[i], packet[i], old[i] ^ packet[i]);
+    }
     old = packet;
 }
 
