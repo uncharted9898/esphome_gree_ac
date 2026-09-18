@@ -56,8 +56,9 @@ gree_oem_boot_probe:
 ```
 
 The complete query cycle runs once at boot. A periodic cycle is opt-in and
-always refreshes `0x35`. It additionally refreshes `0x53` only after the page is
-advertised or a real earlier response has proven support:
+refreshes the indoor `0x34` report first, then the outdoor `0x35` report.
+It additionally refreshes `0x53` only after the page is advertised or a real
+earlier response has proven support:
 
 ```yaml
   repeat_interval: 30s
@@ -65,7 +66,7 @@ advertised or a real earlier response has proven support:
 
 Before a repeated operating query, the component waits until the normal
 climate request lifecycle is idle. Climate TX is paused only for the bounded
-`0x35` and optional `0x53` response windows, then restored.
+`0x34`, `0x35`, and optional `0x53` response windows, then restored.
 
 ## Capturing results
 
