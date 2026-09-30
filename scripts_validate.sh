@@ -23,8 +23,8 @@ wifi_ssid: ci-network
 wifi_password: ci-password
 wifi_ap_passwd: ci-ap-password
 ota_password: ci-ota-password
-gree_livo_api_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-api_encryption_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+gree_livo_api_key: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+api_encryption_key: AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
 gree_livo_web_username: ci-user
 gree_livo_web_password: ci-password
 EOF
