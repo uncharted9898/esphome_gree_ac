@@ -21,16 +21,35 @@ ESPHome's UART `flow_control_pin` provides the half-duplex direction signal,
 and the component itself contains no UART write call. The Seeed board is
 therefore left in receive mode during normal operation.
 
+### Field-verified Vireo COM-MANUAL electrical roles
+
+On the target R32 Vireo harness, field measurements confirmed four electrical
+roles:
+
+- approximately **+12 V DC** accessory supply
+- **GND/common**
+- the two remaining conductors are the **RS485 differential pair** and sit in
+  the approximately 5 V signaling range relative to common
+
+The two data conductors are **not +5 V supply outputs**; they go only to the
+Seeed board's RS485 **A/B** terminals. Physical connector pin numbers and wire
+colors remain intentionally undocumented until their orientation is recorded
+unambiguously on the target harness.
+
 For first connection:
 
-1. Power the XIAO from USB.
-2. Leave the HVAC-side positive/supply conductor disconnected until its voltage
-   has been measured and its function confirmed.
-3. Connect only the verified RS485 A, B, and reference/common conductors.
-4. Leave the Seeed 120-ohm termination switch OFF when attaching to an already
-   populated/terminated COM-MANUAL bus.
+1. Power the XIAO from USB for the first capture.
+2. Leave the field-verified +12 V conductor disconnected during that USB-powered
+   first capture.
+3. Connect the verified GND/common conductor to Seeed GND and the two data
+   conductors to Seeed A/B.
+4. Leave the Seeed 120-ohm termination switch OFF when attaching to the already
+   populated COM-MANUAL bus.
 5. Do not disturb the factory device already attached to the split
    COM-MANUAL harness.
+6. After passive capture is proven, the field-verified +12 V supply may be
+   evaluated for the Seeed expansion board's dedicated 12 V input; never route
+   that conductor to the XIAO 5 V pin.
 
 ## Established framing profile
 
