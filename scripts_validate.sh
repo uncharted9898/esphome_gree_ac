@@ -62,6 +62,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_rtl044_handshake.cpp -o /tmp/test_rtl044_handshake
 /tmp/test_rtl044_handshake
 
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_wired_protocol.cpp -o /tmp/test_wired_protocol
+/tmp/test_wired_protocol
+
 if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
   echo 'Examples contain an unpinned or obsolete external component source' >&2
   exit 1
@@ -109,7 +113,8 @@ for example in \
   examples/gree-livo-gen3-control.yaml \
   examples/.validation-gree-livo-gen3-refined-discovery.yaml \
   examples/.validation-gree-livo-gen3-full-power-discovery.yaml \
-  examples/.validation-gree-livo-oem-boot-probe.yaml; do
+  examples/.validation-gree-livo-oem-boot-probe.yaml \
+  examples/gree-vireo-xiao-rs485-listen-only.yaml; do
   esphome config "$example"
 done
 
@@ -117,3 +122,8 @@ done
 # configuration that exercises the recovered telemetry query components and
 # catches integration issues that config validation alone cannot see.
 esphome compile examples/.validation-gree-livo-oem-boot-probe.yaml
+
+# Compile the deployment target for the pre-soldered Seeed XIAO ESP32-C3 +
+# RS485 expansion board. This verifies the 1200-8N1 UART and GPIO4 hardware
+# half-duplex flow-control configuration against the current ESPHome release.
+esphome compile examples/gree-vireo-xiao-rs485-listen-only.yaml
