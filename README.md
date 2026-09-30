@@ -144,7 +144,13 @@ For local development the examples use `type: local` sources. Real installations
 
 ## Protocol capture guide
 
-Label captures with startup, power, mode, setpoint, fan, horizontal and vertical vane positions, display, sleep, X-Fan, save/8 °C heat, IR-remote changes, and faults. Capture repeated transitions and retain raw frames. Climate action remains inferred from selected mode and temperatures; it is **not** compressor-run telemetry. Do not assign meanings to unknown bytes without repeatable evidence. COM-MANUAL remains a separate RS-485 research project.
+Label captures with startup, power, mode, setpoint, fan, horizontal and vertical vane positions, display, sleep, X-Fan, save/8 °C heat, IR-remote changes, and faults. Capture repeated transitions and retain raw frames. Climate action remains inferred from selected mode and temperatures; it is **not** compressor-run telemetry. Do not assign meanings to unknown bytes without repeatable evidence. COM-MANUAL is now handled by the separate `gree_wired_rs485` component.
+The first deployment target is the Seeed XIAO ESP32-C3 RS485 expansion board
+and ships listen-only. See
+[`docs/gree-com-manual-rs485.md`](docs/gree-com-manual-rs485.md) and
+[`examples/gree-vireo-xiao-rs485-listen-only.yaml`](examples/gree-vireo-xiao-rs485-listen-only.yaml).
+It uses the previously recovered 1200-baud wired-controller framing without
+pretending that unverified R32/Vireo payload bytes already have climate meanings.
 
 ## Livo fan profile, telemetry discovery, and local API
 
