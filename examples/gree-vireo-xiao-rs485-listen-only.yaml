@@ -12,8 +12,10 @@ esp32:
     type: esp-idf
 
 logger:
-  # Keep the USB/serial logger off the hardware UART used by the RS485 board.
-  baud_rate: 0
+  # The RS485 bus uses GPIO6/GPIO7, so keep diagnostics on the XIAO C3's
+  # native USB Serial/JTAG interface. This does not share pins with COM-MANUAL.
+  hardware_uart: USB_SERIAL_JTAG
+  baud_rate: 115200
   level: DEBUG
   logs:
     gree_wired_rs485: INFO
