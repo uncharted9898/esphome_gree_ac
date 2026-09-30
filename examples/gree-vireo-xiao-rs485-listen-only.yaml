@@ -35,6 +35,13 @@ ota:
 #   D5 / GPIO7 = UART RX
 #   D2 / GPIO4 = DE + /RE direction control
 #
+# Target Vireo COM-MANUAL has now been field-verified as:
+#   one ~+12 V accessory-supply conductor
+#   one GND/common conductor
+#   two ~5 V-class RS485 data conductors -> Seeed A/B
+# Keep the +12 V conductor disconnected for the first USB-powered passive
+# capture. It must never be connected to the XIAO 5 V pin.
+#
 # ESPHome hardware RS485 flow control keeps GPIO4 low while idle/receiving.
 # The gree_wired_rs485 component has no write path, so first-deployment
 # firmware cannot intentionally enable the RS485 driver.
