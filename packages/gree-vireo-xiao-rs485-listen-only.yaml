@@ -213,6 +213,12 @@ gree_wired_rs485:
   controller_state:
     name: ${friendly_name} Controller State Codec
     entity_category: diagnostic
+  ff40_payload:
+    name: ${friendly_name} FF40 Status Payload
+    entity_category: diagnostic
+  ff40_changes:
+    name: ${friendly_name} FF40 Status Changes
+    entity_category: diagnostic
 
   bus_active:
     name: ${friendly_name} COM-MANUAL Bus Active
