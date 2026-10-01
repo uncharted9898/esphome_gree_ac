@@ -26,6 +26,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_frame_timeout(uint32_t timeout_ms) { this->frame_timeout_ms_ = timeout_ms; }
   void set_bus_idle_timeout(uint32_t timeout_ms) { this->bus_idle_timeout_ms_ = timeout_ms; }
   void set_log_frames(bool log_frames) { this->log_frames_ = log_frames; }
+  void set_passive_scan(bool passive_scan) { this->passive_scan_ = passive_scan; }
+  void set_passive_scan_window(uint32_t window_ms) { this->passive_scan_window_ms_ = window_ms; }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
@@ -62,6 +64,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->last_invalid_frame_sensor_ = s;
   }
   void set_protocol_sensor(text_sensor::TextSensor *s) { this->protocol_sensor_ = s; }
+  void set_serial_profile_sensor(text_sensor::TextSensor *s) { this->serial_profile_sensor_ = s; }
 
   void set_bus_active_sensor(binary_sensor::BinarySensor *s) { this->bus_active_sensor_ = s; }
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
@@ -75,6 +78,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // switch OFF when joining an already-terminated COM-MANUAL bus.
     ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in hardware listen-only mode");
     ESP_LOGI(TAG, "Protocol profile: 1200 baud 8N1, 7E 7E framing, type 0x11, XOR checksum");
+    if (this->passive_scan_) {
+      ESP_LOGI(TAG, "Passive UART profile scan enabled; RS485 transmitter remains disabled");
+      this->scan_profile_started_at_ = millis();
+      this->scan_profile_byte_start_ = this->bytes_received_;
+      this->publish_serial_profile_();
+    } else {
+      this->publish_serial_profile_();
+    }
 
     if (this->listen_only_sensor_ != nullptr) this->listen_only_sensor_->publish_state(true);
     if (this->bus_active_sensor_ != nullptr) this->bus_active_sensor_->publish_state(false);
@@ -92,6 +103,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     ESP_LOGCONFIG(TAG, "  Bus idle timeout: %lu ms",
                   static_cast<unsigned long>(this->bus_idle_timeout_ms_));
     ESP_LOGCONFIG(TAG, "  Log valid frames: %s", YESNO(this->log_frames_));
+    ESP_LOGCONFIG(TAG, "  Passive serial scan: %s", YESNO(this->passive_scan_));
+    if (this->passive_scan_) {
+      ESP_LOGCONFIG(TAG, "  Passive scan window: %lu ms",
+                    static_cast<unsigned long>(this->passive_scan_window_ms_));
+    }
   }
 
   void loop() override {
@@ -127,6 +143,31 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       if (this->bus_active_sensor_ != nullptr) this->bus_active_sensor_->publish_state(false);
     }
 
+    if (this->passive_scan_ && !this->scan_locked_ &&
+        static_cast<uint32_t>(now - this->scan_profile_started_at_) >=
+            this->passive_scan_window_ms_) {
+      const uint32_t profile_bytes = this->bytes_received_ - this->scan_profile_byte_start_;
+      const auto profile = this->scan_profile_(this->scan_profile_index_);
+      ESP_LOGI(TAG, "SCAN profile=%s bytes=%lu",
+               profile.name, static_cast<unsigned long>(profile_bytes));
+
+      // A handful of bytes in a short passive window is enough to distinguish
+      // real UART activity from the one-byte startup artifact seen during
+      // qualification. Lock to the first profile with sustained RX so the raw
+      // debugger can capture a contiguous stream.
+      if (profile_bytes >= 4) {
+        this->scan_locked_ = true;
+        ESP_LOGI(TAG, "SCAN locked profile=%s after %lu received bytes",
+                 profile.name, static_cast<unsigned long>(profile_bytes));
+        this->publish_serial_profile_();
+      } else {
+        this->scan_profile_index_ = (this->scan_profile_index_ + 1) % PASSIVE_SCAN_PROFILE_COUNT;
+        this->apply_scan_profile_(this->scan_profile_index_);
+        this->scan_profile_started_at_ = now;
+        this->scan_profile_byte_start_ = this->bytes_received_;
+      }
+    }
+
     if (this->last_health_log_at_ == 0 ||
         static_cast<uint32_t>(now - this->last_health_log_at_) >= this->health_log_interval_ms_) {
       this->last_health_log_at_ = now;
@@ -137,8 +178,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
           this->last_byte_at_ != 0 &&
           static_cast<uint32_t>(now - this->last_byte_at_) <= this->bus_idle_timeout_ms_;
       ESP_LOGI(TAG,
-               "HEALTH bytes=%lu valid=%lu xor_fail=%lu invalid_len=%lu "
+               "HEALTH profile=%s bytes=%lu valid=%lu xor_fail=%lu invalid_len=%lu "
                "timeouts=%lu rx_recent=%s valid_bus=%s",
+               this->scan_profile_(this->scan_profile_index_).name,
                static_cast<unsigned long>(this->bytes_received_),
                static_cast<unsigned long>(this->valid_frames_),
                static_cast<unsigned long>(this->checksum_failures_),
@@ -194,6 +236,61 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     return out;
   }
 
+  struct PassiveScanProfile {
+    uint32_t baud;
+    uart::UARTParityOptions parity;
+    const char *name;
+  };
+
+  static constexpr size_t PASSIVE_SCAN_PROFILE_COUNT = 8;
+
+  static PassiveScanProfile scan_profile_(size_t index) {
+    switch (index % PASSIVE_SCAN_PROFILE_COUNT) {
+      case 0:
+        return {1200, uart::UART_CONFIG_PARITY_NONE, "1200-8N1"};
+      case 1:
+        return {4800, uart::UART_CONFIG_PARITY_NONE, "4800-8N1"};
+      case 2:
+        return {9600, uart::UART_CONFIG_PARITY_NONE, "9600-8N1"};
+      case 3:
+        return {4800, uart::UART_CONFIG_PARITY_EVEN, "4800-8E1"};
+      case 4:
+        return {9600, uart::UART_CONFIG_PARITY_EVEN, "9600-8E1"};
+      case 5:
+        return {2400, uart::UART_CONFIG_PARITY_NONE, "2400-8N1"};
+      case 6:
+        return {19200, uart::UART_CONFIG_PARITY_NONE, "19200-8N1"};
+      case 7:
+      default:
+        return {38400, uart::UART_CONFIG_PARITY_NONE, "38400-8N1"};
+    }
+  }
+
+  void publish_serial_profile_() {
+    if (this->serial_profile_sensor_ != nullptr) {
+      this->serial_profile_sensor_->publish_state(
+          this->scan_profile_(this->scan_profile_index_).name);
+    }
+  }
+
+  void apply_scan_profile_(size_t index) {
+    const auto profile = this->scan_profile_(index);
+    this->assembler_.reset();
+
+    // Receiver-only qualification: changing UART decode settings does not
+    // transmit anything on RS485. The ESP-IDF half-duplex flow-control pin
+    // remains in receive state because there is still no write path.
+    this->parent_->set_baud_rate(profile.baud);
+    this->parent_->set_data_bits(8);
+    this->parent_->set_stop_bits(1);
+    this->parent_->set_parity(profile.parity);
+#if defined(USE_ESP32)
+    this->parent_->load_settings(false);
+#endif
+    ESP_LOGI(TAG, "SCAN listening profile=%s", profile.name);
+    this->publish_serial_profile_();
+  }
+
   void process_frame_(const std::vector<uint8_t> &raw) {
     protocol::ParsedFrame frame;
     if (!protocol::parse_frame(raw, frame)) {
@@ -208,6 +305,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     ++this->valid_frames_;
     this->last_valid_frame_at_ = millis();
+    if (this->passive_scan_ && !this->scan_locked_) {
+      this->scan_locked_ = true;
+      ESP_LOGI(TAG, "SCAN locked profile=%s after checksum-valid frame",
+               this->scan_profile_(this->scan_profile_index_).name);
+      this->publish_serial_profile_();
+    }
     if (!this->bus_active_) {
       this->bus_active_ = true;
       if (this->bus_active_sensor_ != nullptr) this->bus_active_sensor_->publish_state(true);
@@ -333,6 +436,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t last_valid_frame_at_{0};
   uint32_t last_health_log_at_{0};
   uint32_t health_log_interval_ms_{10000};
+  uint32_t passive_scan_window_ms_{2000};
+  uint32_t scan_profile_started_at_{0};
+  uint32_t scan_profile_byte_start_{0};
+  size_t scan_profile_index_{0};
 
   uint32_t bytes_received_{0};
   uint32_t valid_frames_{0};
@@ -349,6 +456,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   bool log_frames_{true};
   bool bus_active_{false};
+  bool passive_scan_{false};
+  bool scan_locked_{false};
 
   sensor::Sensor *bytes_received_sensor_{nullptr};
   sensor::Sensor *valid_frames_sensor_{nullptr};
@@ -373,6 +482,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *last_changes_sensor_{nullptr};
   text_sensor::TextSensor *last_invalid_frame_sensor_{nullptr};
   text_sensor::TextSensor *protocol_sensor_{nullptr};
+  text_sensor::TextSensor *serial_profile_sensor_{nullptr};
 
   binary_sensor::BinarySensor *bus_active_sensor_{nullptr};
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
