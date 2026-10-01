@@ -36,12 +36,14 @@ now field-qualified electrically as:
 
 - pin 1 = +12 V accessory supply
 - pin 2 = GND/common
-- pin 3 -> Seeed **B**
-- pin 4 -> Seeed **A**
+- pin 3 -> Seeed **A**
+- pin 4 -> Seeed **B**
 
-The pin 3 -> B / pin 4 -> A orientation leaves the TP8485E receiver output
-idle HIGH with DE LOW. The opposite orientation leaves receiver output LOW and
-produces a one-byte startup/reconfiguration artifact, so it is not used.
+This is the current field mapping for the target harness. It is deliberately
+not inferred from the indoor unit's `FE` indication: the target flashes `FE`
+three to four times during cold start whenever the Seeed A/B pair is connected,
+regardless of A/B orientation. With the data pair disconnected, the startup
+`FE` indication is absent.
 
 For first connection:
 
@@ -50,14 +52,44 @@ For first connection:
    input and pin-2 common.
 2. Connect pin 1 only to the Seeed board's dedicated 12 V input, never to the
    XIAO 5 V pin.
-3. Connect pin 2 to Seeed GND, pin 3 to Seeed B, and pin 4 to Seeed A.
-4. Leave the Seeed 120-ohm termination switch OFF when attaching to the already
-   populated COM-MANUAL bus.
+3. Connect pin 2 to Seeed GND, pin 3 to Seeed A, and pin 4 to Seeed B.
+4. Leave the Seeed 120-ohm termination switch OFF. Leave the 5 V selector at
+   IN so the auxiliary 5 V terminal is not being sourced.
 5. Do not disturb the factory device already attached to the split
    COM-MANUAL harness.
 6. Keep the deployment receive-only until target traffic is characterized.
    The Vireo R32 wiring diagram places both the optional wired controller and
-   gas sensor on COM-MANUAL, so the gas-sensor path must remain undisturbed.
+   refrigerant/gas-sensor path on COM-MANUAL, so that factory path must remain
+   undisturbed.
+7. Before another cold-start qualification run, add a 4.7k-10k pull-down from
+   Seeed D2 / GPIO4 (the TP8485E DE + /RE direction control) to GND. This holds
+   the RS485 driver disabled while the ESP32-C3 is in reset, before ESPHome can
+   configure the UART flow-control pin.
+
+## R32 startup FE finding and safety gate
+
+The target Vireo has a repeatable startup observation: attaching the Seeed
+RS485 A/B pair makes the indoor display flash `FE` several times and then
+recover; swapping A/B does not remove the behavior, while disconnecting the
+data pair does. The transient `FE` therefore cannot be used as evidence for
+A/B polarity.
+
+The important distinction is timing. Running firmware has repeatedly shown
+`DE=0`, but that says nothing about the interval while the ESP32-C3 is in
+reset and before ESPHome configures GPIO4. The Seeed expansion board ties
+TP8485E DE and /RE to D2/GPIO4, so the next qualification gate is to hardware
+bias D2/GPIO4 LOW through reset. A 4.7k-10k pull-down is strong enough to define
+the reset state while remaining easy for the ESP32 to drive later.
+
+Until a cold boot remains clean with that reset bias, do not add active
+COM-MANUAL probes. If the startup `FE` still appears with DE hardware-biased
+LOW, treat the direct Seeed connection itself as too intrusive for this shared
+bus and move to a higher-impedance receive-only tap.
+
+The monitor now also exposes electrical activity independently of the legacy
+1200-8N1 frame parser: sampled RX transitions, RX-high percentage, decoded UART
+bytes per health window, current DE state, and a latched `DE high seen`
+diagnostic.
 
 ## Minimal per-device YAML
 
@@ -143,6 +175,9 @@ bytes that have not been proven for the new unit. It provides:
 - changed payload-byte indices relative to the previous frame on the same route
 - bus-active state
 - an explicit listen-only state
+- sampled RX-level transitions and RX-high percentage
+- coarse electrical-activity state independent of frame validity
+- current DE state and a latched DE-high-seen diagnostic
 
 After collecting labelled traffic from the Vireo (power, mode, temperature,
 fan and vane changes), validated field decoders and controlled writes can be

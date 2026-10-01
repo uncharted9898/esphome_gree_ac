@@ -14,6 +14,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
 #include "esphome/core/helpers.h"
+#include "line_activity.h"
 #include "wired_protocol.h"
 
 #ifdef USE_ESP32
@@ -58,6 +59,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_last_source_sensor(sensor::Sensor *s) { this->last_source_sensor_ = s; }
   void set_last_destination_sensor(sensor::Sensor *s) { this->last_destination_sensor_ = s; }
   void set_last_body_length_sensor(sensor::Sensor *s) { this->last_body_length_sensor_ = s; }
+  void set_rx_transitions_sensor(sensor::Sensor *s) { this->rx_transitions_sensor_ = s; }
+  void set_rx_high_percent_sensor(sensor::Sensor *s) { this->rx_high_percent_sensor_ = s; }
 
   void set_last_frame_sensor(text_sensor::TextSensor *s) { this->last_frame_sensor_ = s; }
   void set_last_payload_sensor(text_sensor::TextSensor *s) { this->last_payload_sensor_ = s; }
@@ -76,6 +79,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
   void set_rx_line_high_sensor(binary_sensor::BinarySensor *s) { this->rx_line_high_sensor_ = s; }
   void set_direction_high_sensor(binary_sensor::BinarySensor *s) { this->direction_high_sensor_ = s; }
+  void set_electrical_activity_sensor(binary_sensor::BinarySensor *s) { this->electrical_activity_sensor_ = s; }
+  void set_direction_high_seen_sensor(binary_sensor::BinarySensor *s) { this->direction_high_seen_sensor_ = s; }
 
   float get_setup_priority() const override { return setup_priority::DATA; }
 
@@ -97,10 +102,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     if (this->listen_only_sensor_ != nullptr) this->listen_only_sensor_->publish_state(true);
     if (this->bus_active_sensor_ != nullptr) this->bus_active_sensor_->publish_state(false);
+    if (this->electrical_activity_sensor_ != nullptr) this->electrical_activity_sensor_->publish_state(false);
+    if (this->direction_high_seen_sensor_ != nullptr) this->direction_high_seen_sensor_->publish_state(false);
     if (this->protocol_sensor_ != nullptr) {
       this->protocol_sensor_->publish_state("1200-8N1; 7E7E; src,dst,11,len,body; xor=0");
     }
     this->publish_counters_();
+    this->observe_line_activity_();
     this->publish_line_states_();
   }
 
@@ -123,6 +131,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void loop() override {
     const uint32_t now = millis();
+    this->observe_line_activity_();
     if (this->assembler_.active() && this->last_byte_at_ != 0 &&
         static_cast<uint32_t>(now - this->last_byte_at_) > this->frame_timeout_ms_) {
       this->assembler_.reset();
@@ -189,28 +198,66 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
           this->last_byte_at_ != 0 &&
           static_cast<uint32_t>(now - this->last_byte_at_) <= this->bus_idle_timeout_ms_;
       this->publish_line_states_();
+
+      const auto rx_activity = this->rx_line_activity_.take_window();
+      const uint32_t uart_bytes_window = this->bytes_received_ - this->last_health_byte_count_;
+      this->last_health_byte_count_ = this->bytes_received_;
+      const bool electrical_activity =
+          rx_activity.transitions > 0 || uart_bytes_window > 0;
+
+      if (this->rx_transitions_sensor_ != nullptr) {
+        this->rx_transitions_sensor_->publish_state(this->rx_line_activity_.total_transitions());
+      }
+      if (this->rx_high_percent_sensor_ != nullptr && rx_activity.samples > 0) {
+        this->rx_high_percent_sensor_->publish_state(rx_activity.high_percent());
+      }
+      if (this->electrical_activity_sensor_ != nullptr) {
+        this->electrical_activity_sensor_->publish_state(electrical_activity);
+      }
+
       const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
-               "HEALTH profile=%s bytes=%lu valid=%lu xor_fail=%lu invalid_len=%lu "
-               "timeouts=%lu rx_recent=%s valid_bus=%s rx_level=%d de_level=%d",
+               "HEALTH profile=%s bytes=%lu uart_window=%lu valid=%lu xor_fail=%lu "
+               "invalid_len=%lu timeouts=%lu rx_recent=%s valid_bus=%s rx_level=%d "
+               "de_level=%d rx_edges_window=%lu rx_edges_total=%lu rx_high=%.1f%% "
+               "rx_samples=%lu",
                this->scan_profile_(this->scan_profile_index_).name,
                static_cast<unsigned long>(this->bytes_received_),
+               static_cast<unsigned long>(uart_bytes_window),
                static_cast<unsigned long>(this->valid_frames_),
                static_cast<unsigned long>(this->checksum_failures_),
                static_cast<unsigned long>(this->invalid_lengths_),
                static_cast<unsigned long>(this->frame_timeouts_),
-               YESNO(rx_recent), YESNO(this->bus_active_), rx_level, direction_level);
+               YESNO(rx_recent), YESNO(this->bus_active_), rx_level, direction_level,
+               static_cast<unsigned long>(rx_activity.transitions),
+               static_cast<unsigned long>(this->rx_line_activity_.total_transitions()),
+               rx_activity.high_percent(),
+               static_cast<unsigned long>(rx_activity.samples));
 
-      if (!rx_recent && direction_level == 0 && rx_level == 0) {
+      if (!rx_recent && direction_level == 0 && rx_level == 0 &&
+          rx_activity.transitions == 0) {
         if (!this->warned_rx_held_low_) {
           ESP_LOGW(TAG,
-                   "RS485 receiver output is held LOW while DE is disabled and no traffic is "
-                   "being decoded; A/B polarity or bus bias is suspect");
+                   "RS485 receiver output stayed LOW while DE was disabled and no UART "
+                   "traffic was decoded; inspect bus bias, loading, wiring, and transceiver "
+                   "state without treating this as an A/B polarity test");
           this->warned_rx_held_low_ = true;
         }
-      } else if (rx_level == 1) {
+      } else if (rx_level == 1 || rx_activity.transitions > 0) {
         this->warned_rx_held_low_ = false;
+      }
+
+      if (rx_activity.transitions > 0 && uart_bytes_window == 0) {
+        if (!this->warned_edges_without_uart_) {
+          ESP_LOGW(TAG,
+                   "RX GPIO changed level but the UART decoded no bytes in this health "
+                   "window; physical activity exists but the active serial framing may not "
+                   "match it");
+          this->warned_edges_without_uart_ = true;
+        }
+      } else {
+        this->warned_edges_without_uart_ = false;
       }
     }
   }
@@ -266,6 +313,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (gpio >= 0) return gpio_get_level(static_cast<gpio_num_t>(gpio));
 #endif
     return -1;
+  }
+
+  void observe_line_activity_() {
+    const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
+    this->rx_line_activity_.observe(rx_level);
+
+    const int direction_level = this->read_gpio_level_(this->direction_gpio_);
+    if (direction_level > 0 && !this->direction_high_seen_) {
+      this->direction_high_seen_ = true;
+      if (this->direction_high_seen_sensor_ != nullptr) {
+        this->direction_high_seen_sensor_->publish_state(true);
+      }
+      ESP_LOGW(TAG,
+               "RS485 DE was observed HIGH in listen-only firmware; disconnect the bus if "
+               "this repeats and verify GPIO4/DE reset bias");
+    }
   }
 
   void publish_line_states_() {
@@ -471,6 +534,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   protocol::FrameAssembler assembler_;
+  diagnostics::LineActivityTracker rx_line_activity_;
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
 
   uint32_t frame_timeout_ms_{75};
@@ -478,6 +542,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t last_byte_at_{0};
   uint32_t last_valid_frame_at_{0};
   uint32_t last_health_log_at_{0};
+  uint32_t last_health_byte_count_{0};
   uint32_t health_log_interval_ms_{10000};
   uint32_t passive_scan_window_ms_{2000};
   uint32_t scan_profile_started_at_{0};
@@ -504,6 +569,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool passive_scan_{false};
   bool scan_locked_{false};
   bool warned_rx_held_low_{false};
+  bool warned_edges_without_uart_{false};
+  bool direction_high_seen_{false};
 
   sensor::Sensor *bytes_received_sensor_{nullptr};
   sensor::Sensor *valid_frames_sensor_{nullptr};
@@ -520,6 +587,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   sensor::Sensor *last_source_sensor_{nullptr};
   sensor::Sensor *last_destination_sensor_{nullptr};
   sensor::Sensor *last_body_length_sensor_{nullptr};
+  sensor::Sensor *rx_transitions_sensor_{nullptr};
+  sensor::Sensor *rx_high_percent_sensor_{nullptr};
 
   text_sensor::TextSensor *last_frame_sensor_{nullptr};
   text_sensor::TextSensor *last_payload_sensor_{nullptr};
@@ -534,6 +603,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
   binary_sensor::BinarySensor *rx_line_high_sensor_{nullptr};
   binary_sensor::BinarySensor *direction_high_sensor_{nullptr};
+  binary_sensor::BinarySensor *electrical_activity_sensor_{nullptr};
+  binary_sensor::BinarySensor *direction_high_seen_sensor_{nullptr};
 };
 
 }  // namespace gree_wired_rs485

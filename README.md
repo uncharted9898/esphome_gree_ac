@@ -152,6 +152,15 @@ and ships listen-only. See
 It uses the previously recovered 1200-baud wired-controller framing without
 pretending that unverified R32/Vireo payload bytes already have climate meanings.
 
+On the current R32 Vireo target, connecting the Seeed RS485 data pair causes
+several transient `FE` indications at cold start in either A/B orientation;
+disconnecting the data pair prevents them. The working harness map under test is
+pin 1 = +12 V, pin 2 = GND, pin 3 = A, pin 4 = B, with 120-ohm termination OFF
+and the Seeed 5 V selector at IN. Before further cold-start qualification, hold
+D2/GPIO4 (DE + /RE) LOW through reset with a 4.7k-10k pull-down and keep the
+firmware receive-only. See
+[`docs/gree-com-manual-rs485.md`](docs/gree-com-manual-rs485.md).
+
 ## Livo fan profile, telemetry discovery, and local API
 
 For a Livo four-speed unit, set `fan_profile: gree_4_speed`. It decodes the low

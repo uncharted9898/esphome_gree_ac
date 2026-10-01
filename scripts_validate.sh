@@ -34,6 +34,7 @@ python3 -m py_compile \
   components/sinclair_ac/climate.py \
   components/gree_oem_boot_probe/__init__.py \
   components/gree_oem_report_sensors/__init__.py \
+  components/gree_wired_rs485/__init__.py \
   tools/firmware_research/rtl8720cf_image.py \
   tools/firmware_research/analyze_rtl8720cf.py \
   tools/firmware_research/rtl8720cf_properties.py \
@@ -66,6 +67,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_wired_protocol.cpp -o /tmp/test_wired_protocol
 /tmp/test_wired_protocol
 
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_line_activity.cpp -o /tmp/test_line_activity
+/tmp/test_line_activity
+
 if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
   echo 'Examples contain an unpinned or obsolete external component source' >&2
   exit 1
@@ -86,6 +91,7 @@ sources = (
     Path('examples/gree-livo-oem-boot-probe.yaml'),
     Path('examples/gree-livo-gen3-refined-discovery.yaml'),
     Path('examples/gree-livo-gen3-full-power-discovery.yaml'),
+    Path('examples/gree-vireo-xiao-rs485-listen-only.yaml'),
 )
 pattern = re.compile(
     r'(?m)^  - source:\n'
@@ -114,7 +120,7 @@ for example in \
   examples/.validation-gree-livo-gen3-refined-discovery.yaml \
   examples/.validation-gree-livo-gen3-full-power-discovery.yaml \
   examples/.validation-gree-livo-oem-boot-probe.yaml \
-  examples/gree-vireo-xiao-rs485-listen-only.yaml; do
+  examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml; do
   esphome config "$example"
 done
 
@@ -126,4 +132,4 @@ esphome compile examples/.validation-gree-livo-oem-boot-probe.yaml
 # Compile the deployment target for the pre-soldered Seeed XIAO ESP32-C3 +
 # RS485 expansion board. This verifies the 1200-8N1 UART and GPIO4 hardware
 # half-duplex flow-control configuration against the current ESPHome release.
-esphome compile examples/gree-vireo-xiao-rs485-listen-only.yaml
+esphome compile examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml
