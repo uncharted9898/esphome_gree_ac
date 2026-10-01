@@ -16,6 +16,10 @@
 #include "esphome/core/helpers.h"
 #include "wired_protocol.h"
 
+#ifdef USE_ESP32
+#include "driver/gpio.h"
+#endif
+
 namespace esphome {
 namespace gree_wired_rs485 {
 
@@ -28,6 +32,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_log_frames(bool log_frames) { this->log_frames_ = log_frames; }
   void set_passive_scan(bool passive_scan) { this->passive_scan_ = passive_scan; }
   void set_passive_scan_window(uint32_t window_ms) { this->passive_scan_window_ms_ = window_ms; }
+  void set_rx_line_gpio(int gpio) { this->rx_line_gpio_ = gpio; }
+  void set_direction_gpio(int gpio) { this->direction_gpio_ = gpio; }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
@@ -68,6 +74,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void set_bus_active_sensor(binary_sensor::BinarySensor *s) { this->bus_active_sensor_ = s; }
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
+  void set_rx_line_high_sensor(binary_sensor::BinarySensor *s) { this->rx_line_high_sensor_ = s; }
+  void set_direction_high_sensor(binary_sensor::BinarySensor *s) { this->direction_high_sensor_ = s; }
 
   float get_setup_priority() const override { return setup_priority::DATA; }
 
@@ -93,6 +101,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       this->protocol_sensor_->publish_state("1200-8N1; 7E7E; src,dst,11,len,body; xor=0");
     }
     this->publish_counters_();
+    this->publish_line_states_();
   }
 
   void dump_config() override {
@@ -108,6 +117,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       ESP_LOGCONFIG(TAG, "  Passive scan window: %lu ms",
                     static_cast<unsigned long>(this->passive_scan_window_ms_));
     }
+    ESP_LOGCONFIG(TAG, "  RX line GPIO: %d", this->rx_line_gpio_);
+    ESP_LOGCONFIG(TAG, "  Direction/DE GPIO: %d", this->direction_gpio_);
   }
 
   void loop() override {
@@ -177,16 +188,19 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const bool rx_recent =
           this->last_byte_at_ != 0 &&
           static_cast<uint32_t>(now - this->last_byte_at_) <= this->bus_idle_timeout_ms_;
+      this->publish_line_states_();
+      const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
+      const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
                "HEALTH profile=%s bytes=%lu valid=%lu xor_fail=%lu invalid_len=%lu "
-               "timeouts=%lu rx_recent=%s valid_bus=%s",
+               "timeouts=%lu rx_recent=%s valid_bus=%s rx_level=%d de_level=%d",
                this->scan_profile_(this->scan_profile_index_).name,
                static_cast<unsigned long>(this->bytes_received_),
                static_cast<unsigned long>(this->valid_frames_),
                static_cast<unsigned long>(this->checksum_failures_),
                static_cast<unsigned long>(this->invalid_lengths_),
                static_cast<unsigned long>(this->frame_timeouts_),
-               YESNO(rx_recent), YESNO(this->bus_active_));
+               YESNO(rx_recent), YESNO(this->bus_active_), rx_level, direction_level);
     }
   }
 
@@ -234,6 +248,24 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     }
     if (out.empty()) return "none";
     return out;
+  }
+
+  int read_gpio_level_(int gpio) const {
+#ifdef USE_ESP32
+    if (gpio >= 0) return gpio_get_level(static_cast<gpio_num_t>(gpio));
+#endif
+    return -1;
+  }
+
+  void publish_line_states_() {
+    const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
+    const int direction_level = this->read_gpio_level_(this->direction_gpio_);
+    if (this->rx_line_high_sensor_ != nullptr && rx_level >= 0) {
+      this->rx_line_high_sensor_->publish_state(rx_level != 0);
+    }
+    if (this->direction_high_sensor_ != nullptr && direction_level >= 0) {
+      this->direction_high_sensor_->publish_state(direction_level != 0);
+    }
   }
 
   struct PassiveScanProfile {
@@ -440,6 +472,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t scan_profile_started_at_{0};
   uint32_t scan_profile_byte_start_{0};
   size_t scan_profile_index_{0};
+  int rx_line_gpio_{-1};
+  int direction_gpio_{-1};
 
   uint32_t bytes_received_{0};
   uint32_t valid_frames_{0};
@@ -486,6 +520,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   binary_sensor::BinarySensor *bus_active_sensor_{nullptr};
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
+  binary_sensor::BinarySensor *rx_line_high_sensor_{nullptr};
+  binary_sensor::BinarySensor *direction_high_sensor_{nullptr};
 };
 
 }  // namespace gree_wired_rs485
