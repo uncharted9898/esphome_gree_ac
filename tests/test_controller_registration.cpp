@@ -52,6 +52,17 @@ int main() {
   assert(xor_all(learned) == 0);
   assert(learned.back() != first.back());
 
+  using esphome::gree_wired_rs485::registration::silent_bootstrap_ready;
+  assert(!silent_bootstrap_ready(false, true, false, false, 0, 5000, 5000, 0, 0));
+  assert(!silent_bootstrap_ready(true, false, false, false, 0, 5000, 5000, 0, 0));
+  assert(!silent_bootstrap_ready(true, true, false, false, 0, 4999, 5000, 0, 0));
+  assert(silent_bootstrap_ready(true, true, false, false, 0, 5000, 5000, 0, 0));
+  assert(!silent_bootstrap_ready(true, true, false, false, 0, 5000, 5000, 1, 0));
+  assert(!silent_bootstrap_ready(true, true, false, false, 0, 5000, 5000, 0, 1));
+  assert(!silent_bootstrap_ready(true, true, true, false, 0, 5000, 5000, 0, 0));
+  assert(!silent_bootstrap_ready(true, true, false, true, 0, 5000, 5000, 0, 0));
+  assert(!silent_bootstrap_ready(true, true, false, false, 1, 5000, 5000, 0, 0));
+
   std::cout << "controller registration tests passed\n";
   return 0;
 }
