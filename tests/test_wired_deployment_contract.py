@@ -75,6 +75,25 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("armed=%s", text)
         self.assertIn("sig=%s unit=%02X%02X%02X", text)
 
+    def test_registration_success_requires_expanded_ff40(self):
+        text = HEADER.read_text()
+        process_start = text.index("  void process_frame_")
+        process_end = text.index("\n  void publish_counters_", process_start)
+        process = text[process_start:process_end]
+        self.assertIn("registration_waiting_for_response_", process)
+        self.assertIn("ROUTE_FF_40", process)
+        self.assertIn("frame.body_length > 0x17", process)
+        self.assertIn("registration_accept_evidence_ = true", process)
+
+        finish_start = text.index("  void finish_registration_response_window_")
+        finish_end = text.index("\n  void send_registration_", finish_start)
+        finish = text[finish_start:finish_end]
+        self.assertIn("if (this->registration_accept_evidence_)", finish)
+        self.assertNotIn(
+            "this->valid_frames_ > this->registration_valid_frames_at_send_",
+            finish,
+        )
+
     def test_registration_tx_evidence_is_persisted(self):
         text = HEADER.read_text()
         send_start = text.index("  void send_registration_() {")
