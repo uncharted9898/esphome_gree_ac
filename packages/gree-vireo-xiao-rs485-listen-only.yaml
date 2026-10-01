@@ -64,8 +64,8 @@ ota:
 #
 # Software-directed RS485:
 # GPIO4 is NOT registered as UART RTS/flow-control. gree_wired_rs485 owns DE
-# directly: LOW for receive, HIGH only while sending a bounded discovery frame.
-# GPIO6 is normal UART TX; ESP-IDF cannot toggle DE on its own.
+# directly: LOW for receive, HIGH only while sending bounded FF->00 controller
+# registration frames. GPIO6 is normal UART TX; ESP-IDF cannot toggle DE.
 #
 uart:
   id: gree_com_manual_uart
@@ -107,7 +107,8 @@ gree_wired_rs485:
   log_frames: true
   passive_scan: false
   active_probe: true
-  active_probe_interval: 1500ms
+  active_probe_interval: 300ms
+  registration_attempts: 8
   rx_line_gpio: 7
   direction_gpio: 4
 
