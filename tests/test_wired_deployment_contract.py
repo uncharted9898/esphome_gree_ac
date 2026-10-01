@@ -46,6 +46,7 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("active_probe_interval: 1200ms", text)
         self.assertIn("registration_attempts: 4", text)
         self.assertIn("hardware_half_duplex: true", text)
+        self.assertIn("persistent_controller: false", text)
         self.assertIn("#   pin 3 -> Seeed A", text)
         self.assertIn("#   pin 4 -> Seeed B", text)
         self.assertIn("#   120R termination -> OFF", text)
@@ -96,6 +97,30 @@ class WiredDeploymentContractTests(unittest.TestCase):
             "this->valid_frames_ > this->registration_valid_frames_at_send_",
             finish,
         )
+
+    def test_persistent_controller_runtime_is_opt_in_and_poll_driven(self):
+        text = HEADER.read_text()
+        package = PACKAGE.read_text()
+        self.assertIn("set_persistent_controller", text)
+        self.assertIn("persistent_controller_{false}", text)
+        self.assertIn("persistent_controller: false", package)
+        self.assertIn("controller_polls_seen_", text)
+        self.assertIn("controller_responses_sent_", text)
+        self.assertIn("runtime_response_pending_", text)
+
+        observe_start = text.index("  void observe_startup_poll_")
+        observe_end = text.index("\n  void finish_registration_response_window_", observe_start)
+        observe = text[observe_start:observe_end]
+        self.assertIn("registration_established_", observe)
+        self.assertIn("persistent_controller_", observe)
+        self.assertIn("runtime_response_pending_ = true", observe)
+
+        runtime_start = text.index("  void send_runtime_controller_response_")
+        runtime_end = text.index("\n  int read_gpio_level_", runtime_start)
+        runtime = text[runtime_start:runtime_end]
+        self.assertIn("registration::make_frame", runtime)
+        self.assertIn("registration::COUNTER_INDEX", runtime)
+        self.assertIn("controller_responses_sent_", runtime)
 
     def test_registration_tx_evidence_is_persisted(self):
         text = HEADER.read_text()
