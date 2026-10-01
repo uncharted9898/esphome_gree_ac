@@ -36,6 +36,26 @@ static std::vector<uint8_t> startup_poll_00_ff() {
   };
 }
 
+
+static std::vector<uint8_t> registered_status_ff_40() {
+  return {
+      0x7E, 0x7E, 0xFF, 0x40, 0x11, 0x29, 0x09, 0x30, 0x83, 0x7F,
+      0x70, 0x0E, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x02, 0x11, 0x1B,
+      0x00, 0x00, 0x04, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x0B,
+  };
+}
+
+static std::vector<uint8_t> controller_state_ff_00() {
+  return {
+      0x7E, 0x7E, 0xFF, 0x00, 0x11, 0x22, 0x09, 0x30, 0x83, 0x11,
+      0x1B, 0x00, 0x00, 0x10, 0xE0, 0xE0, 0x08, 0x00, 0x28, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x58,
+  };
+}
+
 static std::vector<uint8_t> startup_status_ff_40() {
   return {
       0x7E, 0x7E, 0xFF, 0x40, 0x11, 0x17, 0x0D, 0x30, 0x83, 0x7B,
@@ -89,6 +109,22 @@ int main() {
   assert(parsed.payload.size() == 22);
   assert(parsed.frame_class == FrameClass::REFERENCE_LAYOUT);
   assert(xor_bytes(startup_status) == 0);
+
+  const auto controller_state = controller_state_ff_00();
+  assert(parse_frame(controller_state, parsed));
+  assert(parsed.route == RouteKind::ROUTE_FF_00);
+  assert(parsed.body_length == 0x22);
+  assert(parsed.payload.size() == 33);
+  assert(parsed.frame_class == FrameClass::REFERENCE_LAYOUT);
+  assert(xor_bytes(controller_state) == 0);
+
+  const auto registered_status = registered_status_ff_40();
+  assert(parse_frame(registered_status, parsed));
+  assert(parsed.route == RouteKind::ROUTE_FF_40);
+  assert(parsed.body_length == 0x29);
+  assert(parsed.payload.size() == 40);
+  assert(parsed.frame_class == FrameClass::REFERENCE_LAYOUT);
+  assert(xor_bytes(registered_status) == 0);
 
   // A known route with a new body length is retained for R32/Vireo discovery
   // rather than rejected as incompatible with older controller captures.
