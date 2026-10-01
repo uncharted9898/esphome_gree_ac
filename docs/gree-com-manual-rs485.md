@@ -96,9 +96,14 @@ another blind DE/polarity change. Response-window bytes are therefore treated
 as unvalidated UART observations until they produce protocol-valid evidence.
 
 The monitor now also exposes electrical activity independently of the legacy
-1200-8N1 frame parser: sampled RX transitions, RX-high percentage, decoded UART
-bytes per health window, current DE state, and a latched `DE high seen`
-diagnostic.
+1200-8N1 frame parser. GPIO7 has a passive any-edge interrupt counter in
+addition to the older main-loop samples, so short bit transitions are not
+mistaken for a permanently idle-high receiver. Each bounded registration
+window records interrupt-timed RX edge count/first/last/span, UART bytes already
+pending immediately after DE returns to receive, and first/last UART-drain
+offsets. These observations remain diagnostic only; they are not treated as a
+registration acknowledgement unless the recovered protocol parser supplies
+valid acceptance evidence.
 
 ## Minimal per-device YAML
 
