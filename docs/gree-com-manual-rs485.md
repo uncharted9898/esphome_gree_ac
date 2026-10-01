@@ -31,25 +31,33 @@ roles:
 - the two remaining conductors are the **RS485 differential pair** and sit in
   the approximately 5 V signaling range relative to common
 
-The two data conductors are **not +5 V supply outputs**; they go only to the
-Seeed board's RS485 **A/B** terminals. Physical connector pin numbers and wire
-colors remain intentionally undocumented until their orientation is recorded
-unambiguously on the target harness.
+The two data conductors are **not +5 V supply outputs**. The target harness is
+now field-qualified electrically as:
+
+- pin 1 = +12 V accessory supply
+- pin 2 = GND/common
+- pin 3 -> Seeed **B**
+- pin 4 -> Seeed **A**
+
+The pin 3 -> B / pin 4 -> A orientation leaves the TP8485E receiver output
+idle HIGH with DE LOW. The opposite orientation leaves receiver output LOW and
+produces a one-byte startup/reconfiguration artifact, so it is not used.
 
 For first connection:
 
-1. Power the XIAO from USB for the first capture.
-2. Leave the field-verified +12 V conductor disconnected during that USB-powered
-   first capture.
-3. Connect the verified GND/common conductor to Seeed GND and the two data
-   conductors to Seeed A/B.
+1. During initial qualification the XIAO may be USB powered; the deployed
+   target has also been field-tested from the Seeed board's dedicated +12 V
+   input and pin-2 common.
+2. Connect pin 1 only to the Seeed board's dedicated 12 V input, never to the
+   XIAO 5 V pin.
+3. Connect pin 2 to Seeed GND, pin 3 to Seeed B, and pin 4 to Seeed A.
 4. Leave the Seeed 120-ohm termination switch OFF when attaching to the already
    populated COM-MANUAL bus.
 5. Do not disturb the factory device already attached to the split
    COM-MANUAL harness.
-6. After passive capture is proven, the field-verified +12 V supply may be
-   evaluated for the Seeed expansion board's dedicated 12 V input; never route
-   that conductor to the XIAO 5 V pin.
+6. Keep the deployment receive-only until target traffic is characterized.
+   The Vireo R32 wiring diagram places both the optional wired controller and
+   gas sensor on COM-MANUAL, so the gas-sensor path must remain undisturbed.
 
 ## Minimal per-device YAML
 
