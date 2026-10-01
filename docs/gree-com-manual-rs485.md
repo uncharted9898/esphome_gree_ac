@@ -68,10 +68,11 @@ For first connection:
    The Vireo R32 wiring diagram places both the optional wired controller and
    refrigerant/gas-sensor path on COM-MANUAL, so that factory path must remain
    undisturbed.
-7. Before another cold-start qualification run, add a 4.7k-10k pull-down from
-   Seeed D2 / GPIO4 (the TP8485E DE + /RE direction control) to GND. This holds
-   the RS485 driver disabled while the ESP32-C3 is in reset, before ESPHome can
-   configure the UART flow-control pin.
+7. The October 1, 2026 breaker-off qualification used the firmware-owned
+   GPIO4 direction path and reached the bounded registration experiment on a
+   true HVAC/ESP cold start. Do not add another hardware-bias requirement merely
+   to repeat that test; preserve the current field wiring while protocol
+   qualification continues.
 
 ## R32 startup FE finding and safety gate
 
@@ -81,17 +82,18 @@ recover; swapping A/B does not remove the behavior, while disconnecting the
 data pair does. The transient `FE` therefore cannot be used as evidence for
 A/B polarity.
 
-The important distinction is timing. Running firmware has repeatedly shown
-`DE=0`, but that says nothing about the interval while the ESP32-C3 is in
-reset and before ESPHome configures GPIO4. The Seeed expansion board ties
-TP8485E DE and /RE to D2/GPIO4. Firmware now explicitly owns that pin instead
-of routing it through UART RTS; an external 4.7k-10k pull-down remains useful
-if a defined receive state is required during reset itself.
+A breaker-off cold-start qualification on October 1, 2026 exercised the same
+manual GPIO4 direction path from a true HVAC/ESP power-up. After five seconds
+of complete UART/electrical silence the firmware transmitted the four bounded
+registration frames, each consuming about 333-334 ms at 1200-8N1, and returned
+GPIO4 LOW after every flush. Short UART byte groups were received in the four
+response windows, but none formed a checksum-valid recovered COM-MANUAL frame
+and registration never became established.
 
-Until a cold boot remains clean with that reset bias, do not add active
-COM-MANUAL probes. If the startup `FE` still appears with DE hardware-biased
-LOW, treat the direct Seeed connection itself as too intrusive for this shared
-bus and move to a higher-impedance receive-only tap.
+That result closes the earlier "soft reboot missed the target startup window"
+question. The next qualification target is receive-side timing and framing, not
+another blind DE/polarity change. Response-window bytes are therefore treated
+as unvalidated UART observations until they produce protocol-valid evidence.
 
 The monitor now also exposes electrical activity independently of the legacy
 1200-8N1 frame parser: sampled RX transitions, RX-high percentage, decoded UART
