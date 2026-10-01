@@ -38,6 +38,7 @@ CONF_RX_HIGH_PERCENT = "rx_high_percent"
 CONF_CONTROLLER_POLLS_SEEN = "controller_polls_seen"
 CONF_CONTROLLER_RESPONSES_SENT = "controller_responses_sent"
 CONF_REGISTERED_STATUS_FRAMES = "registered_status_frames"
+CONF_REGISTERED_SETPOINT_CANDIDATE = "registered_setpoint_candidate"
 
 CONF_LAST_FRAME = "last_frame"
 CONF_LAST_PAYLOAD = "last_payload"
@@ -55,6 +56,7 @@ CONF_FF40_CHANGES = "ff40_changes"
 CONF_LAST_FRAME_ROLE = "last_frame_role"
 CONF_POLL_PAYLOAD = "poll_payload"
 CONF_POLL_CHANGES = "poll_changes"
+CONF_FF40_INDEXED = "ff40_indexed"
 
 CONF_BUS_ACTIVE = "bus_active"
 CONF_LISTEN_ONLY = "listen_only"
@@ -75,6 +77,12 @@ SetControllerSetpointAction = gree_wired_ns.class_(
 )
 SetControllerModePowerRawAction = gree_wired_ns.class_(
     "SetControllerModePowerRawAction", automation.Action
+)
+SetControllerPowerAction = gree_wired_ns.class_(
+    "SetControllerPowerAction", automation.Action
+)
+SetControllerPayloadByteAction = gree_wired_ns.class_(
+    "SetControllerPayloadByteAction", automation.Action
 )
 
 counter_schema = sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0)
@@ -141,6 +149,12 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_CONTROLLER_POLLS_SEEN): counter_schema,
             cv.Optional(CONF_CONTROLLER_RESPONSES_SENT): counter_schema,
             cv.Optional(CONF_REGISTERED_STATUS_FRAMES): counter_schema,
+            cv.Optional(CONF_REGISTERED_SETPOINT_CANDIDATE): sensor.sensor_schema(
+                sensor.Sensor,
+                unit_of_measurement="°C",
+                accuracy_decimals=1,
+                device_class="temperature",
+            ),
             cv.Optional(CONF_LAST_FRAME): text_schema,
             cv.Optional(CONF_LAST_PAYLOAD): text_schema,
             cv.Optional(CONF_LAST_ROUTE): text_schema,
@@ -157,6 +171,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_LAST_FRAME_ROLE): text_schema,
             cv.Optional(CONF_POLL_PAYLOAD): text_schema,
             cv.Optional(CONF_POLL_CHANGES): text_schema,
+            cv.Optional(CONF_FF40_INDEXED): text_schema,
             cv.Optional(CONF_BUS_ACTIVE): binary_schema,
             cv.Optional(CONF_LISTEN_ONLY): binary_schema,
             cv.Optional(CONF_RX_LINE_HIGH): binary_schema,
@@ -223,6 +238,7 @@ async def to_code(config):
         CONF_CONTROLLER_POLLS_SEEN: "set_controller_polls_seen_sensor",
         CONF_CONTROLLER_RESPONSES_SENT: "set_controller_responses_sent_sensor",
         CONF_REGISTERED_STATUS_FRAMES: "set_registered_status_frames_sensor",
+        CONF_REGISTERED_SETPOINT_CANDIDATE: "set_registered_setpoint_candidate_sensor",
     }
     for key, method in sensor_entities.items():
         if key in config:
@@ -246,6 +262,7 @@ async def to_code(config):
         CONF_LAST_FRAME_ROLE: "set_last_frame_role_sensor",
         CONF_POLL_PAYLOAD: "set_poll_payload_sensor",
         CONF_POLL_CHANGES: "set_poll_changes_sensor",
+        CONF_FF40_INDEXED: "set_ff40_indexed_sensor",
     }
     for key, method in text_entities.items():
         if key in config:
@@ -268,6 +285,7 @@ async def to_code(config):
 
 
 CONF_VALUE = "value"
+CONF_INDEX = "index"
 
 _SETPOINT_ACTION_SCHEMA = cv.Schema(
     {
@@ -308,5 +326,51 @@ async def set_controller_mode_power_raw_to_code(config, action_id, template_arg,
     parent = await cg.get_variable(config[CONF_ID])
     var = cg.new_Pvariable(action_id, template_arg, parent)
     value = await cg.templatable(config[CONF_VALUE], args, cg.uint8)
+    cg.add(var.set_value(value))
+    return var
+
+
+_POWER_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(GreeWiredRS485),
+        cv.Required(CONF_VALUE): cv.templatable(cv.boolean),
+    }
+)
+
+_PAYLOAD_BYTE_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(GreeWiredRS485),
+        cv.Required(CONF_INDEX): cv.templatable(cv.int_range(min=0, max=32)),
+        cv.Required(CONF_VALUE): cv.templatable(cv.int_range(min=0, max=255)),
+    }
+)
+
+
+@automation.register_action(
+    "gree_wired_rs485.set_controller_power",
+    SetControllerPowerAction,
+    _POWER_ACTION_SCHEMA,
+    synchronous=True,
+)
+async def set_controller_power_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    value = await cg.templatable(config[CONF_VALUE], args, cg.bool_)
+    cg.add(var.set_value(value))
+    return var
+
+
+@automation.register_action(
+    "gree_wired_rs485.set_controller_payload_byte",
+    SetControllerPayloadByteAction,
+    _PAYLOAD_BYTE_ACTION_SCHEMA,
+    synchronous=True,
+)
+async def set_controller_payload_byte_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    index = await cg.templatable(config[CONF_INDEX], args, cg.uint8)
+    value = await cg.templatable(config[CONF_VALUE], args, cg.uint8)
+    cg.add(var.set_index(index))
     cg.add(var.set_value(value))
     return var
