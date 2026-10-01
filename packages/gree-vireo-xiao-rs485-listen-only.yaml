@@ -94,7 +94,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/uncharted9898/esphome_gree_ac
-      ref: codex/vireo-active-wired-controller
+      ref: codex/add-compatibility-and-protocol-discovery-mode
     refresh: 0s
     components:
       - gree_wired_rs485
