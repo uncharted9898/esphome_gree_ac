@@ -6,6 +6,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = ROOT / "components/gree_wired_rs485/gree_wired_rs485.h"
 REGISTRATION = ROOT / "components/gree_wired_rs485/controller_registration.h"
+CONTROLLER = ROOT / "components/gree_wired_rs485/wired_controller_state.h"
 PACKAGE = ROOT / "packages/gree-vireo-xiao-rs485-listen-only.yaml"
 
 
@@ -13,13 +14,18 @@ class WiredDeploymentContractTests(unittest.TestCase):
     def test_active_probe_emulates_controller_registration(self):
         text = HEADER.read_text()
         registration = REGISTRATION.read_text()
+        controller = CONTROLLER.read_text()
         self.assertIn("should_send_registration_", text)
         self.assertIn("send_registration_", text)
         self.assertIn("registration_attempt_limit_", text)
         self.assertIn("controller::encode", text)
         self.assertIn("registration::counter_for_attempt", text)
-        self.assertIn("0x7E, 0x7E, 0xFF, 0x00, 0x11, 0x22", registration)
-        self.assertIn("frame[COUNTER_INDEX]", registration)
+        self.assertIn("BODY_LENGTH = 0x22", controller)
+        self.assertIn("frame.push_back(0xFF)", controller)
+        self.assertIn("frame.push_back(0x00)", controller)
+        self.assertIn("frame.push_back(protocol::MESSAGE_TYPE)", controller)
+        self.assertIn("set_accept_counter(encoded, accept_counter_value)", controller)
+        self.assertIn("controller::encode", registration)
         self.assertIn("this->write_array(frame.data(), frame.size());", text)
         self.assertIn("this->force_receive_mode_();", text)
         self.assertIn('ESP_LOGI(TAG, "RX raw burst', text)
@@ -77,7 +83,11 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("controller::encode", send)
         self.assertIn("registration::counter_for_attempt", send)
         self.assertIn("controller::set_accept_counter", send)
-        self.assertIn("registration_unit_signature_", send)
+        self.assertIn("controller_state_", send)
+        learn_start = text.index("  void learn_registration_signature_")
+        learn_end = text.index("\n  void observe_startup_poll_", learn_start)
+        learn = text[learn_start:learn_end]
+        self.assertIn("controller::set_unit_signature", learn)
         self.assertNotIn("REGISTRATION_TEMPLATE", send)
         self.assertIn("armed=%s", text)
         self.assertIn("sig=%s unit=%02X%02X%02X", text)
@@ -128,7 +138,7 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("controller::encode", runtime)
         self.assertIn("registration::counter_for_attempt", runtime)
         self.assertIn("controller::set_accept_counter", runtime)
-        self.assertIn("registration::COUNTER_INDEX", runtime)
+        self.assertIn("accept_counter", runtime)
         self.assertIn("controller_responses_sent_", runtime)
 
     def test_registration_tx_evidence_is_persisted(self):
