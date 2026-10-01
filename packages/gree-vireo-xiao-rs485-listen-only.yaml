@@ -62,15 +62,15 @@ ota:
 # With A/B disconnected the startup FE flash is absent. Do not use FE as an A/B
 # polarity test.
 #
-# Keep this firmware receive-only. Before further cold-start testing, hardware-
-# bias D2/GPIO4 (DE + /RE) LOW with a 4.7k-10k pull-down to GND so the TP8485E
-# driver remains disabled while the ESP32-C3 is resetting, before ESPHome starts.
-
+# Software-only bus guard:
+# GPIO4 is forced LOW by gree_wired_rs485 before the UART bus initializes.
+# The UART is configured RX-only: GPIO6 is not registered as UART TX and GPIO4
+# is not registered as UART RTS/flow-control, so ESP-IDF cannot toggle DE.
+# No hardware change is required.
+#
 uart:
   id: gree_com_manual_uart
-  tx_pin: GPIO6
   rx_pin: GPIO7
-  flow_control_pin: GPIO4
   baud_rate: 1200
   data_bits: 8
   parity: NONE
