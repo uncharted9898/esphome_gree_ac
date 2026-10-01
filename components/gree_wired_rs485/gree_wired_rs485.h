@@ -24,6 +24,7 @@
 
 #ifdef USE_ESP32
 #include "driver/gpio.h"
+#include "esp_timer.h"
 #endif
 
 namespace esphome {
@@ -180,6 +181,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->publish_counters_();
     this->observe_line_activity_();
     this->publish_line_states_();
+
+    // GPIO7 is also routed to the UART RX matrix. Install a passive any-edge
+    // observer after component setup settles so short 1200-baud transitions
+    // are not lost to main-loop sampling. This never changes the pin level.
+    this->set_timeout("rx-edge-monitor", 250, [this]() {
+      this->setup_rx_edge_monitor_();
+    });
+  }
+
+  void on_shutdown() override {
+#ifdef USE_ESP32
+    if (this->rx_edge_monitor_installed_ && this->rx_line_gpio_ >= 0) {
+      gpio_isr_handler_remove(static_cast<gpio_num_t>(this->rx_line_gpio_));
+      this->rx_edge_monitor_installed_ = false;
+    }
+#endif
   }
 
   void dump_config() override {
@@ -279,7 +296,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
             this->registration_armed_, this->registration_established_,
             this->registration_attempts_sent_, setup_elapsed,
             this->silent_bootstrap_delay_ms_, this->bytes_received_,
-            this->rx_line_activity_.total_transitions())) {
+            this->rx_transition_total_())) {
       this->registration_armed_ = true;
       this->silent_bootstrap_armed_ = true;
       this->registration_unit_signature_ = registration::REFERENCE_UNIT_SIGNATURE;
@@ -362,10 +379,15 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       this->publish_line_states_();
 
       const auto rx_activity = this->rx_line_activity_.take_window();
+      const uint32_t rx_isr_edges_total = this->rx_transition_total_();
+      const uint32_t rx_isr_edges_window =
+          rx_isr_edges_total - this->last_health_isr_edge_count_;
+      this->last_health_isr_edge_count_ = rx_isr_edges_total;
       const uint32_t uart_bytes_window = this->bytes_received_ - this->last_health_byte_count_;
       this->last_health_byte_count_ = this->bytes_received_;
       const bool electrical_activity =
-          rx_activity.transitions > 0 || uart_bytes_window > 0;
+          rx_isr_edges_window > 0 || rx_activity.transitions > 0 ||
+          uart_bytes_window > 0;
 
       if (this->rx_transitions_sensor_ != nullptr) {
         this->rx_transitions_sensor_->publish_state(this->rx_line_activity_.total_transitions());
@@ -386,7 +408,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
-               "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
+               "rx_edges_total=%lu rx_sampled_edges_window=%lu "
+               "rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
                "startup_rx=%u:%s",
                this->active_probe_ ? "ACTIVE" : "PASSIVE",
                this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
@@ -418,8 +441,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                static_cast<unsigned long>(this->invalid_lengths_),
                static_cast<unsigned long>(this->frame_timeouts_),
                YESNO(rx_recent), YESNO(this->bus_active_), rx_level, direction_level,
+               static_cast<unsigned long>(rx_isr_edges_window),
+               static_cast<unsigned long>(rx_isr_edges_total),
                static_cast<unsigned long>(rx_activity.transitions),
-               static_cast<unsigned long>(this->rx_line_activity_.total_transitions()),
                rx_activity.high_percent(),
                static_cast<unsigned long>(rx_activity.samples),
                static_cast<unsigned>(this->last_raw_rx_size_),
@@ -456,7 +480,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         this->warned_rx_held_low_ = false;
       }
 
-      if (rx_activity.transitions > 0 && uart_bytes_window == 0) {
+      if ((rx_isr_edges_window > 0 || rx_activity.transitions > 0) &&
+          uart_bytes_window == 0) {
         if (!this->warned_edges_without_uart_) {
           ESP_LOGW(TAG,
                    "RX GPIO changed level but the UART decoded no bytes in this health "
@@ -638,12 +663,25 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void finish_registration_response_window_() {
     this->registration_waiting_for_response_ = false;
+    this->rx_edge_window_active_ = false;
     this->registration_rx_window_.close();
+    const uint32_t edge_count = this->rx_edge_window_count_;
+    const uint32_t edge_first_us = this->rx_edge_window_first_us_;
+    const uint32_t edge_last_us = this->rx_edge_window_last_us_;
+    const uint32_t edge_first_offset_us =
+        edge_count == 0 ? 0 : static_cast<uint32_t>(
+            edge_first_us - this->registration_rx_window_.opened_at_us());
+    const uint32_t edge_last_offset_us =
+        edge_count == 0 ? 0 : static_cast<uint32_t>(
+            edge_last_us - this->registration_rx_window_.opened_at_us());
+    const uint32_t edge_span_us =
+        edge_count < 2 ? 0 : static_cast<uint32_t>(edge_last_us - edge_first_us);
     const std::string response_hex = hex_(this->registration_response_capture_);
     ESP_LOGI(TAG,
              "REG window %u/%u unvalidated_rx=%u pending_at_rx_enable=%u "
              "pending_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
-             "drain_span_us=%lu valid_delta=%lu bytes=%s",
+             "drain_span_us=%lu rx_edges=%lu first_edge_us=%lu last_edge_us=%lu "
+             "edge_span_us=%lu valid_delta=%lu bytes=%s",
              static_cast<unsigned>(this->registration_attempts_sent_),
              static_cast<unsigned>(this->registration_attempt_limit_),
              static_cast<unsigned>(this->registration_response_capture_.size()),
@@ -652,6 +690,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              static_cast<unsigned long>(this->registration_rx_window_.first_drain_us()),
              static_cast<unsigned long>(this->registration_rx_window_.last_drain_us()),
              static_cast<unsigned long>(this->registration_rx_window_.drain_span_us()),
+             static_cast<unsigned long>(edge_count),
+             static_cast<unsigned long>(edge_first_offset_us),
+             static_cast<unsigned long>(edge_last_offset_us),
+             static_cast<unsigned long>(edge_span_us),
              static_cast<unsigned long>(
                  this->registration_rx_window_.valid_frame_delta(this->valid_frames_)),
              response_hex.empty() ? "-" : response_hex.c_str());
@@ -740,6 +782,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->registration_rx_window_.open(
         rx_window_opened_at_us, pending_probe_at_us, pending_at_rx_enable,
         this->valid_frames_);
+    this->rx_edge_window_count_ = 0;
+    this->rx_edge_window_first_us_ = 0;
+    this->rx_edge_window_last_us_ = 0;
+    this->rx_edge_window_active_ = true;
     this->registration_waiting_for_response_ = true;
 
     ESP_LOGI(TAG,
@@ -863,6 +909,69 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (gpio >= 0) return gpio_get_level(static_cast<gpio_num_t>(gpio));
 #endif
     return -1;
+  }
+
+  static void IRAM_ATTR rx_edge_isr_(void *arg) {
+#ifdef USE_ESP32
+    auto *self = static_cast<GreeWiredRS485 *>(arg);
+    const uint32_t now_us = static_cast<uint32_t>(esp_timer_get_time());
+    ++self->rx_isr_edges_total_;
+    if (self->rx_edge_window_active_) {
+      if (self->rx_edge_window_count_ == 0) {
+        self->rx_edge_window_first_us_ = now_us;
+      }
+      self->rx_edge_window_last_us_ = now_us;
+      ++self->rx_edge_window_count_;
+    }
+#else
+    (void) arg;
+#endif
+  }
+
+  void setup_rx_edge_monitor_() {
+#ifdef USE_ESP32
+    if (this->rx_line_gpio_ < 0 || this->rx_edge_monitor_installed_) return;
+    const auto gpio = static_cast<gpio_num_t>(this->rx_line_gpio_);
+
+    esp_err_t err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+      ESP_LOGW(TAG, "RX edge monitor ISR service unavailable on GPIO%d: %s",
+               this->rx_line_gpio_, esp_err_to_name(err));
+      return;
+    }
+
+    err = gpio_set_intr_type(gpio, GPIO_INTR_ANYEDGE);
+    if (err != ESP_OK) {
+      ESP_LOGW(TAG, "RX edge monitor could not set GPIO%d any-edge interrupt: %s",
+               this->rx_line_gpio_, esp_err_to_name(err));
+      return;
+    }
+    err = gpio_isr_handler_add(gpio, &GreeWiredRS485::rx_edge_isr_, this);
+    if (err != ESP_OK) {
+      ESP_LOGW(TAG, "RX edge monitor could not attach GPIO%d handler: %s",
+               this->rx_line_gpio_, esp_err_to_name(err));
+      return;
+    }
+    err = gpio_intr_enable(gpio);
+    if (err != ESP_OK) {
+      gpio_isr_handler_remove(gpio);
+      ESP_LOGW(TAG, "RX edge monitor could not enable GPIO%d interrupt: %s",
+               this->rx_line_gpio_, esp_err_to_name(err));
+      return;
+    }
+
+    this->rx_edge_monitor_installed_ = true;
+    ESP_LOGI(TAG,
+             "RX edge monitor active on GPIO%d; UART RX remains unchanged",
+             this->rx_line_gpio_);
+#endif
+  }
+
+  uint32_t rx_transition_total_() const {
+#ifdef USE_ESP32
+    if (this->rx_edge_monitor_installed_) return this->rx_isr_edges_total_;
+#endif
+    return this->rx_line_activity_.total_transitions();
   }
 
   void observe_line_activity_() {
@@ -1162,6 +1271,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t startup_trace_replay_delay_ms_{5000};
   uint32_t last_health_log_at_{0};
   uint32_t last_health_byte_count_{0};
+  uint32_t last_health_isr_edge_count_{0};
   uint32_t health_log_interval_ms_{10000};
   uint32_t passive_scan_window_ms_{2000};
   uint32_t scan_profile_started_at_{0};
@@ -1216,6 +1326,20 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool warned_edges_without_uart_{false};
   bool direction_high_seen_{false};
   bool startup_trace_replayed_{false};
+  bool rx_edge_monitor_installed_{false};
+#ifdef USE_ESP32
+  volatile uint32_t rx_isr_edges_total_{0};
+  volatile bool rx_edge_window_active_{false};
+  volatile uint32_t rx_edge_window_count_{0};
+  volatile uint32_t rx_edge_window_first_us_{0};
+  volatile uint32_t rx_edge_window_last_us_{0};
+#else
+  uint32_t rx_isr_edges_total_{0};
+  bool rx_edge_window_active_{false};
+  uint32_t rx_edge_window_count_{0};
+  uint32_t rx_edge_window_first_us_{0};
+  uint32_t rx_edge_window_last_us_{0};
+#endif
 
   sensor::Sensor *bytes_received_sensor_{nullptr};
   sensor::Sensor *valid_frames_sensor_{nullptr};
