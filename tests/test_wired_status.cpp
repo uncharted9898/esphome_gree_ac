@@ -33,7 +33,13 @@ int main() {
   assert(status_frame.appendix[0] == 0x11);
   assert(status_frame.appendix[1] == 0x1B);
   assert(status_frame.appendix[5] == 0x28);
+  assert(status_frame.has_registered_setpoint_candidate);
+  assert(status_frame.registered_setpoint_x2_candidate == 0x28);
+  assert(status_frame.registered_setpoint_celsius_candidate == 20.0f);
   assert(status_frame.appendix.back() == 0x20);
+  uint8_t byte = 0;
+  assert(status::payload_byte(status_frame, 0, byte) && byte == 0x09);
+  assert(!status::payload_byte(status_frame, 40, byte));
 
   return 0;
 }
