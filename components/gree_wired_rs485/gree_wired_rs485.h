@@ -1136,7 +1136,7 @@ template<typename... Ts> class SetControllerSetpointAction final : public Action
 
   template<typename V> void set_value(V value) { this->value_ = value; }
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     const float value = this->value_.value(x...);
     if (!this->parent_->set_controller_setpoint_celsius(value)) {
       ESP_LOGW(TAG, "Rejected staged controller setpoint %.2fC", value);
@@ -1154,7 +1154,7 @@ template<typename... Ts> class SetControllerModePowerRawAction final : public Ac
 
   template<typename V> void set_value(V value) { this->value_ = value; }
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     this->parent_->set_controller_mode_power_raw(this->value_.value(x...));
   }
 
