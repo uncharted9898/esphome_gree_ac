@@ -39,6 +39,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_active_probe(bool active_probe) { this->active_probe_ = active_probe; }
   void set_active_probe_interval(uint32_t interval_ms) { this->active_probe_interval_ms_ = interval_ms; }
   void set_registration_attempts(uint8_t attempts) { this->registration_attempt_limit_ = attempts; }
+  void set_hardware_half_duplex(bool enabled) { this->hardware_half_duplex_ = enabled; }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
@@ -87,19 +88,21 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_electrical_activity_sensor(binary_sensor::BinarySensor *s) { this->electrical_activity_sensor_ = s; }
   void set_direction_high_seen_sensor(binary_sensor::BinarySensor *s) { this->direction_high_seen_sensor_ = s; }
 
-  // Run before the UART bus (setup_priority::BUS). The Seeed board ties
-  // TP8485E DE and /RE to the same GPIO, so the safest software-only startup is
-  // to force that pin LOW before ESPHome configures the RX-only UART.
-  float get_setup_priority() const override { return setup_priority::POWER - 1.0f; }
+  // Hardware half-duplex must start after the UART bus so ESP-IDF owns RTS/DE.
+  // The manual fallback retains the earlier pre-UART LOW guard.
+  float get_setup_priority() const override {
+    return this->hardware_half_duplex_ ? setup_priority::DATA
+                                      : setup_priority::POWER - 1.0f;
+  }
 
   void setup() override {
     this->setup_started_at_ = millis();
-    this->force_receive_mode_();
+    if (!this->hardware_half_duplex_) {
+      this->force_receive_mode_();
+    }
 
-    // GPIO4 is never delegated to ESP-IDF RTS. In passive mode it stays LOW
-    // continuously. In active-controller mode this component alone may raise
-    // DE for a bounded FF->00 controller-registration frame.
-    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in software-directed RS485 mode active_probe=%s",
+    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor direction=%s active_probe=%s",
+             this->hardware_half_duplex_ ? "UART_RS485_HALF_DUPLEX" : "MANUAL_GPIO",
              YESNO(this->active_probe_));
     ESP_LOGI(TAG, "Protocol profile: 1200 baud 8N1, 7E 7E framing, type 0x11, XOR checksum");
     if (this->passive_scan_) {
@@ -126,6 +129,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void dump_config() override {
     ESP_LOGCONFIG(TAG, "Gree wired-controller RS485 monitor:");
     ESP_LOGCONFIG(TAG, "  Mode: %s", this->active_probe_ ? "active controller registration" : "listen-only");
+    ESP_LOGCONFIG(TAG, "  Direction control: %s",
+                  this->hardware_half_duplex_ ? "ESP-IDF UART_MODE_RS485_HALF_DUPLEX"
+                                              : "manual GPIO");
     if (this->active_probe_) {
       ESP_LOGCONFIG(TAG, "  Registration interval: %lu ms",
                     static_cast<unsigned long>(this->active_probe_interval_ms_));
@@ -280,12 +286,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
-               "HEALTH mode=%s reg=%u/%u waiting=%s established=%s profile=%s bytes=%lu uart_window=%lu "
+               "HEALTH mode=%s dir=%s reg=%u/%u waiting=%s established=%s profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
                "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
                "startup_rx=%u:%s",
                this->active_probe_ ? "ACTIVE" : "PASSIVE",
+               this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
                static_cast<unsigned>(this->registration_attempts_sent_),
                static_cast<unsigned>(this->registration_attempt_limit_),
                YESNO(this->registration_waiting_for_response_),
@@ -491,20 +498,24 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     ++this->registration_attempts_sent_;
     this->tx_in_progress_ = true;
 
-    if (!this->set_direction_level_(1)) {
+    if (!this->hardware_half_duplex_ && !this->set_direction_level_(1)) {
       ESP_LOGE(TAG, "Controller registration aborted: could not enable RS485 driver");
       this->tx_in_progress_ = false;
       this->force_receive_mode_();
       return;
     }
 
-    ESP_LOGI(TAG, "TX controller registration %u/%u counter=0x%02X: %s",
+    ESP_LOGI(TAG, "TX controller registration %u/%u counter=0x%02X direction=%s: %s",
              static_cast<unsigned>(this->registration_attempts_sent_),
              static_cast<unsigned>(this->registration_attempt_limit_),
-             frame[26], hex_(frame).c_str());
+             frame[26],
+             this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
+             hex_(frame).c_str());
     this->write_array(frame.data(), frame.size());
     const auto flush_result = this->flush();
-    this->force_receive_mode_();
+    if (!this->hardware_half_duplex_) {
+      this->force_receive_mode_();
+    }
     this->tx_in_progress_ = false;
 
     // Start the receive window only after the UART has drained and DE is LOW.
@@ -536,11 +547,17 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       if (this->direction_high_seen_sensor_ != nullptr) {
         this->direction_high_seen_sensor_->publish_state(true);
       }
-      ESP_LOGE(TAG,
-               "RS485 DE was observed HIGH despite the software direction guard; forcing "
-               "GPIO%d LOW again",
-               this->direction_gpio_);
-      this->force_receive_mode_();
+      if (this->hardware_half_duplex_) {
+        ESP_LOGW(TAG,
+                 "RS485 DE observed HIGH while UART half-duplex was idle on GPIO%d",
+                 this->direction_gpio_);
+      } else {
+        ESP_LOGE(TAG,
+                 "RS485 DE was observed HIGH despite the software direction guard; forcing "
+                 "GPIO%d LOW again",
+                 this->direction_gpio_);
+        this->force_receive_mode_();
+      }
     }
   }
 
@@ -790,6 +807,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   bool log_frames_{true};
   bool active_probe_{false};
+  bool hardware_half_duplex_{false};
   uint8_t registration_attempt_limit_{4};
   uint8_t registration_attempts_sent_{0};
   bool registration_waiting_for_response_{false};
