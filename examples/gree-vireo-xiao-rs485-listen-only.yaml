@@ -61,14 +61,14 @@ ota:
 # With A/B disconnected the startup FE flash is absent. Do not use FE as an A/B
 # polarity test.
 #
-# Software-only bus guard:
-# GPIO4 is forced LOW by gree_wired_rs485 before the UART bus initializes.
-# The UART is configured RX-only: GPIO6 is not registered as UART TX and GPIO4
-# is not registered as UART RTS/flow-control, so ESP-IDF cannot toggle DE.
-# No hardware change is required.
+# Software-directed RS485:
+# GPIO4 is NOT registered as UART RTS/flow-control. gree_wired_rs485 owns DE
+# directly: LOW for receive, HIGH only while sending a bounded discovery frame.
+# GPIO6 is normal UART TX; ESP-IDF cannot toggle DE on its own.
 #
 uart:
   id: gree_com_manual_uart
+  tx_pin: GPIO6
   rx_pin: GPIO7
   baud_rate: 1200
   data_bits: 8
@@ -102,6 +102,8 @@ gree_wired_rs485:
   bus_idle_timeout: 10s
   log_frames: true
   passive_scan: false
+  active_probe: true
+  active_probe_interval: 1500ms
   rx_line_gpio: 7
   direction_gpio: 4
 
