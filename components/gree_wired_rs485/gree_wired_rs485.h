@@ -96,7 +96,6 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   void setup() override {
-    this->setup_started_at_ = millis();
     if (!this->hardware_half_duplex_) {
       this->force_receive_mode_();
     }
@@ -286,7 +285,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
-               "HEALTH mode=%s dir=%s reg=%u/%u waiting=%s established=%s tx_ms=%lu tx_flush=%s tx_de=%d>%d "
+               "HEALTH mode=%s dir=%s reg=%u/%u armed=%s waiting=%s established=%s sig=%s unit=%02X%02X%02X "
+               "tx_ms=%lu tx_flush=%s tx_de=%d>%d "
                "profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
@@ -296,8 +296,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
                static_cast<unsigned>(this->registration_attempts_sent_),
                static_cast<unsigned>(this->registration_attempt_limit_),
+               YESNO(this->registration_armed_),
                YESNO(this->registration_waiting_for_response_),
                YESNO(this->registration_established_),
+               this->registration_unit_signature_learned_ ? "LEARNED" : "WAITING",
+               this->registration_unit_signature_[0],
+               this->registration_unit_signature_[1],
+               this->registration_unit_signature_[2],
                static_cast<unsigned long>(this->last_registration_tx_elapsed_ms_),
                this->last_registration_tx_seen_
                    ? (this->last_registration_tx_flush_ok_ ? "OK" : "FAIL")
@@ -445,23 +450,54 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 #endif
   }
 
-  static uint8_t xor_checksum_(const uint8_t *data, size_t len_without_checksum) {
-    uint8_t value = 0;
-    for (size_t i = 0; i < len_without_checksum; ++i) value ^= data[i];
-    return value;
-  }
-
   bool should_send_registration_(uint32_t now) const {
-    if (!this->active_probe_ || this->registration_waiting_for_response_) return false;
+    (void) now;
+    if (!this->active_probe_ || !this->registration_armed_) return false;
+    if (!this->registration_unit_signature_learned_) return false;
+    if (this->registration_waiting_for_response_) return false;
     if (this->registration_established_) return false;
     if (this->registration_attempts_sent_ >= this->registration_attempt_limit_) return false;
-    if (this->last_registration_at_ == 0) {
-      return static_cast<uint32_t>(now - this->setup_started_at_) >=
-             this->registration_start_delay_ms_;
-    }
-    // A completed response window already consumed active_probe_interval_ms_.
-    // Once it is finalized, the next attempt may start immediately.
+    // A startup 00->FF poll, not ESP uptime, opens the registration window.
+    // After each completed response window the next bounded attempt may start.
     return true;
+  }
+
+  void learn_registration_signature_(const protocol::ParsedFrame &frame) {
+    if (frame.route != protocol::RouteKind::ROUTE_FF_40 || frame.payload.size() < 3) return;
+
+    const registration::UnitSignature learned = {
+        frame.payload[0], frame.payload[1], frame.payload[2]};
+    if (!this->registration_unit_signature_learned_ ||
+        learned != this->registration_unit_signature_) {
+      this->registration_unit_signature_ = learned;
+      this->registration_unit_signature_learned_ = true;
+      ESP_LOGI(TAG, "REG learned target unit signature=%02X %02X %02X from FF->40",
+               learned[0], learned[1], learned[2]);
+    }
+  }
+
+  void observe_startup_poll_(uint32_t now) {
+    const bool new_startup_sequence =
+        this->last_startup_poll_at_ == 0 ||
+        static_cast<uint32_t>(now - this->last_startup_poll_at_) >
+            this->startup_poll_rearm_gap_ms_;
+    this->last_startup_poll_at_ = now;
+
+    if (!this->active_probe_ || !new_startup_sequence) return;
+
+    this->registration_armed_ = true;
+    this->registration_established_ = false;
+    this->registration_waiting_for_response_ = false;
+    this->registration_attempts_sent_ = 0;
+    this->last_registration_at_ = 0;
+    this->registration_response_capture_.clear();
+
+    ESP_LOGI(TAG,
+             "REG armed by target 00->FF startup poll signature=%s unit=%02X %02X %02X",
+             this->registration_unit_signature_learned_ ? "LEARNED" : "WAITING",
+             this->registration_unit_signature_[0],
+             this->registration_unit_signature_[1],
+             this->registration_unit_signature_[2]);
   }
 
   void finish_registration_response_window_() {
@@ -473,36 +509,28 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              static_cast<unsigned>(this->registration_response_capture_.size()),
              response_hex.empty() ? "-" : response_hex.c_str());
 
-    if (this->valid_frames_ > this->registration_valid_frames_at_send_) {
+    if (this->registration_accept_evidence_) {
       this->registration_established_ = true;
-      ESP_LOGI(TAG, "REG accepted: valid wired frame observed during response window");
+      this->registration_armed_ = false;
+      ESP_LOGI(TAG,
+               "REG accepted: FF->40 expanded beyond pre-registration layout");
+    } else if (this->registration_attempts_sent_ >= this->registration_attempt_limit_) {
+      this->registration_armed_ = false;
+      ESP_LOGI(TAG, "REG window exhausted after %u target-gated attempts",
+               static_cast<unsigned>(this->registration_attempts_sent_));
     }
     this->registration_response_capture_.clear();
   }
 
   void send_registration_() {
-    // Recovered controller-side FF->00 registration/state frame from a real
-    // GKH/XK76-class Gree wired-controller capture. It remains an experimental
-    // candidate on this Vireo target until a Vireo/XE71 byte-level exchange is
-    // captured. The line rate is only 1200 baud: this
-    // 40-byte frame occupies roughly 333 ms on the wire. Do not schedule the
-    // next registration from the pre-TX timestamp or the frames become
-    // back-to-back and collide with the indoor unit's reply.
-    static const uint8_t REGISTRATION_TEMPLATE[] = {
-        0x7E, 0x7E, 0xFF, 0x00, 0x11, 0x22,
-        0x09, 0x30, 0x83, 0x11, 0x1B, 0x00, 0x00, 0x10,
-        0xE0, 0xE0, 0x08, 0x00, 0x28, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x30, 0x58};
-
-    std::vector<uint8_t> frame(REGISTRATION_TEMPLATE,
-                               REGISTRATION_TEMPLATE + sizeof(REGISTRATION_TEMPLATE));
-    static const uint8_t COUNTERS[] = {
-        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x20};
-    frame[26] = COUNTERS[this->registration_attempts_sent_ %
-                         (sizeof(COUNTERS) / sizeof(COUNTERS[0]))];
-    frame.back() = xor_checksum_(frame.data(), frame.size() - 1);
+    // The packet layout was recovered from Gree wired-controller captures, but
+    // transmission is now target-gated: the indoor unit must first emit its
+    // startup 00->FF poll, and the unit signature bytes come from that target's
+    // own FF->40 status traffic. This avoids treating ESP reboot time as the
+    // indoor-unit registration window and avoids hardcoding 09 30 83.
+    std::vector<uint8_t> frame =
+        registration::make_frame(this->registration_attempts_sent_,
+                                 this->registration_unit_signature_);
 
     ++this->registration_attempts_sent_;
     this->last_registration_de_before_ = this->read_gpio_level_(this->direction_gpio_);
@@ -553,7 +581,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // Start the receive window only after the UART has drained and DE is LOW.
     // At 1200 baud this is the critical distinction from the old burst logic.
     this->last_registration_at_ = millis();
-    this->registration_valid_frames_at_send_ = this->valid_frames_;
+    this->registration_accept_evidence_ = false;
     this->registration_response_capture_.clear();
     this->registration_waiting_for_response_ = true;
 
@@ -673,6 +701,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     ++this->valid_frames_;
     this->last_valid_frame_at_ = millis();
+
+    // Registration is synchronized to the target's startup traffic. FF->40
+    // provides the target-specific three-byte signature used in controller
+    // state frames; 00->FF opens the short controller-registration window.
+    this->learn_registration_signature_(frame);
+    if (frame.route == protocol::RouteKind::ROUTE_00_FF) {
+      this->observe_startup_poll_(this->last_valid_frame_at_);
+    }
+    if (this->registration_waiting_for_response_ &&
+        frame.route == protocol::RouteKind::ROUTE_FF_40 &&
+        frame.body_length > 0x17) {
+      this->registration_accept_evidence_ = true;
+      ESP_LOGI(TAG,
+               "REG evidence: FF->40 body expanded to 0x%02X during response window",
+               frame.body_length);
+    }
     if (this->passive_scan_ && !this->scan_locked_) {
       this->scan_locked_ = true;
       ESP_LOGI(TAG, "SCAN locked profile=%s after checksum-valid frame",
@@ -805,10 +849,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   size_t last_raw_rx_size_{0};
 
   uint32_t frame_timeout_ms_{75};
-  uint32_t setup_started_at_{0};
   uint32_t active_probe_interval_ms_{1200};
-  uint32_t registration_start_delay_ms_{1500};
   uint32_t registration_response_quiet_ms_{100};
+  uint32_t startup_poll_rearm_gap_ms_{5000};
+  uint32_t last_startup_poll_at_{0};
   uint32_t last_registration_at_{0};
   uint32_t last_registration_tx_elapsed_ms_{0};
   uint32_t raw_rx_burst_last_at_{0};
@@ -845,11 +889,15 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool hardware_half_duplex_{false};
   uint8_t registration_attempt_limit_{4};
   uint8_t registration_attempts_sent_{0};
+  bool registration_armed_{false};
   bool registration_waiting_for_response_{false};
   bool registration_established_{false};
+  bool registration_unit_signature_learned_{false};
+  registration::UnitSignature registration_unit_signature_{
+      registration::REFERENCE_UNIT_SIGNATURE};
+  bool registration_accept_evidence_{false};
   bool last_registration_tx_seen_{false};
   bool last_registration_tx_flush_ok_{false};
-  uint32_t registration_valid_frames_at_send_{0};
   bool tx_in_progress_{false};
   bool bus_active_{false};
   bool passive_scan_{false};

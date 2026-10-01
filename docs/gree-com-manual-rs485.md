@@ -16,10 +16,12 @@ RS485 expansion board:
 | D2 | GPIO4 | DE + /RE direction control |
 
 The deployment firmware in
-`examples/gree-vireo-xiao-rs485-listen-only.yaml` is intentionally passive.
-ESPHome's UART `flow_control_pin` provides the half-duplex direction signal,
-and the component itself contains no UART write call. The Seeed board is
-therefore left in receive mode during normal operation.
+`examples/gree-vireo-xiao-rs485-listen-only.yaml` began as a passive monitor
+and now contains a tightly bounded startup-registration experiment. ESPHome's
+UART `flow_control_pin` provides ESP-IDF-managed half-duplex direction. The
+component remains in receive mode unless a checksum-valid target `00 -> FF`
+startup poll arms registration; an ordinary ESP/OTA reboot against an already
+running indoor unit therefore does not transmit.
 
 ### Field-verified Vireo COM-MANUAL electrical roles
 
@@ -153,8 +155,15 @@ to address `00` solely from the earliest captures. Later bench work showed a
 wired controller can remain completely idle without an indoor unit, while a
 Gree-derived indoor unit with no wired controller attached emitted a short
 `00 -> FF` discovery burst at power-up and repeated `FF -> 40` status
-traffic. The monitor therefore treats source/destination addresses
-observationally until the target Vireo exchange proves their roles.
+traffic.
+
+For the bounded active experiment, those observations are now used as timing
+evidence rather than as unconditional address semantics: registration is armed
+by a checksum-valid `00 -> FF` startup poll from the target bus. The first
+three payload bytes from target `FF -> 40` traffic are learned and substituted
+into the outgoing controller state frame, replacing the previous hardcoded
+`09 30 83` unit signature. This means OTA rebooting the ESP alone no longer
+pretends to recreate the indoor unit's startup registration window.
 
 The deployment monitor publishes every valid frame, including duplicate
 payloads, so Home Assistant timestamps represent actual bus freshness.
