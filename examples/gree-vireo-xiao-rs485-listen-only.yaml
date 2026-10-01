@@ -210,3 +210,20 @@ gree_wired_rs485:
   direction_high_seen:
     name: ${friendly_name} RS485 DE High Seen
     entity_category: diagnostic
+
+
+# Compile-time fixtures for the staged controller-state API. These scripts do
+# not run automatically and therefore never add bus traffic to this example.
+script:
+  - id: stage_wired_setpoint_example
+    mode: restart
+    then:
+      - gree_wired_rs485.set_controller_setpoint:
+          id: gree_com_manual
+          value: 21.5
+  - id: stage_wired_mode_power_example
+    mode: restart
+    then:
+      - gree_wired_rs485.set_controller_mode_power_raw:
+          id: gree_com_manual
+          value: 0x19
