@@ -168,6 +168,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       ++this->bytes_received_;
       this->raw_rx_burst_.push_back(byte);
       this->raw_rx_burst_last_at_ = this->last_byte_at_;
+      if (this->startup_rx_capture_.size() < 128) {
+        this->startup_rx_capture_.push_back(byte);
+      }
 
       std::vector<uint8_t> complete;
       const auto result = this->assembler_.push(byte, complete);
@@ -257,7 +260,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "HEALTH mode=%s reg=%u/%u profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
-               "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s",
+               "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
+               "startup_rx=%u:%s",
                this->active_probe_ ? "ACTIVE" : "PASSIVE",
                static_cast<unsigned>(this->registration_attempts_sent_),
                static_cast<unsigned>(this->registration_attempt_limit_),
@@ -274,7 +278,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                rx_activity.high_percent(),
                static_cast<unsigned long>(rx_activity.samples),
                static_cast<unsigned>(this->last_raw_rx_size_),
-               this->last_raw_rx_hex_.empty() ? "-" : this->last_raw_rx_hex_.c_str());
+               this->last_raw_rx_hex_.empty() ? "-" : this->last_raw_rx_hex_.c_str(),
+               static_cast<unsigned>(this->startup_rx_capture_.size()),
+               this->startup_rx_capture_.empty() ? "-" : hex_(this->startup_rx_capture_).c_str());
 
       if (!rx_recent && direction_level == 0 && rx_level == 0 &&
           rx_activity.transitions == 0) {
@@ -695,6 +701,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   diagnostics::LineActivityTracker rx_line_activity_;
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
   std::vector<uint8_t> raw_rx_burst_;
+  std::vector<uint8_t> startup_rx_capture_;
   std::string last_raw_rx_hex_;
   size_t last_raw_rx_size_{0};
 
