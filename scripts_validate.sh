@@ -71,6 +71,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_line_activity.cpp -o /tmp/test_line_activity
 /tmp/test_line_activity
 
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_controller_registration.cpp -o /tmp/test_controller_registration
+/tmp/test_controller_registration
+
 if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
   echo 'Examples contain an unpinned or obsolete external component source' >&2
   exit 1
@@ -130,6 +134,6 @@ done
 esphome compile examples/.validation-gree-livo-oem-boot-probe.yaml
 
 # Compile the deployment target for the pre-soldered Seeed XIAO ESP32-C3 +
-# RS485 expansion board. This verifies the 1200-8N1 UART and GPIO4 hardware
-# half-duplex flow-control configuration against the current ESPHome release.
+# RS485 expansion board. This verifies 1200-8N1 UART, software-owned GPIO4
+# direction control, and the wired-controller registration path.
 esphome compile examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml
