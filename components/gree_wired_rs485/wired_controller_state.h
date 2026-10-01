@@ -90,9 +90,9 @@ inline void set_setpoint_x2(ControllerState &state, uint8_t value) {
 inline bool set_setpoint_celsius(ControllerState &state, float value) {
   if (value < 0.0f || value > 127.5f) return false;
   const float doubled = value * 2.0f;
-  const auto encoded = static_cast<uint8_t>(doubled + 0.5f);
-  if (encoded > 0xFF) return false;
-  state.payload[SETPOINT_X2_PAYLOAD_INDEX] = encoded;
+  const auto encoded = static_cast<unsigned>(doubled + 0.5f);
+  if (encoded > 0xFFU) return false;
+  state.payload[SETPOINT_X2_PAYLOAD_INDEX] = static_cast<uint8_t>(encoded);
   return true;
 }
 
