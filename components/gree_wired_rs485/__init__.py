@@ -27,6 +27,8 @@ CONF_ROUTE_FF_40_FRAMES = "route_ff_40_frames"
 CONF_LAST_SOURCE = "last_source"
 CONF_LAST_DESTINATION = "last_destination"
 CONF_LAST_BODY_LENGTH = "last_body_length"
+CONF_RX_TRANSITIONS = "rx_transitions"
+CONF_RX_HIGH_PERCENT = "rx_high_percent"
 
 CONF_LAST_FRAME = "last_frame"
 CONF_LAST_PAYLOAD = "last_payload"
@@ -41,6 +43,8 @@ CONF_BUS_ACTIVE = "bus_active"
 CONF_LISTEN_ONLY = "listen_only"
 CONF_RX_LINE_HIGH = "rx_line_high"
 CONF_DIRECTION_HIGH = "direction_high"
+CONF_ELECTRICAL_ACTIVITY = "electrical_activity"
+CONF_DIRECTION_HIGH_SEEN = "direction_high_seen"
 CONF_RX_LINE_GPIO = "rx_line_gpio"
 CONF_DIRECTION_GPIO = "direction_gpio"
 
@@ -51,6 +55,7 @@ GreeWiredRS485 = gree_wired_ns.class_(
 
 counter_schema = sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0)
 raw_value_schema = sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0)
+percentage_schema = sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1)
 text_schema = text_sensor.text_sensor_schema(text_sensor.TextSensor)
 binary_schema = binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor)
 
@@ -96,6 +101,8 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_LAST_SOURCE): raw_value_schema,
             cv.Optional(CONF_LAST_DESTINATION): raw_value_schema,
             cv.Optional(CONF_LAST_BODY_LENGTH): raw_value_schema,
+            cv.Optional(CONF_RX_TRANSITIONS): counter_schema,
+            cv.Optional(CONF_RX_HIGH_PERCENT): percentage_schema,
             cv.Optional(CONF_LAST_FRAME): text_schema,
             cv.Optional(CONF_LAST_PAYLOAD): text_schema,
             cv.Optional(CONF_LAST_ROUTE): text_schema,
@@ -108,6 +115,8 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_LISTEN_ONLY): binary_schema,
             cv.Optional(CONF_RX_LINE_HIGH): binary_schema,
             cv.Optional(CONF_DIRECTION_HIGH): binary_schema,
+            cv.Optional(CONF_ELECTRICAL_ACTIVITY): binary_schema,
+            cv.Optional(CONF_DIRECTION_HIGH_SEEN): binary_schema,
             cv.Optional(CONF_RX_LINE_GPIO): cv.int_range(min=0, max=21),
             cv.Optional(CONF_DIRECTION_GPIO): cv.int_range(min=0, max=21),
         }
@@ -157,6 +166,8 @@ async def to_code(config):
         CONF_LAST_SOURCE: "set_last_source_sensor",
         CONF_LAST_DESTINATION: "set_last_destination_sensor",
         CONF_LAST_BODY_LENGTH: "set_last_body_length_sensor",
+        CONF_RX_TRANSITIONS: "set_rx_transitions_sensor",
+        CONF_RX_HIGH_PERCENT: "set_rx_high_percent_sensor",
     }
     for key, method in sensor_entities.items():
         if key in config:
@@ -183,6 +194,8 @@ async def to_code(config):
         CONF_LISTEN_ONLY: "set_listen_only_sensor",
         CONF_RX_LINE_HIGH: "set_rx_line_high_sensor",
         CONF_DIRECTION_HIGH: "set_direction_high_sensor",
+        CONF_ELECTRICAL_ACTIVITY: "set_electrical_activity_sensor",
+        CONF_DIRECTION_HIGH_SEEN: "set_direction_high_seen_sensor",
     }
     for key, method in binary_entities.items():
         if key in config:
