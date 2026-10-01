@@ -224,6 +224,19 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("expected_wire=~333ms", send)
         self.assertIn("tx_ms=%lu tx_flush=%s tx_de=%d>%d", text)
 
+    def test_registration_rx_window_records_turnaround_evidence(self):
+        text = HEADER.read_text()
+        self.assertIn('#include "registration_rx_window.h"', text)
+        self.assertIn("registration_rx_window_.observe_byte", text)
+        self.assertIn("pending_at_rx_enable", text)
+        self.assertIn('"REG RX window opened attempt=%u pending=%u probe_us=%lu de=%d"', text)
+        self.assertIn('"REG window %u/%u unvalidated_rx=%u pending_at_rx_enable=%u "', text)
+        self.assertIn("first_drain_us=%lu", text)
+        self.assertIn("last_drain_us=%lu", text)
+        self.assertIn("drain_span_us=%lu", text)
+        self.assertIn("valid_delta=%lu", text)
+        self.assertNotIn('"REG response %u/%u bytes=%u: %s"', text)
+
     def test_hardware_half_duplex_does_not_manual_toggle_de(self):
         text = HEADER.read_text()
         self.assertIn("hardware_half_duplex_", text)
