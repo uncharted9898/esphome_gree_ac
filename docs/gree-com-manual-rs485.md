@@ -51,6 +51,32 @@ For first connection:
    evaluated for the Seeed expansion board's dedicated 12 V input; never route
    that conductor to the XIAO 5 V pin.
 
+## Minimal per-device YAML
+
+The full XIAO/RS485 definition lives in
+`packages/gree-vireo-xiao-rs485-listen-only.yaml`. A device only needs its
+identity, local secrets, and the package reference:
+
+```yaml
+substitutions:
+  device_name: my-gree-vireo
+  friendly_name: My Gree Vireo
+  wifi_ssid: !secret wifi_ssid
+  wifi_password: !secret wifi_password
+  ota_password: !secret ota-pass
+
+packages:
+  gree_vireo_rs485:
+    url: https://github.com/uncharted9898/esphome_gree_ac
+    files:
+      - packages/gree-vireo-xiao-rs485-listen-only.yaml
+    ref: codex/add-compatibility-and-protocol-discovery-mode
+    refresh: 5min
+```
+
+This keeps credentials local while all hardware, diagnostics, parser and future
+COM-MANUAL decoder changes remain in the repository package.
+
 ## Established framing profile
 
 The current parser wraps the previously recovered wired-controller framing:
