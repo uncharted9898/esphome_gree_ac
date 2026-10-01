@@ -23,7 +23,7 @@ int main() {
     assert(frame[2] == 0xFF && frame[3] == 0x00);
     assert(frame[4] == 0x11);
     assert(frame[5] == 0x22);
-    assert(frame.size() == 6 + frame[5]);
+    assert(frame.size() == static_cast<size_t>(6U + frame[5]));
     assert(frame[COUNTER_INDEX] == ACCEPT_COUNTERS[attempt]);
     assert(xor_all(frame) == 0);
   }
