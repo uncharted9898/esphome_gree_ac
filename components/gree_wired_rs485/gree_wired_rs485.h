@@ -96,7 +96,6 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   void setup() override {
-    this->setup_started_at_ = millis();
     if (!this->hardware_half_duplex_) {
       this->force_receive_mode_();
     }
@@ -451,12 +450,6 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 #endif
   }
 
-  static uint8_t xor_checksum_(const uint8_t *data, size_t len_without_checksum) {
-    uint8_t value = 0;
-    for (size_t i = 0; i < len_without_checksum; ++i) value ^= data[i];
-    return value;
-  }
-
   bool should_send_registration_(uint32_t now) const {
     (void) now;
     if (!this->active_probe_ || !this->registration_armed_) return false;
@@ -588,7 +581,6 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // Start the receive window only after the UART has drained and DE is LOW.
     // At 1200 baud this is the critical distinction from the old burst logic.
     this->last_registration_at_ = millis();
-    this->registration_valid_frames_at_send_ = this->valid_frames_;
     this->registration_accept_evidence_ = false;
     this->registration_response_capture_.clear();
     this->registration_waiting_for_response_ = true;
@@ -857,7 +849,6 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   size_t last_raw_rx_size_{0};
 
   uint32_t frame_timeout_ms_{75};
-  uint32_t setup_started_at_{0};
   uint32_t active_probe_interval_ms_{1200};
   uint32_t registration_response_quiet_ms_{100};
   uint32_t startup_poll_rearm_gap_ms_{5000};
@@ -907,7 +898,6 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool registration_accept_evidence_{false};
   bool last_registration_tx_seen_{false};
   bool last_registration_tx_flush_ok_{false};
-  uint32_t registration_valid_frames_at_send_{0};
   bool tx_in_progress_{false};
   bool bus_active_{false};
   bool passive_scan_{false};
