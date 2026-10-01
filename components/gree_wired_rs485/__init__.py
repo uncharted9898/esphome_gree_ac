@@ -15,6 +15,8 @@ CONF_PASSIVE_SCAN_WINDOW = "passive_scan_window"
 CONF_ACTIVE_PROBE = "active_probe"
 CONF_ACTIVE_PROBE_INTERVAL = "active_probe_interval"
 CONF_REGISTRATION_ATTEMPTS = "registration_attempts"
+CONF_SILENT_BOOTSTRAP_PROBE = "silent_bootstrap_probe"
+CONF_SILENT_BOOTSTRAP_DELAY = "silent_bootstrap_delay"
 CONF_HARDWARE_HALF_DUPLEX = "hardware_half_duplex"
 CONF_PERSISTENT_CONTROLLER = "persistent_controller"
 
@@ -127,6 +129,14 @@ CONFIG_SCHEMA = (
                 ),
             ),
             cv.Optional(CONF_REGISTRATION_ATTEMPTS, default=4): cv.int_range(min=1, max=10),
+            cv.Optional(CONF_SILENT_BOOTSTRAP_PROBE, default=False): cv.boolean,
+            cv.Optional(CONF_SILENT_BOOTSTRAP_DELAY, default="5s"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(
+                    min=cv.TimePeriod(seconds=1),
+                    max=cv.TimePeriod(seconds=30),
+                ),
+            ),
             cv.Optional(CONF_HARDWARE_HALF_DUPLEX, default=False): cv.boolean,
             cv.Optional(CONF_PERSISTENT_CONTROLLER, default=False): cv.boolean,
             cv.Optional(CONF_BYTES_RECEIVED): counter_schema,
@@ -210,6 +220,8 @@ async def to_code(config):
     cg.add(var.set_active_probe(config[CONF_ACTIVE_PROBE]))
     cg.add(var.set_active_probe_interval(config[CONF_ACTIVE_PROBE_INTERVAL]))
     cg.add(var.set_registration_attempts(config[CONF_REGISTRATION_ATTEMPTS]))
+    cg.add(var.set_silent_bootstrap_probe(config[CONF_SILENT_BOOTSTRAP_PROBE]))
+    cg.add(var.set_silent_bootstrap_delay(config[CONF_SILENT_BOOTSTRAP_DELAY]))
     cg.add(var.set_hardware_half_duplex(config[CONF_HARDWARE_HALF_DUPLEX]))
     cg.add(var.set_persistent_controller(config[CONF_PERSISTENT_CONTROLLER]))
     if CONF_RX_LINE_GPIO in config:
