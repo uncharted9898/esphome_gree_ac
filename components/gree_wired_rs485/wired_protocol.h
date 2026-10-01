@@ -62,7 +62,10 @@ inline bool is_reference_body_length(RouteKind route, uint8_t body_length) {
     case RouteKind::ROUTE_FF_00:
       return body_length == 0x15;
     case RouteKind::ROUTE_FF_40:
-      return body_length == 0x16;
+      // Captures exist with both 0x16 and 0x17 bodies on Gree-derived indoor
+      // boards. Treat both as established layouts; other lengths remain
+      // visible as known-route variants.
+      return body_length == 0x16 || body_length == 0x17;
     case RouteKind::UNKNOWN:
     default:
       return false;
