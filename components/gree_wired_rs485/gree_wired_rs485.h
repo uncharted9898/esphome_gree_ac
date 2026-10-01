@@ -96,7 +96,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // GPIO4 is never delegated to ESP-IDF RTS. In passive mode it stays LOW
     // continuously. In active-probe mode this component alone may raise DE for
     // the duration of a bounded, protocol-valid discovery frame.
-    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in software-directed RS485 mode");
+    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in software-directed RS485 mode active_probe=%s",
+             YESNO(this->active_probe_));
     ESP_LOGI(TAG, "Protocol profile: 1200 baud 8N1, 7E 7E framing, type 0x11, XOR checksum");
     if (this->passive_scan_) {
       ESP_LOGI(TAG, "Passive UART profile scan enabled; RS485 transmitter remains disabled");
@@ -233,10 +234,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
-               "HEALTH profile=%s bytes=%lu uart_window=%lu valid=%lu xor_fail=%lu "
-               "invalid_len=%lu timeouts=%lu rx_recent=%s valid_bus=%s rx_level=%d "
-               "de_level=%d rx_edges_window=%lu rx_edges_total=%lu rx_high=%.1f%% "
-               "rx_samples=%lu",
+               "HEALTH mode=%s probe_sent=%s profile=%s bytes=%lu uart_window=%lu "
+               "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
+               "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
+               "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu",
+               this->active_probe_ ? "ACTIVE" : "PASSIVE",
+               YESNO(this->active_probe_sent_),
                this->scan_profile_(this->scan_profile_index_).name,
                static_cast<unsigned long>(this->bytes_received_),
                static_cast<unsigned long>(uart_bytes_window),
