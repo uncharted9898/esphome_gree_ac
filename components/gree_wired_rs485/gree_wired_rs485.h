@@ -373,6 +373,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                static_cast<unsigned>(this->startup_rx_capture_.size()),
                this->startup_rx_capture_.empty() ? "-" : hex_(this->startup_rx_capture_).c_str());
 
+      const bool startup_trace_window_complete =
+          this->first_valid_frame_at_ != 0 &&
+          static_cast<uint32_t>(now - this->first_valid_frame_at_) >=
+              this->startup_trace_replay_delay_ms_;
+      if (!this->startup_trace_replayed_ && !this->startup_frame_trace_.empty() &&
+          startup_trace_window_complete) {
+        ESP_LOGI(TAG, "STARTUP retained valid frame trace count=%u",
+                 static_cast<unsigned>(this->startup_frame_trace_.size()));
+        for (size_t i = 0; i < this->startup_frame_trace_.size(); ++i) {
+          ESP_LOGI(TAG, "STARTUP retained[%u] %s",
+                   static_cast<unsigned>(i + 1),
+                   this->startup_frame_trace_[i].c_str());
+        }
+        this->startup_trace_replayed_ = true;
+      }
+
       if (!rx_recent && direction_level == 0 && rx_level == 0 &&
           rx_activity.transitions == 0) {
         if (!this->warned_rx_held_low_) {
@@ -856,6 +872,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     ++this->valid_frames_;
     this->last_valid_frame_at_ = millis();
+    if (this->first_valid_frame_at_ == 0) {
+      this->first_valid_frame_at_ = this->last_valid_frame_at_;
+    }
 
     // Registration is synchronized to the target's startup traffic. FF->40
     // provides the target-specific three-byte signature used in controller
@@ -929,6 +948,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     const std::string route = route_text_(frame.source, frame.destination);
     const char *frame_class = protocol::frame_class_name(frame.frame_class);
     const char *frame_role = protocol::frame_role_name(frame.role);
+
+    if (this->startup_frame_trace_.size() < this->startup_frame_trace_limit_) {
+      char prefix[64];
+      std::snprintf(prefix, sizeof(prefix), "t=%lums role=%s ",
+                    static_cast<unsigned long>(this->last_valid_frame_at_),
+                    frame_role);
+      this->startup_frame_trace_.emplace_back(std::string(prefix) + raw_hex);
+    }
 
     // Publish on every valid source frame, including byte-for-byte duplicates,
     // so Home Assistant timestamps reflect actual bus freshness.
@@ -1016,6 +1043,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   std::vector<uint8_t> raw_rx_burst_;
   std::vector<uint8_t> startup_rx_capture_;
   std::vector<uint8_t> registration_response_capture_;
+  std::vector<std::string> startup_frame_trace_;
   std::string last_raw_rx_hex_;
   size_t last_raw_rx_size_{0};
 
@@ -1030,6 +1058,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t bus_idle_timeout_ms_{10000};
   uint32_t last_byte_at_{0};
   uint32_t last_valid_frame_at_{0};
+  uint32_t first_valid_frame_at_{0};
+  uint32_t startup_trace_replay_delay_ms_{5000};
   uint32_t last_health_log_at_{0};
   uint32_t last_health_byte_count_{0};
   uint32_t health_log_interval_ms_{10000};
@@ -1037,6 +1067,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t scan_profile_started_at_{0};
   uint32_t scan_profile_byte_start_{0};
   size_t scan_profile_index_{0};
+  size_t startup_frame_trace_limit_{16};
   int rx_line_gpio_{-1};
   int direction_gpio_{-1};
   int last_registration_de_before_{-1};
@@ -1082,6 +1113,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool warned_rx_held_low_{false};
   bool warned_edges_without_uart_{false};
   bool direction_high_seen_{false};
+  bool startup_trace_replayed_{false};
 
   sensor::Sensor *bytes_received_sensor_{nullptr};
   sensor::Sensor *valid_frames_sensor_{nullptr};

@@ -160,6 +160,24 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("flush()", action_tail)
         self.assertLess(setpoint_start, mode_start)
 
+    def test_startup_valid_frames_are_retained_and_replayed(self):
+        text = HEADER.read_text()
+        self.assertIn("startup_frame_trace_", text)
+        self.assertIn("startup_frame_trace_limit_{16}", text)
+        self.assertIn("startup_trace_replayed_", text)
+        self.assertIn("first_valid_frame_at_", text)
+        self.assertIn("startup_trace_replay_delay_ms_{5000}", text)
+        self.assertIn("startup_trace_window_complete", text)
+        self.assertIn('"STARTUP retained valid frame trace count=%u"', text)
+        self.assertIn('"STARTUP retained[%u] %s"', text)
+
+        process_start = text.index("  void process_frame_")
+        process_end = text.index("\n  void publish_counters_", process_start)
+        process = text[process_start:process_end]
+        self.assertIn("startup_frame_trace_.size()", process)
+        self.assertIn("frame_role", process)
+        self.assertIn("raw_hex", process)
+
     def test_registration_tx_evidence_is_persisted(self):
         text = HEADER.read_text()
         send_start = text.index("  void send_registration_() {")
