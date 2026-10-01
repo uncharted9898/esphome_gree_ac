@@ -713,14 +713,18 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     status::FF40Status decoded;
     if (!status::decode_ff40(frame, decoded)) return;
 
+    if (this->registered_status_sensor_ != nullptr) {
+      this->registered_status_sensor_->publish_state(decoded.registered_layout);
+    }
+    if (this->ff40_appendix_sensor_ != nullptr) {
+      this->ff40_appendix_sensor_->publish_state(
+          decoded.registered_layout && !decoded.appendix.empty()
+              ? hex_(decoded.appendix)
+              : "-");
+    }
+
     if (decoded.registered_layout) {
       ++this->registered_status_frames_;
-      if (this->registered_status_sensor_ != nullptr) {
-        this->registered_status_sensor_->publish_state(true);
-      }
-      if (this->ff40_appendix_sensor_ != nullptr) {
-        this->ff40_appendix_sensor_->publish_state(hex_(decoded.appendix));
-      }
       if (this->registration_waiting_for_response_) {
         this->registration_accept_evidence_ = true;
         ESP_LOGI(TAG,
