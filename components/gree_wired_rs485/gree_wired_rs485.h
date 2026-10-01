@@ -98,6 +98,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_last_raw_rx_sensor(text_sensor::TextSensor *s) { this->last_raw_rx_sensor_ = s; }
   void set_ff40_appendix_sensor(text_sensor::TextSensor *s) { this->ff40_appendix_sensor_ = s; }
   void set_controller_state_sensor(text_sensor::TextSensor *s) { this->controller_state_sensor_ = s; }
+  void set_ff40_payload_sensor(text_sensor::TextSensor *s) { this->ff40_payload_sensor_ = s; }
+  void set_ff40_changes_sensor(text_sensor::TextSensor *s) { this->ff40_changes_sensor_ = s; }
 
   void set_bus_active_sensor(binary_sensor::BinarySensor *s) { this->bus_active_sensor_ = s; }
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
@@ -902,6 +904,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     const std::string raw_hex = hex_(raw);
     const std::string payload_hex = hex_(frame.payload);
+    if (frame.route == protocol::RouteKind::ROUTE_FF_40) {
+      if (this->ff40_payload_sensor_ != nullptr) this->ff40_payload_sensor_->publish_state(payload_hex);
+      if (this->ff40_changes_sensor_ != nullptr) this->ff40_changes_sensor_->publish_state(changes);
+    }
     const std::string route = route_text_(frame.source, frame.destination);
     const char *frame_class = protocol::frame_class_name(frame.frame_class);
 
@@ -1087,6 +1093,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *last_raw_rx_sensor_{nullptr};
   text_sensor::TextSensor *ff40_appendix_sensor_{nullptr};
   text_sensor::TextSensor *controller_state_sensor_{nullptr};
+  text_sensor::TextSensor *ff40_payload_sensor_{nullptr};
+  text_sensor::TextSensor *ff40_changes_sensor_{nullptr};
 
   binary_sensor::BinarySensor *bus_active_sensor_{nullptr};
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
