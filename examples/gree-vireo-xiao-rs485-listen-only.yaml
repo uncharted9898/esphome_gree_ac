@@ -61,15 +61,17 @@ ota:
 # With A/B disconnected the startup FE flash is absent. Do not use FE as an A/B
 # polarity test.
 #
-# Software-directed RS485:
-# GPIO4 is NOT registered as UART RTS/flow-control. gree_wired_rs485 owns DE
-# directly: LOW for receive, HIGH only while sending bounded FF->00 controller
-# registration frames. GPIO6 is normal UART TX; ESP-IDF cannot toggle DE.
+# ESP-IDF hardware half-duplex RS485:
+# GPIO4 is routed as UART RTS/DE. ESP-IDF UART_MODE_RS485_HALF_DUPLEX asserts
+# DE only while bytes are physically leaving the UART and returns it to receive
+# automatically at the end of the frame. This removes software scheduling from
+# the critical TX->RX turnaround.
 #
 uart:
   id: gree_com_manual_uart
   tx_pin: GPIO6
   rx_pin: GPIO7
+  flow_control_pin: GPIO4
   baud_rate: 1200
   data_bits: 8
   parity: NONE
@@ -105,6 +107,7 @@ gree_wired_rs485:
   active_probe: true
   active_probe_interval: 1200ms
   registration_attempts: 4
+  hardware_half_duplex: true
   rx_line_gpio: 7
   direction_gpio: 4
 
