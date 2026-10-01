@@ -14,6 +14,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
 #include "esphome/core/helpers.h"
+#include "controller_registration.h"
 #include "line_activity.h"
 #include "wired_protocol.h"
 
