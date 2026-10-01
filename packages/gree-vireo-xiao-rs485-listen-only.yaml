@@ -1,0 +1,157 @@
+substitutions:
+  device_name: gree-vireo-wired-monitor
+  friendly_name: Gree Vireo Wired Monitor
+  wifi_ssid: ""
+  wifi_password: ""
+  ota_password: ""
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: seeed_xiao_esp32c3
+  framework:
+    type: esp-idf
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  baud_rate: 115200
+  level: DEBUG
+  logs:
+    gree_wired_rs485: INFO
+    uart: WARN
+
+wifi:
+  ssid: "${wifi_ssid}"
+  password: "${wifi_password}"
+  power_save_mode: none
+
+api:
+
+ota:
+  - platform: esphome
+    password: "${ota_password}"
+
+# Seeed XIAO ESP32-C3 + RS485 expansion board
+#
+# D4 / GPIO6 = UART TX
+# D5 / GPIO7 = UART RX
+# D2 / GPIO4 = DE + /RE direction control
+#
+# Field-verified target Vireo COM-MANUAL:
+#   one conductor = +12 V accessory supply
+#   one conductor = GND/common
+#   two conductors = RS485 differential pair
+#
+# First passive deployment:
+#   +12 V  -> leave disconnected while USB-powered
+#   GND    -> Seeed GND
+#   DATA 1 -> Seeed A
+#   DATA 2 -> Seeed B
+#   120R termination -> OFF
+#
+# If bytes arrive but no valid frames decode, swap A/B.
+
+uart:
+  id: gree_com_manual_uart
+  tx_pin: GPIO6
+  rx_pin: GPIO7
+  flow_control_pin: GPIO4
+  baud_rate: 1200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  rx_buffer_size: 512
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/uncharted9898/esphome_gree_ac
+      ref: codex/add-compatibility-and-protocol-discovery-mode
+    refresh: 5min
+    components:
+      - gree_wired_rs485
+
+gree_wired_rs485:
+  id: gree_com_manual
+  uart_id: gree_com_manual_uart
+  frame_timeout: 75ms
+  bus_idle_timeout: 10s
+  log_frames: true
+
+  bytes_received:
+    name: ${friendly_name} Bytes Received
+    entity_category: diagnostic
+  valid_frames:
+    name: ${friendly_name} Valid Frames
+    entity_category: diagnostic
+  checksum_failures:
+    name: ${friendly_name} XOR Failures
+    entity_category: diagnostic
+  frame_timeouts:
+    name: ${friendly_name} Partial Frame Timeouts
+    entity_category: diagnostic
+  invalid_lengths:
+    name: ${friendly_name} Invalid Lengths
+    entity_category: diagnostic
+  unexpected_type_frames:
+    name: ${friendly_name} Unexpected Type Frames
+    entity_category: diagnostic
+  reference_layout_frames:
+    name: ${friendly_name} Reference Layout Frames
+    entity_category: diagnostic
+  route_variant_frames:
+    name: ${friendly_name} Known Route Variants
+    entity_category: diagnostic
+  unknown_route_frames:
+    name: ${friendly_name} Unknown Route Frames
+    entity_category: diagnostic
+  route_00_ff_frames:
+    name: ${friendly_name} 00 to FF Frames
+    entity_category: diagnostic
+  route_ff_00_frames:
+    name: ${friendly_name} FF to 00 Frames
+    entity_category: diagnostic
+  route_ff_40_frames:
+    name: ${friendly_name} FF to 40 Frames
+    entity_category: diagnostic
+  last_source:
+    name: ${friendly_name} Last Source
+    entity_category: diagnostic
+  last_destination:
+    name: ${friendly_name} Last Destination
+    entity_category: diagnostic
+  last_body_length:
+    name: ${friendly_name} Last Body Length
+    entity_category: diagnostic
+
+  last_frame:
+    name: ${friendly_name} Last Frame
+    entity_category: diagnostic
+  last_payload:
+    name: ${friendly_name} Last Payload
+    entity_category: diagnostic
+  last_route:
+    name: ${friendly_name} Last Route
+    entity_category: diagnostic
+  last_frame_class:
+    name: ${friendly_name} Last Frame Class
+    entity_category: diagnostic
+  last_changes:
+    name: ${friendly_name} Last Payload Changes
+    entity_category: diagnostic
+  last_invalid_frame:
+    name: ${friendly_name} Last Invalid Frame
+    entity_category: diagnostic
+    disabled_by_default: true
+  protocol:
+    name: ${friendly_name} Protocol
+    entity_category: diagnostic
+
+  bus_active:
+    name: ${friendly_name} COM-MANUAL Bus Active
+    entity_category: diagnostic
+  listen_only:
+    name: ${friendly_name} Listen Only
+    entity_category: diagnostic
