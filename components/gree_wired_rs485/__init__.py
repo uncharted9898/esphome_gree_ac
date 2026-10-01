@@ -49,6 +49,8 @@ CONF_SERIAL_PROFILE = "serial_profile"
 CONF_LAST_RAW_RX = "last_raw_rx"
 CONF_FF40_APPENDIX = "ff40_appendix"
 CONF_CONTROLLER_STATE = "controller_state"
+CONF_FF40_PAYLOAD = "ff40_payload"
+CONF_FF40_CHANGES = "ff40_changes"
 
 CONF_BUS_ACTIVE = "bus_active"
 CONF_LISTEN_ONLY = "listen_only"
@@ -140,6 +142,8 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_LAST_RAW_RX): text_schema,
             cv.Optional(CONF_FF40_APPENDIX): text_schema,
             cv.Optional(CONF_CONTROLLER_STATE): text_schema,
+            cv.Optional(CONF_FF40_PAYLOAD): text_schema,
+            cv.Optional(CONF_FF40_CHANGES): text_schema,
             cv.Optional(CONF_BUS_ACTIVE): binary_schema,
             cv.Optional(CONF_LISTEN_ONLY): binary_schema,
             cv.Optional(CONF_RX_LINE_HIGH): binary_schema,
@@ -224,6 +228,8 @@ async def to_code(config):
         CONF_LAST_RAW_RX: "set_last_raw_rx_sensor",
         CONF_FF40_APPENDIX: "set_ff40_appendix_sensor",
         CONF_CONTROLLER_STATE: "set_controller_state_sensor",
+        CONF_FF40_PAYLOAD: "set_ff40_payload_sensor",
+        CONF_FF40_CHANGES: "set_ff40_changes_sensor",
     }
     for key, method in text_entities.items():
         if key in config:
