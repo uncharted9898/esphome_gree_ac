@@ -272,7 +272,7 @@ CONF_VALUE = "value"
 _SETPOINT_ACTION_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.use_id(GreeWiredRS485),
-        cv.Required(CONF_VALUE): cv.templatable(cv.float_),
+        cv.Required(CONF_VALUE): cv.templatable(cv.float_range(min=0.0, max=127.5)),
     }
 )
 
