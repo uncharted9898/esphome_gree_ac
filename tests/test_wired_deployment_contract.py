@@ -23,16 +23,14 @@ class WiredDeploymentContractTests(unittest.TestCase):
     def test_rx_is_drained_before_followup_registration(self):
         text = HEADER.read_text()
         loop_start = text.index("  void loop() override {")
-        loop_end = text.index("\n  void dump_config() override", loop_start) if "\n  void dump_config() override" in text[loop_start:] else text.index("\n private:", loop_start)
-        loop = text[loop_start:loop_end]
+        rx_pos = text.index("while (this->available())", loop_start)
+        finish_pos = text.index("this->finish_registration_response_window_();", loop_start)
+        send_pos = text.index("this->send_registration_();", loop_start)
 
-        rx_pos = loop.index("while (this->available())")
-        finish_pos = loop.index("this->finish_registration_response_window_();")
-        send_pos = loop.index("this->send_registration_();")
         self.assertLess(rx_pos, finish_pos)
         self.assertLess(finish_pos, send_pos)
-        self.assertIn("registration_response_quiet_ms_", loop)
-        self.assertIn("this->available() == 0", loop)
+        self.assertIn("registration_response_quiet_ms_", text[loop_start:send_pos])
+        self.assertIn("this->available() == 0", text[loop_start:send_pos])
 
     def test_vireo_package_uses_uart_half_duplex_and_field_mapping(self):
         text = PACKAGE.read_text()
