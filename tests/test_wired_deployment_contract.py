@@ -23,42 +23,38 @@ class WiredDeploymentContractTests(unittest.TestCase):
     def test_rx_is_drained_before_followup_registration(self):
         text = HEADER.read_text()
         loop_start = text.index("  void loop() override {")
-        loop_end = text.index("\n  void dump_config() override", loop_start) if "\n  void dump_config() override" in text[loop_start:] else text.index("\n private:", loop_start)
-        loop = text[loop_start:loop_end]
+        rx_pos = text.index("while (this->available())", loop_start)
+        finish_pos = text.index("this->finish_registration_response_window_();", loop_start)
+        send_pos = text.index("this->send_registration_();", loop_start)
 
-        rx_pos = loop.index("while (this->available())")
-        finish_pos = loop.index("this->finish_registration_response_window_();")
-        send_pos = loop.index("this->send_registration_();")
         self.assertLess(rx_pos, finish_pos)
         self.assertLess(finish_pos, send_pos)
-        self.assertIn("registration_response_quiet_ms_", loop)
-        self.assertIn("this->available() == 0", loop)
+        self.assertIn("registration_response_quiet_ms_", text[loop_start:send_pos])
+        self.assertIn("this->available() == 0", text[loop_start:send_pos])
 
-    def test_vireo_package_uses_software_direction_and_field_mapping(self):
+    def test_vireo_package_uses_uart_half_duplex_and_field_mapping(self):
         text = PACKAGE.read_text()
         uart_block = text.split("\nuart:\n", 1)[1].split("\nexternal_components:\n", 1)[0]
         self.assertIn("tx_pin: GPIO6", uart_block)
-        self.assertNotIn("flow_control_pin:", uart_block)
         self.assertIn("rx_pin: GPIO7", uart_block)
+        self.assertIn("flow_control_pin: GPIO4", uart_block)
         self.assertIn("passive_scan: false", text)
         self.assertIn("active_probe: true", text)
         self.assertIn("active_probe_interval: 1200ms", text)
         self.assertIn("registration_attempts: 4", text)
+        self.assertIn("hardware_half_duplex: true", text)
         self.assertIn("#   pin 3 -> Seeed A", text)
         self.assertIn("#   pin 4 -> Seeed B", text)
         self.assertIn("#   120R termination -> OFF", text)
         self.assertIn("#   5V selector -> IN", text)
-        self.assertIn("GPIO4 is NOT registered as UART RTS/flow-control", text)
+        self.assertIn("ESP-IDF hardware half-duplex RS485", text)
 
-    def test_direction_guard_runs_before_uart_and_reasserts_low(self):
+    def test_hardware_half_duplex_does_not_manual_toggle_de(self):
         text = HEADER.read_text()
-        self.assertIn(
-            "return setup_priority::POWER - 1.0f;",
-            text,
-        )
-        self.assertIn("this->force_receive_mode_();", text)
-        self.assertIn("gpio_set_direction(gpio, GPIO_MODE_OUTPUT)", text)
-        self.assertGreaterEqual(text.count("gpio_set_level(gpio, 0)"), 2)
+        self.assertIn("hardware_half_duplex_", text)
+        self.assertIn('this->hardware_half_duplex_ ? "UART_RS485_HALF_DUPLEX" : "MANUAL_GPIO"', text)
+        self.assertIn("if (!this->hardware_half_duplex_ && !this->set_direction_level_(1))", text)
+        self.assertIn("if (!this->hardware_half_duplex_) {", text)
 
 
 if __name__ == "__main__":

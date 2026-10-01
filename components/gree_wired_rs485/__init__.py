@@ -14,6 +14,7 @@ CONF_PASSIVE_SCAN_WINDOW = "passive_scan_window"
 CONF_ACTIVE_PROBE = "active_probe"
 CONF_ACTIVE_PROBE_INTERVAL = "active_probe_interval"
 CONF_REGISTRATION_ATTEMPTS = "registration_attempts"
+CONF_HARDWARE_HALF_DUPLEX = "hardware_half_duplex"
 
 CONF_BYTES_RECEIVED = "bytes_received"
 CONF_VALID_FRAMES = "valid_frames"
@@ -99,6 +100,7 @@ CONFIG_SCHEMA = (
                 ),
             ),
             cv.Optional(CONF_REGISTRATION_ATTEMPTS, default=4): cv.int_range(min=1, max=10),
+            cv.Optional(CONF_HARDWARE_HALF_DUPLEX, default=False): cv.boolean,
             cv.Optional(CONF_BYTES_RECEIVED): counter_schema,
             cv.Optional(CONF_VALID_FRAMES): counter_schema,
             cv.Optional(CONF_CHECKSUM_FAILURES): counter_schema,
@@ -162,6 +164,7 @@ async def to_code(config):
     cg.add(var.set_active_probe(config[CONF_ACTIVE_PROBE]))
     cg.add(var.set_active_probe_interval(config[CONF_ACTIVE_PROBE_INTERVAL]))
     cg.add(var.set_registration_attempts(config[CONF_REGISTRATION_ATTEMPTS]))
+    cg.add(var.set_hardware_half_duplex(config[CONF_HARDWARE_HALF_DUPLEX]))
     if CONF_RX_LINE_GPIO in config:
         cg.add(var.set_rx_line_gpio(config[CONF_RX_LINE_GPIO]))
     if CONF_DIRECTION_GPIO in config:
