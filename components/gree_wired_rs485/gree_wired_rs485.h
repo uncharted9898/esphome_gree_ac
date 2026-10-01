@@ -90,6 +90,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   float get_setup_priority() const override { return setup_priority::POWER - 1.0f; }
 
   void setup() override {
+    this->setup_started_at_ = millis();
     this->force_receive_mode_();
 
     // GPIO4 is never delegated to ESP-IDF RTS. In passive mode it stays LOW
@@ -644,7 +645,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
 
   uint32_t frame_timeout_ms_{75};
-  uint32_t setup_started_at_{millis()};
+  uint32_t setup_started_at_{0};
   uint32_t active_probe_interval_ms_{1500};
   uint32_t active_probe_sent_at_{0};
   uint32_t bus_idle_timeout_ms_{10000};
