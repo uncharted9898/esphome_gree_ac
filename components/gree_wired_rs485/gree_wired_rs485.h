@@ -44,6 +44,16 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_hardware_half_duplex(bool enabled) { this->hardware_half_duplex_ = enabled; }
   void set_persistent_controller(bool enabled) { this->persistent_controller_ = enabled; }
 
+  bool set_controller_setpoint_celsius(float value) {
+    if (!controller::set_setpoint_celsius(this->controller_state_, value)) return false;
+    this->publish_controller_state_();
+    return true;
+  }
+  void set_controller_mode_power_raw(uint8_t value) {
+    controller::set_mode_power_raw(this->controller_state_, value);
+    this->publish_controller_state_();
+  }
+
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
   void set_checksum_failures_sensor(sensor::Sensor *s) { this->checksum_failures_sensor_ = s; }
