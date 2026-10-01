@@ -1,5 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
+from esphome import automation
 from esphome.components import binary_sensor, sensor, text_sensor, uart
 from esphome.const import CONF_ID
 
@@ -65,6 +66,12 @@ CONF_DIRECTION_GPIO = "direction_gpio"
 gree_wired_ns = cg.esphome_ns.namespace("gree_wired_rs485")
 GreeWiredRS485 = gree_wired_ns.class_(
     "GreeWiredRS485", cg.Component, uart.UARTDevice
+)
+SetControllerSetpointAction = gree_wired_ns.class_(
+    "SetControllerSetpointAction", automation.Action
+)
+SetControllerModePowerRawAction = gree_wired_ns.class_(
+    "SetControllerModePowerRawAction", automation.Action
 )
 
 counter_schema = sensor.sensor_schema(sensor.Sensor, accuracy_decimals=0)
@@ -249,3 +256,48 @@ async def to_code(config):
         if key in config:
             entity = await binary_sensor.new_binary_sensor(config[key])
             cg.add(getattr(var, method)(entity))
+
+
+CONF_VALUE = "value"
+
+_SETPOINT_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(GreeWiredRS485),
+        cv.Required(CONF_VALUE): cv.templatable(cv.float_),
+    }
+)
+
+_MODE_POWER_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(GreeWiredRS485),
+        cv.Required(CONF_VALUE): cv.templatable(cv.int_range(min=0, max=255)),
+    }
+)
+
+
+@automation.register_action(
+    "gree_wired_rs485.set_controller_setpoint",
+    SetControllerSetpointAction,
+    _SETPOINT_ACTION_SCHEMA,
+    synchronous=True,
+)
+async def set_controller_setpoint_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    value = await cg.templatable(config[CONF_VALUE], args, cg.float_)
+    cg.add(var.set_value(value))
+    return var
+
+
+@automation.register_action(
+    "gree_wired_rs485.set_controller_mode_power_raw",
+    SetControllerModePowerRawAction,
+    _MODE_POWER_ACTION_SCHEMA,
+    synchronous=True,
+)
+async def set_controller_mode_power_raw_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    value = await cg.templatable(config[CONF_VALUE], args, cg.uint8)
+    cg.add(var.set_value(value))
+    return var
