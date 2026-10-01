@@ -35,6 +35,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_passive_scan_window(uint32_t window_ms) { this->passive_scan_window_ms_ = window_ms; }
   void set_rx_line_gpio(int gpio) { this->rx_line_gpio_ = gpio; }
   void set_direction_gpio(int gpio) { this->direction_gpio_ = gpio; }
+  void set_active_probe(bool active_probe) { this->active_probe_ = active_probe; }
+  void set_active_probe_interval(uint32_t interval_ms) { this->active_probe_interval_ms_ = interval_ms; }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
@@ -90,10 +92,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void setup() override {
     this->force_receive_mode_();
 
-    // The deployment UART is RX-only: no TX pin and no UART flow-control/RTS
-    // ownership. GPIO4 is owned here as a static LOW direction guard, leaving
-    // the TP8485E driver disabled and receiver enabled for the whole app run.
-    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in guarded RX-only mode");
+    // GPIO4 is never delegated to ESP-IDF RTS. In passive mode it stays LOW
+    // continuously. In active-probe mode this component alone may raise DE for
+    // the duration of a bounded, protocol-valid discovery frame.
+    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in software-directed RS485 mode");
     ESP_LOGI(TAG, "Protocol profile: 1200 baud 8N1, 7E 7E framing, type 0x11, XOR checksum");
     if (this->passive_scan_) {
       ESP_LOGI(TAG, "Passive UART profile scan enabled; RS485 transmitter remains disabled");
@@ -104,7 +106,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       this->publish_serial_profile_();
     }
 
-    if (this->listen_only_sensor_ != nullptr) this->listen_only_sensor_->publish_state(true);
+    if (this->listen_only_sensor_ != nullptr) this->listen_only_sensor_->publish_state(!this->active_probe_);
     if (this->bus_active_sensor_ != nullptr) this->bus_active_sensor_->publish_state(false);
     if (this->electrical_activity_sensor_ != nullptr) this->electrical_activity_sensor_->publish_state(false);
     if (this->direction_high_seen_sensor_ != nullptr) this->direction_high_seen_sensor_->publish_state(false);
@@ -118,7 +120,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void dump_config() override {
     ESP_LOGCONFIG(TAG, "Gree wired-controller RS485 monitor:");
-    ESP_LOGCONFIG(TAG, "  Mode: listen-only (no transmit method compiled)");
+    ESP_LOGCONFIG(TAG, "  Mode: %s", this->active_probe_ ? "active discovery" : "listen-only");
+    if (this->active_probe_) {
+      ESP_LOGCONFIG(TAG, "  Active probe interval: %lu ms",
+                    static_cast<unsigned long>(this->active_probe_interval_ms_));
+    }
     ESP_LOGCONFIG(TAG, "  Frame gap timeout: %lu ms",
                   static_cast<unsigned long>(this->frame_timeout_ms_));
     ESP_LOGCONFIG(TAG, "  Bus idle timeout: %lu ms",
@@ -142,6 +148,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       ++this->frame_timeouts_;
       this->publish_counters_();
       ESP_LOGW(TAG, "Discarded partial COM-MANUAL frame after inter-byte timeout");
+    }
+
+    if (this->active_probe_ && this->should_send_active_probe_(now)) {
+      this->send_active_probe_(now);
     }
 
     while (this->available()) {
@@ -347,6 +357,82 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 #endif
   }
 
+  bool set_direction_level_(int level) {
+#ifdef USE_ESP32
+    if (this->direction_gpio_ < 0) return false;
+    const auto gpio = static_cast<gpio_num_t>(this->direction_gpio_);
+    const esp_err_t err = gpio_set_level(gpio, level ? 1 : 0);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to set RS485 DE GPIO%d=%d: %s",
+               this->direction_gpio_, level ? 1 : 0, esp_err_to_name(err));
+      return false;
+    }
+    return true;
+#else
+    return false;
+#endif
+  }
+
+  bool should_send_active_probe_(uint32_t now) const {
+    if (!this->active_probe_ || this->active_probe_sent_) return false;
+    if (this->last_byte_at_ != 0) return false;
+    return static_cast<uint32_t>(now - this->setup_started_at_) >= this->active_probe_interval_ms_;
+  }
+
+  void send_active_probe_(uint32_t now) {
+    // Recovered indoor-unit startup poll from multiple independent Gree wired
+    // controller captures. This frame is a discovery/presence poll (00->FF),
+    // not a power/mode/setpoint command.
+    static const uint8_t DISCOVERY_POLL[] = {
+        0x7E, 0x7E, 0x00, 0xFF, 0x11, 0x0E,
+        0x00, 0x00, 0x02, 0x00, 0x3C, 0x3C, 0x00,
+        0xF6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x14};
+
+    this->active_probe_sent_ = true;
+    this->active_probe_sent_at_ = now;
+
+    this->tx_in_progress_ = true;
+    if (!this->set_direction_level_(1)) {
+      this->tx_in_progress_ = false;
+      ESP_LOGE(TAG, "Active discovery probe aborted: could not enable RS485 driver");
+      this->force_receive_mode_();
+      return;
+    }
+
+    // The Seeed board routes XIAO D4/GPIO6 to TP8485E DI. UART TX is not
+    // registered in YAML so ESP-IDF cannot own DE; route TX only for this
+    // bounded frame, then disconnect it again.
+#ifdef USE_ESP32
+    const uart_port_t uart_num = static_cast<uart_port_t>(0);
+    esp_err_t err = uart_set_pin(uart_num, 6, UART_PIN_NO_CHANGE,
+                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "Active discovery probe aborted: uart_set_pin TX failed: %s",
+               esp_err_to_name(err));
+      this->force_receive_mode_();
+      this->tx_in_progress_ = false;
+      return;
+    }
+#endif
+
+    ESP_LOGI(TAG, "TX discovery poll 00->FF: %s",
+             hex_(std::vector<uint8_t>(DISCOVERY_POLL,
+                                       DISCOVERY_POLL + sizeof(DISCOVERY_POLL))).c_str());
+    this->write_array(DISCOVERY_POLL, sizeof(DISCOVERY_POLL));
+    const auto flush_result = this->flush();
+
+#ifdef USE_ESP32
+    uart_set_pin(uart_num, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
+                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+#endif
+    this->force_receive_mode_();
+    this->tx_in_progress_ = false;
+
+    if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
+      ESP_LOGW(TAG, "Active discovery probe TX flush was not confirmed");
+    }
+  }
+
   int read_gpio_level_(int gpio) const {
 #ifdef USE_ESP32
     if (gpio >= 0) return gpio_get_level(static_cast<gpio_num_t>(gpio));
@@ -359,7 +445,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->rx_line_activity_.observe(rx_level);
 
     const int direction_level = this->read_gpio_level_(this->direction_gpio_);
-    if (direction_level > 0 && !this->direction_high_seen_) {
+    if (direction_level > 0 && !this->tx_in_progress_ && !this->direction_high_seen_) {
       this->direction_high_seen_ = true;
       if (this->direction_high_seen_sensor_ != nullptr) {
         this->direction_high_seen_sensor_->publish_state(true);
@@ -579,6 +665,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
 
   uint32_t frame_timeout_ms_{75};
+  uint32_t setup_started_at_{millis()};
+  uint32_t active_probe_interval_ms_{1500};
+  uint32_t active_probe_sent_at_{0};
   uint32_t bus_idle_timeout_ms_{10000};
   uint32_t last_byte_at_{0};
   uint32_t last_valid_frame_at_{0};
@@ -606,6 +695,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t route_ff_40_frames_{0};
 
   bool log_frames_{true};
+  bool active_probe_{false};
+  bool active_probe_sent_{false};
+  bool tx_in_progress_{false};
   bool bus_active_{false};
   bool passive_scan_{false};
   bool scan_locked_{false};
