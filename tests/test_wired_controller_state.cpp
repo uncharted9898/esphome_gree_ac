@@ -20,6 +20,13 @@ int main() {
   auto state = controller::reference_state();
   assert(controller::unit_signature(state) == controller::REFERENCE_UNIT_SIGNATURE);
   assert(controller::mode_power_raw(state) == 0x11);
+  assert(!controller::power_enabled(state));
+  controller::set_power_enabled(state, true);
+  assert(controller::power_enabled(state));
+  assert(controller::mode_power_raw(state) == 0x19);
+  controller::set_power_enabled(state, false);
+  assert(!controller::power_enabled(state));
+  assert(controller::mode_power_raw(state) == 0x11);
   assert(controller::secondary_control_raw(state) == 0x1B);
   assert(controller::setpoint_x2(state) == 0x28);
   assert(std::fabs(controller::setpoint_celsius(state) - 20.0f) < 0.001f);
@@ -38,6 +45,10 @@ int main() {
   const controller::UnitSignature other_signature{0x0D, 0x30, 0x83};
   controller::set_unit_signature(state, other_signature);
   assert(controller::unit_signature(state) == other_signature);
+
+  assert(controller::set_payload_byte(state, 5, 0xA5));
+  assert(state.payload[5] == 0xA5);
+  assert(!controller::set_payload_byte(state, controller::PAYLOAD_SIZE, 0x00));
 
   controller::set_mode_power_raw(state, 0x19);
   controller::set_secondary_control_raw(state, 0x1B);
