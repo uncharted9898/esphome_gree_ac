@@ -32,8 +32,8 @@ inline uint8_t counter_for_attempt(size_t attempt) {
   return ACCEPT_COUNTERS[attempt % ACCEPT_COUNTERS.size()];
 }
 
-inline std::vector<uint8_t> make_frame(size_t attempt,
-                                       const UnitSignature &unit_signature) {
+inline std::vector<uint8_t> make_frame(
+    size_t attempt, const UnitSignature &unit_signature) {
   auto state = controller::reference_state(unit_signature);
   return controller::encode(state, counter_for_attempt(attempt));
 }
