@@ -101,6 +101,8 @@ gree_wired_rs485:
   frame_timeout: 75ms
   bus_idle_timeout: 10s
   log_frames: true
+  passive_scan: true
+  passive_scan_window: 2s
 
   bytes_received:
     name: ${friendly_name} Bytes Received
@@ -169,6 +171,9 @@ gree_wired_rs485:
     disabled_by_default: true
   protocol:
     name: ${friendly_name} Protocol
+    entity_category: diagnostic
+  serial_profile:
+    name: ${friendly_name} Serial Profile
     entity_category: diagnostic
 
   bus_active:
