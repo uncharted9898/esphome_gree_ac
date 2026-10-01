@@ -49,6 +49,32 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("#   5V selector -> IN", text)
         self.assertIn("ESP-IDF hardware half-duplex RS485", text)
 
+    def test_registration_is_target_startup_gated(self):
+        text = HEADER.read_text()
+        should_start = text.index("  bool should_send_registration_")
+        should_end = text.index("\n  void learn_registration_signature_", should_start)
+        should = text[should_start:should_end]
+        self.assertIn("registration_armed_", should)
+        self.assertIn("registration_unit_signature_learned_", should)
+        self.assertNotIn("setup_started_at_", should)
+        self.assertNotIn("registration_start_delay_ms_", text)
+
+        process_start = text.index("  void process_frame_")
+        process_end = text.index("\n  void publish_counters_", process_start)
+        process = text[process_start:process_end]
+        self.assertIn("learn_registration_signature_(frame)", process)
+        self.assertIn("observe_startup_poll_", process)
+        self.assertIn("ROUTE_00_FF", process)
+
+        send_start = text.index("  void send_registration_() {")
+        send_end = text.index("\n  int read_gpio_level_", send_start)
+        send = text[send_start:send_end]
+        self.assertIn("registration::make_frame", send)
+        self.assertIn("registration_unit_signature_", send)
+        self.assertNotIn("REGISTRATION_TEMPLATE", send)
+        self.assertIn("armed=%s", text)
+        self.assertIn("sig=%s unit=%02X%02X%02X", text)
+
     def test_registration_tx_evidence_is_persisted(self):
         text = HEADER.read_text()
         send_start = text.index("  void send_registration_() {")
