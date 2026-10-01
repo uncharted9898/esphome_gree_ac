@@ -34,6 +34,7 @@ python3 -m py_compile \
   components/sinclair_ac/climate.py \
   components/gree_oem_boot_probe/__init__.py \
   components/gree_oem_report_sensors/__init__.py \
+  components/gree_wired_rs485/__init__.py \
   tools/firmware_research/rtl8720cf_image.py \
   tools/firmware_research/analyze_rtl8720cf.py \
   tools/firmware_research/rtl8720cf_properties.py \
@@ -65,6 +66,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_wired_protocol.cpp -o /tmp/test_wired_protocol
 /tmp/test_wired_protocol
+
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_line_activity.cpp -o /tmp/test_line_activity
+/tmp/test_line_activity
 
 if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
   echo 'Examples contain an unpinned or obsolete external component source' >&2
