@@ -27,6 +27,8 @@ gree_livo_api_key: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
 api_encryption_key: AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
 gree_livo_web_username: ci-user
 gree_livo_web_password: ci-password
+gree_vireo_web_username: ci-user
+gree_vireo_web_password: ci-password
 EOF
 fi
 
