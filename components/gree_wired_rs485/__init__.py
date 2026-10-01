@@ -91,14 +91,14 @@ CONFIG_SCHEMA = (
                 ),
             ),
             cv.Optional(CONF_ACTIVE_PROBE, default=False): cv.boolean,
-            cv.Optional(CONF_ACTIVE_PROBE_INTERVAL, default="300ms"): cv.All(
+            cv.Optional(CONF_ACTIVE_PROBE_INTERVAL, default="1200ms"): cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(
-                    min=cv.TimePeriod(milliseconds=100),
+                    min=cv.TimePeriod(milliseconds=500),
                     max=cv.TimePeriod(seconds=10),
                 ),
             ),
-            cv.Optional(CONF_REGISTRATION_ATTEMPTS, default=8): cv.int_range(min=1, max=10),
+            cv.Optional(CONF_REGISTRATION_ATTEMPTS, default=4): cv.int_range(min=1, max=10),
             cv.Optional(CONF_BYTES_RECEIVED): counter_schema,
             cv.Optional(CONF_VALID_FRAMES): counter_schema,
             cv.Optional(CONF_CHECKSUM_FAILURES): counter_schema,
