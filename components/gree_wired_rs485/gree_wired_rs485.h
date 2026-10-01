@@ -82,14 +82,18 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_electrical_activity_sensor(binary_sensor::BinarySensor *s) { this->electrical_activity_sensor_ = s; }
   void set_direction_high_seen_sensor(binary_sensor::BinarySensor *s) { this->direction_high_seen_sensor_ = s; }
 
-  float get_setup_priority() const override { return setup_priority::DATA; }
+  // Run before the UART bus (setup_priority::BUS). The Seeed board ties
+  // TP8485E DE and /RE to the same GPIO, so the safest software-only startup is
+  // to force that pin LOW before ESPHome configures the RX-only UART.
+  float get_setup_priority() const override { return setup_priority::POWER - 1.0f; }
 
   void setup() override {
-    // This component intentionally has no UART write path. With the Seeed XIAO
-    // RS485 expansion board, uart.flow_control_pin remains low while idle, which
-    // leaves DE disabled and /RE enabled. Keep the hardware 120-ohm termination
-    // switch OFF when joining an already-terminated COM-MANUAL bus.
-    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in hardware listen-only mode");
+    this->force_receive_mode_();
+
+    // The deployment UART is RX-only: no TX pin and no UART flow-control/RTS
+    // ownership. GPIO4 is owned here as a static LOW direction guard, leaving
+    // the TP8485E driver disabled and receiver enabled for the whole app run.
+    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in guarded RX-only mode");
     ESP_LOGI(TAG, "Protocol profile: 1200 baud 8N1, 7E 7E framing, type 0x11, XOR checksum");
     if (this->passive_scan_) {
       ESP_LOGI(TAG, "Passive UART profile scan enabled; RS485 transmitter remains disabled");
@@ -308,6 +312,41 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     return out;
   }
 
+  void force_receive_mode_() {
+#ifdef USE_ESP32
+    if (this->direction_gpio_ < 0) return;
+
+    const auto gpio = static_cast<gpio_num_t>(this->direction_gpio_);
+
+    // Preload the output latch LOW before switching the pad to output. This
+    // avoids a software-created HIGH pulse during direction changes.
+    esp_err_t err = gpio_set_level(gpio, 0);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to preload RS485 DE LOW on GPIO%d: %s",
+               this->direction_gpio_, esp_err_to_name(err));
+      this->mark_failed();
+      return;
+    }
+
+    err = gpio_set_direction(gpio, GPIO_MODE_OUTPUT);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to configure RS485 DE GPIO%d as output: %s",
+               this->direction_gpio_, esp_err_to_name(err));
+      this->mark_failed();
+      return;
+    }
+
+    // The internal pull-down is not relied on for normal operation; it simply
+    // reinforces the receive state while the application owns the pin.
+    gpio_pulldown_en(gpio);
+    gpio_pullup_dis(gpio);
+    gpio_set_level(gpio, 0);
+
+    ESP_LOGI(TAG, "RS485 direction guard active: GPIO%d forced LOW; UART is RX-only",
+             this->direction_gpio_);
+#endif
+  }
+
   int read_gpio_level_(int gpio) const {
 #ifdef USE_ESP32
     if (gpio >= 0) return gpio_get_level(static_cast<gpio_num_t>(gpio));
@@ -325,9 +364,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       if (this->direction_high_seen_sensor_ != nullptr) {
         this->direction_high_seen_sensor_->publish_state(true);
       }
-      ESP_LOGW(TAG,
-               "RS485 DE was observed HIGH in listen-only firmware; disconnect the bus if "
-               "this repeats and verify GPIO4/DE reset bias");
+      ESP_LOGE(TAG,
+               "RS485 DE was observed HIGH despite the software direction guard; forcing "
+               "GPIO%d LOW again",
+               this->direction_gpio_);
+      this->force_receive_mode_();
     }
   }
 
@@ -384,8 +425,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->assembler_.reset();
 
     // Receiver-only qualification: changing UART decode settings does not
-    // transmit anything on RS485. The ESP-IDF half-duplex flow-control pin
-    // remains in receive state because there is still no write path.
+    // transmit anything on RS485. The deployment UART owns RX only; GPIO4 is
+    // deliberately not registered as UART RTS/flow control.
     this->parent_->set_baud_rate(profile.baud);
     this->parent_->set_data_bits(8);
     this->parent_->set_stop_bits(1);
