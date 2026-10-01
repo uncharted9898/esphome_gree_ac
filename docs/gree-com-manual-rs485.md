@@ -334,3 +334,17 @@ available in logic-analyzer screenshots at present. No service-query packet is
 transmitted until those bytes are recovered exactly or independently captured;
 the implementation keeps service/query traffic separate from the proven
 controller-state path.
+
+
+## Retained cold-start frame journal
+
+The first 16 checksum-valid COM-MANUAL frames after ESP boot are retained with
+their semantic role, ESP uptime and complete raw frame. Five seconds after the
+first valid frame starts the bounded capture window, the journal is replayed
+once through the logger at the next health interval. Continuous `FF -> 40`
+traffic cannot keep the window open indefinitely.
+
+This complements the original 128-byte startup raw buffer: malformed or
+not-yet-decodable traffic still appears in the raw capture, while complete
+valid discovery, registration and expanded-status frames survive long enough
+to be visible after Wi-Fi/API logging attaches.
