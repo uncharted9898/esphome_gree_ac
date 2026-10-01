@@ -11,6 +11,7 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
+#include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
 #include "esphome/core/helpers.h"
@@ -47,11 +48,17 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool set_controller_setpoint_celsius(float value) {
     if (!controller::set_setpoint_celsius(this->controller_state_, value)) return false;
     this->publish_controller_state_();
+    ESP_LOGI(TAG,
+             "CTRL staged setpoint=%.1fC; will be encoded on the next eligible indoor poll",
+             value);
     return true;
   }
   void set_controller_mode_power_raw(uint8_t value) {
     controller::set_mode_power_raw(this->controller_state_, value);
     this->publish_controller_state_();
+    ESP_LOGI(TAG,
+             "CTRL staged mode_power=0x%02X; will be encoded on the next eligible indoor poll",
+             value);
   }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
@@ -1107,6 +1114,39 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   binary_sensor::BinarySensor *electrical_activity_sensor_{nullptr};
   binary_sensor::BinarySensor *direction_high_seen_sensor_{nullptr};
   binary_sensor::BinarySensor *registered_status_sensor_{nullptr};
+};
+
+template<typename... Ts> class SetControllerSetpointAction final : public Action<Ts...> {
+ public:
+  explicit SetControllerSetpointAction(GreeWiredRS485 *parent) : parent_(parent) {}
+
+  template<typename V> void set_value(V value) { this->value_ = value; }
+
+  void play(Ts... x) override {
+    const float value = this->value_.value(x...);
+    if (!this->parent_->set_controller_setpoint_celsius(value)) {
+      ESP_LOGW(TAG, "Rejected staged controller setpoint %.2fC", value);
+    }
+  }
+
+ protected:
+  GreeWiredRS485 *parent_;
+  TemplatableValue<float, Ts...> value_{};
+};
+
+template<typename... Ts> class SetControllerModePowerRawAction final : public Action<Ts...> {
+ public:
+  explicit SetControllerModePowerRawAction(GreeWiredRS485 *parent) : parent_(parent) {}
+
+  template<typename V> void set_value(V value) { this->value_ = value; }
+
+  void play(Ts... x) override {
+    this->parent_->set_controller_mode_power_raw(this->value_.value(x...));
+  }
+
+ protected:
+  GreeWiredRS485 *parent_;
+  TemplatableValue<uint8_t, Ts...> value_{};
 };
 
 }  // namespace gree_wired_rs485
