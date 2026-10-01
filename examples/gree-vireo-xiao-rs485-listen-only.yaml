@@ -20,6 +20,7 @@ logger:
   logs:
     gree_wired_rs485: INFO
     uart: WARN
+    uart_debug: DEBUG
 
 wifi:
   ssid: !secret wifi_ssid
@@ -57,6 +58,16 @@ uart:
   parity: NONE
   stop_bits: 1
   rx_buffer_size: 512
+
+  debug:
+    direction: RX
+    dummy_receiver: false
+    debug_prefix: "[COM-MANUAL] "
+    after:
+      timeout: 50ms
+      bytes: 128
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ' ', debug_prefix);
 
 external_components:
   - source:
