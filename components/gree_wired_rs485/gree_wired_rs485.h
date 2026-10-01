@@ -516,10 +516,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              static_cast<unsigned>(this->registration_response_capture_.size()),
              response_hex.empty() ? "-" : response_hex.c_str());
 
-    if (this->valid_frames_ > this->registration_valid_frames_at_send_) {
+    if (this->registration_accept_evidence_) {
       this->registration_established_ = true;
       this->registration_armed_ = false;
-      ESP_LOGI(TAG, "REG accepted: valid wired frame observed during response window");
+      ESP_LOGI(TAG,
+               "REG accepted: FF->40 expanded beyond pre-registration layout");
     } else if (this->registration_attempts_sent_ >= this->registration_attempt_limit_) {
       this->registration_armed_ = false;
       ESP_LOGI(TAG, "REG window exhausted after %u target-gated attempts",
@@ -588,6 +589,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // At 1200 baud this is the critical distinction from the old burst logic.
     this->last_registration_at_ = millis();
     this->registration_valid_frames_at_send_ = this->valid_frames_;
+    this->registration_accept_evidence_ = false;
     this->registration_response_capture_.clear();
     this->registration_waiting_for_response_ = true;
 
@@ -714,6 +716,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->learn_registration_signature_(frame);
     if (frame.route == protocol::RouteKind::ROUTE_00_FF) {
       this->observe_startup_poll_(this->last_valid_frame_at_);
+    }
+    if (this->registration_waiting_for_response_ &&
+        frame.route == protocol::RouteKind::ROUTE_FF_40 &&
+        frame.body_length > 0x17) {
+      this->registration_accept_evidence_ = true;
+      ESP_LOGI(TAG,
+               "REG evidence: FF->40 body expanded to 0x%02X during response window",
+               frame.body_length);
     }
     if (this->passive_scan_ && !this->scan_locked_) {
       this->scan_locked_ = true;
@@ -894,6 +904,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool registration_unit_signature_learned_{false};
   registration::UnitSignature registration_unit_signature_{
       registration::REFERENCE_UNIT_SIGNATURE};
+  bool registration_accept_evidence_{false};
   bool last_registration_tx_seen_{false};
   bool last_registration_tx_flush_ok_{false};
   uint32_t registration_valid_frames_at_send_{0};
