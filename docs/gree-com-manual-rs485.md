@@ -74,8 +74,9 @@ packages:
     refresh: 5min
 ```
 
-This keeps credentials local while all hardware, diagnostics, parser and future
-COM-MANUAL decoder changes remain in the repository package.
+This keeps device-specific Wi-Fi/OTA values local while all hardware,
+diagnostics, parser, Web UI and future COM-MANUAL decoder changes remain in
+the repository package.
 
 ## Established framing profile
 
