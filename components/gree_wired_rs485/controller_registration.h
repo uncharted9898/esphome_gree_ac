@@ -13,6 +13,8 @@ namespace registration {
 
 using UnitSignature = controller::UnitSignature;
 
+static constexpr size_t UNIT_SIGNATURE_INDEX =
+    protocol::HEADER_SIZE + controller::UNIT_SIGNATURE_PAYLOAD_INDEX;
 static constexpr size_t COUNTER_INDEX =
     protocol::HEADER_SIZE + controller::ACCEPT_COUNTER_PAYLOAD_INDEX;
 static constexpr UnitSignature REFERENCE_UNIT_SIGNATURE =
