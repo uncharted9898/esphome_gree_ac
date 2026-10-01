@@ -61,17 +61,15 @@ ota:
 # With A/B disconnected the startup FE flash is absent. Do not use FE as an A/B
 # polarity test.
 #
-# ESP-IDF hardware half-duplex RS485:
-# GPIO4 is routed as UART RTS/DE. ESP-IDF UART_MODE_RS485_HALF_DUPLEX asserts
-# DE only while bytes are physically leaving the UART and returns it to receive
-# automatically at the end of the frame. This removes software scheduling from
-# the critical TX->RX turnaround.
+# Deterministic manual RS485 direction:
+# GPIO4 drives the Seeed board's tied DE + /RE input directly. LOW is receive,
+# HIGH is transmit. The component owns GPIO4 explicitly so the receiver remains
+# enabled whenever no frame is actually being written.
 #
 uart:
   id: gree_com_manual_uart
   tx_pin: GPIO6
   rx_pin: GPIO7
-  flow_control_pin: GPIO4
   baud_rate: 1200
   data_bits: 8
   parity: NONE
@@ -107,7 +105,9 @@ gree_wired_rs485:
   active_probe: true
   active_probe_interval: 1200ms
   registration_attempts: 4
-  hardware_half_duplex: true
+  silent_bootstrap_probe: true
+  silent_bootstrap_delay: 5s
+  hardware_half_duplex: false
   # Keep continuous controller replies disabled during protocol qualification.
   persistent_controller: false
   rx_line_gpio: 7
