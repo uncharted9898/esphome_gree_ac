@@ -373,7 +373,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                static_cast<unsigned>(this->startup_rx_capture_.size()),
                this->startup_rx_capture_.empty() ? "-" : hex_(this->startup_rx_capture_).c_str());
 
-      if (!this->startup_trace_replayed_ && !this->startup_frame_trace_.empty()) {
+      const bool startup_trace_window_complete =
+          this->first_valid_frame_at_ != 0 &&
+          static_cast<uint32_t>(now - this->first_valid_frame_at_) >=
+              this->startup_trace_replay_delay_ms_;
+      if (!this->startup_trace_replayed_ && !this->startup_frame_trace_.empty() &&
+          startup_trace_window_complete) {
         ESP_LOGI(TAG, "STARTUP retained valid frame trace count=%u",
                  static_cast<unsigned>(this->startup_frame_trace_.size()));
         for (size_t i = 0; i < this->startup_frame_trace_.size(); ++i) {
@@ -867,6 +872,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     ++this->valid_frames_;
     this->last_valid_frame_at_ = millis();
+    if (this->first_valid_frame_at_ == 0) {
+      this->first_valid_frame_at_ = this->last_valid_frame_at_;
+    }
 
     // Registration is synchronized to the target's startup traffic. FF->40
     // provides the target-specific three-byte signature used in controller
@@ -1050,6 +1058,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t bus_idle_timeout_ms_{10000};
   uint32_t last_byte_at_{0};
   uint32_t last_valid_frame_at_{0};
+  uint32_t first_valid_frame_at_{0};
+  uint32_t startup_trace_replay_delay_ms_{5000};
   uint32_t last_health_log_at_{0};
   uint32_t last_health_byte_count_{0};
   uint32_t health_log_interval_ms_{10000};
