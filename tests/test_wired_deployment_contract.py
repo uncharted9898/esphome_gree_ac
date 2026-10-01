@@ -146,6 +146,20 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("accept_counter", runtime)
         self.assertIn("controller_responses_sent_", runtime)
 
+    def test_controller_actions_stage_state_without_direct_tx(self):
+        text = HEADER.read_text()
+        self.assertIn("class SetControllerSetpointAction", text)
+        self.assertIn("class SetControllerModePowerRawAction", text)
+        self.assertIn("set_controller_setpoint_celsius", text)
+        self.assertIn("set_controller_mode_power_raw", text)
+
+        setpoint_start = text.index("class SetControllerSetpointAction")
+        mode_start = text.index("class SetControllerModePowerRawAction")
+        action_tail = text[setpoint_start:]
+        self.assertNotIn("write_array", action_tail)
+        self.assertNotIn("flush()", action_tail)
+        self.assertLess(setpoint_start, mode_start)
+
     def test_registration_tx_evidence_is_persisted(self):
         text = HEADER.read_text()
         send_start = text.index("  void send_registration_() {")
