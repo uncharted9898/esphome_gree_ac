@@ -4,8 +4,6 @@ substitutions:
   wifi_ssid: ""
   wifi_password: ""
   ota_password: ""
-  web_username: "gree"
-  web_password: "change-me"
 
 esphome:
   name: ${device_name}
@@ -39,10 +37,6 @@ web_server:
   log: false
   ota: false
   include_internal: false
-  auth:
-    type: digest
-    username: "${web_username}"
-    password: "${web_password}"
 
 ota:
   - platform: esphome
