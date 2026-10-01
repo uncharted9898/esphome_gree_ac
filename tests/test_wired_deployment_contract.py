@@ -16,7 +16,8 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("should_send_registration_", text)
         self.assertIn("send_registration_", text)
         self.assertIn("registration_attempt_limit_", text)
-        self.assertIn("registration::make_frame", text)
+        self.assertIn("controller::encode", text)
+        self.assertIn("registration::counter_for_attempt", text)
         self.assertIn("0x7E, 0x7E, 0xFF, 0x00, 0x11, 0x22", registration)
         self.assertIn("frame[COUNTER_INDEX]", registration)
         self.assertIn("this->write_array(frame.data(), frame.size());", text)
@@ -73,7 +74,9 @@ class WiredDeploymentContractTests(unittest.TestCase):
         send_start = text.index("  void send_registration_() {")
         send_end = text.index("\n  int read_gpio_level_", send_start)
         send = text[send_start:send_end]
-        self.assertIn("registration::make_frame", send)
+        self.assertIn("controller::encode", send)
+        self.assertIn("registration::counter_for_attempt", send)
+        self.assertIn("controller::set_accept_counter", send)
         self.assertIn("registration_unit_signature_", send)
         self.assertNotIn("REGISTRATION_TEMPLATE", send)
         self.assertIn("armed=%s", text)
@@ -120,7 +123,9 @@ class WiredDeploymentContractTests(unittest.TestCase):
         runtime_start = text.index("  void send_runtime_controller_response_")
         runtime_end = text.index("\n  int read_gpio_level_", runtime_start)
         runtime = text[runtime_start:runtime_end]
-        self.assertIn("registration::make_frame", runtime)
+        self.assertIn("controller::encode", runtime)
+        self.assertIn("registration::counter_for_attempt", runtime)
+        self.assertIn("controller::set_accept_counter", runtime)
         self.assertIn("registration::COUNTER_INDEX", runtime)
         self.assertIn("controller_responses_sent_", runtime)
 
