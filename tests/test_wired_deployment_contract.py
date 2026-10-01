@@ -49,6 +49,28 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("#   5V selector -> IN", text)
         self.assertIn("ESP-IDF hardware half-duplex RS485", text)
 
+    def test_registration_tx_evidence_is_persisted(self):
+        text = HEADER.read_text()
+        send_start = text.index("  void send_registration_() {")
+        send_end = text.index("\n  int read_gpio_level_", send_start)
+        send = text[send_start:send_end]
+
+        start_pos = send.index("const uint32_t tx_started_at = millis();")
+        write_pos = send.index("this->write_array(frame.data(), frame.size());")
+        flush_pos = send.index("const auto flush_result = this->flush();")
+        elapsed_pos = send.index("this->last_registration_tx_elapsed_ms_ =")
+        self.assertLess(start_pos, write_pos)
+        self.assertLess(write_pos, flush_pos)
+        self.assertLess(flush_pos, elapsed_pos)
+
+        self.assertIn("last_registration_tx_seen_", text)
+        self.assertIn("last_registration_tx_flush_ok_", text)
+        self.assertIn("last_registration_de_before_", text)
+        self.assertIn("last_registration_de_after_", text)
+        self.assertIn("TX complete registration", send)
+        self.assertIn("expected_wire=~333ms", send)
+        self.assertIn("tx_ms=%lu tx_flush=%s tx_de=%d>%d", text)
+
     def test_hardware_half_duplex_does_not_manual_toggle_de(self):
         text = HEADER.read_text()
         self.assertIn("hardware_half_duplex_", text)
