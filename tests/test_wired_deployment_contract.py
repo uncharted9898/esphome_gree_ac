@@ -235,6 +235,13 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("last_drain_us=%lu", text)
         self.assertIn("drain_span_us=%lu", text)
         self.assertIn("valid_delta=%lu", text)
+        self.assertIn("rx_edges=%lu", text)
+        self.assertIn("first_edge_us=%lu", text)
+        self.assertIn("edge_span_us=%lu", text)
+        self.assertIn("setup_rx_edge_monitor_", text)
+        self.assertIn("GPIO_INTR_ANYEDGE", text)
+        self.assertIn("rx_edge_isr_", text)
+        self.assertIn("rx_transition_total_()", text)
         self.assertNotIn('"REG response %u/%u bytes=%u: %s"', text)
 
     def test_hardware_half_duplex_does_not_manual_toggle_de(self):
