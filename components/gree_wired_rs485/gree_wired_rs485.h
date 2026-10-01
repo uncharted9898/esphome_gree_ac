@@ -157,8 +157,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       ESP_LOGW(TAG, "Discarded partial COM-MANUAL frame after inter-byte timeout");
     }
 
+    if (this->registration_waiting_for_response_ &&
+        static_cast<uint32_t>(now - this->last_registration_at_) >=
+            this->active_probe_interval_ms_) {
+      this->finish_registration_response_window_();
+    }
+
     if (this->active_probe_ && this->should_send_registration_(now)) {
-      this->send_registration_(now);
+      this->send_registration_();
     }
 
     while (this->available()) {
@@ -170,6 +176,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       this->raw_rx_burst_last_at_ = this->last_byte_at_;
       if (this->startup_rx_capture_.size() < 128) {
         this->startup_rx_capture_.push_back(byte);
+      }
+      if (this->registration_waiting_for_response_ &&
+          this->registration_response_capture_.size() < 128) {
+        this->registration_response_capture_.push_back(byte);
       }
 
       std::vector<uint8_t> complete;
@@ -257,7 +267,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
-               "HEALTH mode=%s reg=%u/%u profile=%s bytes=%lu uart_window=%lu "
+               "HEALTH mode=%s reg=%u/%u waiting=%s established=%s profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
                "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
@@ -265,6 +275,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                this->active_probe_ ? "ACTIVE" : "PASSIVE",
                static_cast<unsigned>(this->registration_attempts_sent_),
                static_cast<unsigned>(this->registration_attempt_limit_),
+               YESNO(this->registration_waiting_for_response_),
+               YESNO(this->registration_established_),
                this->scan_profile_(this->scan_profile_index_).name,
                static_cast<unsigned long>(this->bytes_received_),
                static_cast<unsigned long>(uart_bytes_window),
@@ -413,21 +425,40 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   bool should_send_registration_(uint32_t now) const {
-    if (!this->active_probe_) return false;
+    if (!this->active_probe_ || this->registration_waiting_for_response_) return false;
+    if (this->registration_established_) return false;
     if (this->registration_attempts_sent_ >= this->registration_attempt_limit_) return false;
     if (this->last_registration_at_ == 0) {
-      return static_cast<uint32_t>(now - this->setup_started_at_) >= this->registration_start_delay_ms_;
+      return static_cast<uint32_t>(now - this->setup_started_at_) >=
+             this->registration_start_delay_ms_;
     }
-    return static_cast<uint32_t>(now - this->last_registration_at_) >= this->active_probe_interval_ms_;
+    // A completed response window already consumed active_probe_interval_ms_.
+    // Once it is finalized, the next attempt may start immediately.
+    return true;
   }
 
-  void send_registration_(uint32_t now) {
+  void finish_registration_response_window_() {
+    this->registration_waiting_for_response_ = false;
+    const std::string response_hex = hex_(this->registration_response_capture_);
+    ESP_LOGI(TAG, "REG response %u/%u bytes=%u: %s",
+             static_cast<unsigned>(this->registration_attempts_sent_),
+             static_cast<unsigned>(this->registration_attempt_limit_),
+             static_cast<unsigned>(this->registration_response_capture_.size()),
+             response_hex.empty() ? "-" : response_hex.c_str());
+
+    if (this->valid_frames_ > this->registration_valid_frames_at_send_) {
+      this->registration_established_ = true;
+      ESP_LOGI(TAG, "REG accepted: valid wired frame observed during response window");
+    }
+    this->registration_response_capture_.clear();
+  }
+
+  void send_registration_() {
     // Recovered controller-side FF->00 registration/state frame from a real
-    // Gree wired controller capture. Public traces show the indoor unit's
-    // startup 00->FF frames are polls; the controller answers with FF->00.
-    //
-    // The accept counter at raw index 26 must differ between commands. Cycle
-    // through the observed 0x21..0x29,0x20 sequence and recompute XOR.
+    // Gree wired-controller capture. The line rate is only 1200 baud: this
+    // 40-byte frame occupies roughly 333 ms on the wire. Do not schedule the
+    // next registration from the pre-TX timestamp or the frames become
+    // back-to-back and collide with the indoor unit's reply.
     static const uint8_t REGISTRATION_TEMPLATE[] = {
         0x7E, 0x7E, 0xFF, 0x00, 0x11, 0x22,
         0x09, 0x30, 0x83, 0x11, 0x1B, 0x00, 0x00, 0x10,
@@ -444,9 +475,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                          (sizeof(COUNTERS) / sizeof(COUNTERS[0]))];
     frame.back() = xor_checksum_(frame.data(), frame.size() - 1);
 
-    this->last_registration_at_ = now;
     ++this->registration_attempts_sent_;
-    this->active_probe_sent_ = true;
     this->tx_in_progress_ = true;
 
     if (!this->set_direction_level_(1)) {
@@ -464,6 +493,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     const auto flush_result = this->flush();
     this->force_receive_mode_();
     this->tx_in_progress_ = false;
+
+    // Start the receive window only after the UART has drained and DE is LOW.
+    // At 1200 baud this is the critical distinction from the old burst logic.
+    this->last_registration_at_ = millis();
+    this->registration_valid_frames_at_send_ = this->valid_frames_;
+    this->registration_response_capture_.clear();
+    this->registration_waiting_for_response_ = true;
 
     if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
       ESP_LOGW(TAG, "Controller registration TX flush was not confirmed");
@@ -702,13 +738,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
   std::vector<uint8_t> raw_rx_burst_;
   std::vector<uint8_t> startup_rx_capture_;
+  std::vector<uint8_t> registration_response_capture_;
   std::string last_raw_rx_hex_;
   size_t last_raw_rx_size_{0};
 
   uint32_t frame_timeout_ms_{75};
   uint32_t setup_started_at_{0};
-  uint32_t active_probe_interval_ms_{300};
-  uint32_t registration_start_delay_ms_{250};
+  uint32_t active_probe_interval_ms_{1200};
+  uint32_t registration_start_delay_ms_{1500};
   uint32_t last_registration_at_{0};
   uint32_t raw_rx_burst_last_at_{0};
   uint32_t bus_idle_timeout_ms_{10000};
@@ -739,9 +776,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   bool log_frames_{true};
   bool active_probe_{false};
-  bool active_probe_sent_{false};
-  uint8_t registration_attempt_limit_{8};
+  uint8_t registration_attempt_limit_{4};
   uint8_t registration_attempts_sent_{0};
+  bool registration_waiting_for_response_{false};
+  bool registration_established_{false};
+  uint32_t registration_valid_frames_at_send_{0};
   bool tx_in_progress_{false};
   bool bus_active_{false};
   bool passive_scan_{false};
