@@ -11,6 +11,8 @@ CONF_BUS_IDLE_TIMEOUT = "bus_idle_timeout"
 CONF_LOG_FRAMES = "log_frames"
 CONF_PASSIVE_SCAN = "passive_scan"
 CONF_PASSIVE_SCAN_WINDOW = "passive_scan_window"
+CONF_ACTIVE_PROBE = "active_probe"
+CONF_ACTIVE_PROBE_INTERVAL = "active_probe_interval"
 
 CONF_BYTES_RECEIVED = "bytes_received"
 CONF_VALID_FRAMES = "valid_frames"
@@ -86,6 +88,14 @@ CONFIG_SCHEMA = (
                     max=cv.TimePeriod(seconds=10),
                 ),
             ),
+            cv.Optional(CONF_ACTIVE_PROBE, default=False): cv.boolean,
+            cv.Optional(CONF_ACTIVE_PROBE_INTERVAL, default="1500ms"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(
+                    min=cv.TimePeriod(milliseconds=500),
+                    max=cv.TimePeriod(seconds=10),
+                ),
+            ),
             cv.Optional(CONF_BYTES_RECEIVED): counter_schema,
             cv.Optional(CONF_VALID_FRAMES): counter_schema,
             cv.Optional(CONF_CHECKSUM_FAILURES): counter_schema,
@@ -145,6 +155,8 @@ async def to_code(config):
     cg.add(var.set_log_frames(config[CONF_LOG_FRAMES]))
     cg.add(var.set_passive_scan(config[CONF_PASSIVE_SCAN]))
     cg.add(var.set_passive_scan_window(config[CONF_PASSIVE_SCAN_WINDOW]))
+    cg.add(var.set_active_probe(config[CONF_ACTIVE_PROBE]))
+    cg.add(var.set_active_probe_interval(config[CONF_ACTIVE_PROBE_INTERVAL]))
     if CONF_RX_LINE_GPIO in config:
         cg.add(var.set_rx_line_gpio(config[CONF_RX_LINE_GPIO]))
     if CONF_DIRECTION_GPIO in config:
