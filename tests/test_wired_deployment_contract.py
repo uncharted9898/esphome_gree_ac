@@ -84,10 +84,12 @@ class WiredDeploymentContractTests(unittest.TestCase):
         process_start = text.index("  void process_frame_")
         process_end = text.index("\n  void publish_counters_", process_start)
         process = text[process_start:process_end]
-        self.assertIn("registration_waiting_for_response_", process)
+        self.assertIn("registration_waiting_for_response_", text)
         self.assertIn("ROUTE_FF_40", process)
-        self.assertIn("frame.body_length > 0x17", process)
-        self.assertIn("registration_accept_evidence_ = true", process)
+        self.assertIn("observe_ff40_status_(frame)", process)
+        self.assertIn("decoded.registered_layout", text)
+        self.assertIn("registration_accept_evidence_ = true", text)
+        self.assertNotIn("frame.body_length > 0x17", process)
 
         finish_start = text.index("  void finish_registration_response_window_")
         finish_end = text.index("\n  void send_registration_", finish_start)
