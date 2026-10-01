@@ -165,6 +165,9 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("startup_frame_trace_", text)
         self.assertIn("startup_frame_trace_limit_{16}", text)
         self.assertIn("startup_trace_replayed_", text)
+        self.assertIn("first_valid_frame_at_", text)
+        self.assertIn("startup_trace_replay_delay_ms_{5000}", text)
+        self.assertIn("startup_trace_window_complete", text)
         self.assertIn('"STARTUP retained valid frame trace count=%u"', text)
         self.assertIn('"STARTUP retained[%u] %s"', text)
 
