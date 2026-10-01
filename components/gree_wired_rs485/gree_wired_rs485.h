@@ -157,16 +157,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       ESP_LOGW(TAG, "Discarded partial COM-MANUAL frame after inter-byte timeout");
     }
 
-    if (this->registration_waiting_for_response_ &&
-        static_cast<uint32_t>(now - this->last_registration_at_) >=
-            this->active_probe_interval_ms_) {
-      this->finish_registration_response_window_();
-    }
-
-    if (this->active_probe_ && this->should_send_registration_(now)) {
-      this->send_registration_();
-    }
-
+    // Drain RX before making any decision to close a response window or
+    // transmit the next registration. The old order could start the next TX
+    // while reply bytes were already sitting in the UART FIFO, which is exactly
+    // the wrong thing to do on a half-duplex bus.
     while (this->available()) {
       uint8_t byte = 0;
       if (!this->read_byte(&byte)) break;
@@ -191,6 +185,25 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       } else if (result == protocol::AssembleResult::FRAME_READY) {
         this->process_frame_(complete);
       }
+    }
+
+    const uint32_t after_rx = millis();
+    const bool response_window_elapsed =
+        this->registration_waiting_for_response_ &&
+        static_cast<uint32_t>(after_rx - this->last_registration_at_) >=
+            this->active_probe_interval_ms_;
+    const bool response_line_quiet =
+        this->last_byte_at_ <= this->last_registration_at_ ||
+        static_cast<uint32_t>(after_rx - this->last_byte_at_) >=
+            this->registration_response_quiet_ms_;
+
+    if (response_window_elapsed && response_line_quiet) {
+      this->finish_registration_response_window_();
+    }
+
+    if (this->active_probe_ && this->should_send_registration_(after_rx) &&
+        this->available() == 0) {
+      this->send_registration_();
     }
 
     if (!this->raw_rx_burst_.empty() && this->raw_rx_burst_last_at_ != 0 &&
@@ -746,6 +759,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t setup_started_at_{0};
   uint32_t active_probe_interval_ms_{1200};
   uint32_t registration_start_delay_ms_{1500};
+  uint32_t registration_response_quiet_ms_{100};
   uint32_t last_registration_at_{0};
   uint32_t raw_rx_burst_last_at_{0};
   uint32_t bus_idle_timeout_ms_{10000};
