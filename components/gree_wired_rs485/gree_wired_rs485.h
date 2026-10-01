@@ -19,6 +19,7 @@
 #include "wired_controller_state.h"
 #include "wired_protocol.h"
 #include "wired_status.h"
+#include "wired_status.h"
 
 #ifdef USE_ESP32
 #include "driver/gpio.h"
@@ -941,6 +942,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                route.c_str(), frame.message_type, static_cast<unsigned>(frame.body_length),
                static_cast<unsigned>(frame.payload.size()), frame.checksum, frame_class,
                changes.c_str(), raw_hex.c_str());
+      if (has_ff40_status) {
+        ESP_LOGI(TAG,
+                 "FF40 status layout=0x%02X unit=%02X%02X%02X registered=%s appendix=%s",
+                 ff40_status.body_length,
+                 ff40_status.unit_signature[0], ff40_status.unit_signature[1],
+                 ff40_status.unit_signature[2], YESNO(ff40_status.registered_layout),
+                 ff40_status.appendix.empty() ? "-" : hex_(ff40_status.appendix).c_str());
+      }
     }
   }
 
