@@ -42,17 +42,19 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("registration_response_quiet_ms_", text[loop_start:send_pos])
         self.assertIn("this->available() == 0", text[loop_start:send_pos])
 
-    def test_vireo_package_uses_uart_half_duplex_and_field_mapping(self):
+    def test_vireo_package_uses_manual_de_and_field_mapping(self):
         text = PACKAGE.read_text()
         uart_block = text.split("\nuart:\n", 1)[1].split("\nexternal_components:\n", 1)[0]
         self.assertIn("tx_pin: GPIO6", uart_block)
         self.assertIn("rx_pin: GPIO7", uart_block)
-        self.assertIn("flow_control_pin: GPIO4", uart_block)
+        self.assertNotIn("flow_control_pin:", uart_block)
         self.assertIn("passive_scan: false", text)
         self.assertIn("active_probe: true", text)
         self.assertIn("active_probe_interval: 1200ms", text)
         self.assertIn("registration_attempts: 4", text)
-        self.assertIn("hardware_half_duplex: true", text)
+        self.assertIn("silent_bootstrap_probe: true", text)
+        self.assertIn("silent_bootstrap_delay: 5s", text)
+        self.assertIn("hardware_half_duplex: false", text)
         self.assertIn("persistent_controller: false", text)
         self.assertIn("last_frame_role:", text)
         self.assertIn("poll_payload:", text)
@@ -63,7 +65,18 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("#   pin 4 -> Seeed B", text)
         self.assertIn("#   120R termination -> OFF", text)
         self.assertIn("#   5V selector -> IN", text)
-        self.assertIn("ESP-IDF hardware half-duplex RS485", text)
+        self.assertIn("Deterministic manual RS485 direction", text)
+
+    def test_silent_bootstrap_requires_complete_electrical_silence(self):
+        text = HEADER.read_text()
+        self.assertIn("registration::silent_bootstrap_ready", text)
+        self.assertIn("silent_bootstrap_probe_", text)
+        self.assertIn("silent_bootstrap_delay_ms_", text)
+        self.assertIn("this->bytes_received_", text)
+        self.assertIn("this->rx_line_activity_.total_transitions()", text)
+        self.assertIn("registration::REFERENCE_UNIT_SIGNATURE", text)
+        self.assertIn("silent_bootstrap_armed_", text)
+        self.assertIn("no UART bytes and no RX", text)
 
     def test_registration_is_target_startup_gated(self):
         text = HEADER.read_text()
@@ -72,6 +85,7 @@ class WiredDeploymentContractTests(unittest.TestCase):
         should = text[should_start:should_end]
         self.assertIn("registration_armed_", should)
         self.assertIn("registration_unit_signature_learned_", should)
+        self.assertIn("silent_bootstrap_armed_", should)
         self.assertNotIn("setup_started_at_", should)
         self.assertNotIn("registration_start_delay_ms_", text)
 
