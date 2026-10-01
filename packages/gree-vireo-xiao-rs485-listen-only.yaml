@@ -21,6 +21,7 @@ logger:
   logs:
     gree_wired_rs485: INFO
     uart: WARN
+    uart_debug: DEBUG
 
 wifi:
   ssid: "${wifi_ssid}"
@@ -63,6 +64,19 @@ uart:
   parity: NONE
   stop_bits: 1
   rx_buffer_size: 512
+
+  # Raw RX capture sits underneath the frame parser. This is deliberately left
+  # enabled during protocol qualification so electrically received bytes remain
+  # visible even when they do not match the recovered legacy framing.
+  debug:
+    direction: RX
+    dummy_receiver: false
+    debug_prefix: "[COM-MANUAL] "
+    after:
+      timeout: 50ms
+      bytes: 128
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ' ', debug_prefix);
 
 external_components:
   - source:
