@@ -76,6 +76,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/test_controller_registration
 
 c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_registration_rx_window.cpp -o /tmp/test_registration_rx_window
+/tmp/test_registration_rx_window
+
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_wired_controller_state.cpp -o /tmp/test_wired_controller_state
 /tmp/test_wired_controller_state
 
@@ -92,7 +96,7 @@ if ! command -v esphome >/dev/null 2>&1; then
   echo 'esphome is required for YAML validation' >&2
   exit 1
 fi
-esphome --version | grep -F '2026.9.0'
+esphome --version | grep -F '2026.9.1'
 
 python3 - <<'PY'
 from pathlib import Path
