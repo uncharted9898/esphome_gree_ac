@@ -126,6 +126,26 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       this->bus_active_ = false;
       if (this->bus_active_sensor_ != nullptr) this->bus_active_sensor_->publish_state(false);
     }
+
+    if (this->last_health_log_at_ == 0 ||
+        static_cast<uint32_t>(now - this->last_health_log_at_) >= this->health_log_interval_ms_) {
+      this->last_health_log_at_ = now;
+      // Publish periodically even if electrical RX never forms a valid legacy
+      // frame. This separates wiring/UART silence from protocol incompatibility.
+      this->publish_counters_();
+      const bool rx_recent =
+          this->last_byte_at_ != 0 &&
+          static_cast<uint32_t>(now - this->last_byte_at_) <= this->bus_idle_timeout_ms_;
+      ESP_LOGI(TAG,
+               "HEALTH bytes=%lu valid=%lu xor_fail=%lu invalid_len=%lu "
+               "timeouts=%lu rx_recent=%s valid_bus=%s",
+               static_cast<unsigned long>(this->bytes_received_),
+               static_cast<unsigned long>(this->valid_frames_),
+               static_cast<unsigned long>(this->checksum_failures_),
+               static_cast<unsigned long>(this->invalid_lengths_),
+               static_cast<unsigned long>(this->frame_timeouts_),
+               YESNO(rx_recent), YESNO(this->bus_active_));
+    }
   }
 
  protected:
@@ -311,6 +331,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t bus_idle_timeout_ms_{10000};
   uint32_t last_byte_at_{0};
   uint32_t last_valid_frame_at_{0};
+  uint32_t last_health_log_at_{0};
+  uint32_t health_log_interval_ms_{10000};
 
   uint32_t bytes_received_{0};
   uint32_t valid_frames_{0};
