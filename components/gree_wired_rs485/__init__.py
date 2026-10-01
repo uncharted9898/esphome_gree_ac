@@ -15,6 +15,7 @@ CONF_ACTIVE_PROBE = "active_probe"
 CONF_ACTIVE_PROBE_INTERVAL = "active_probe_interval"
 CONF_REGISTRATION_ATTEMPTS = "registration_attempts"
 CONF_HARDWARE_HALF_DUPLEX = "hardware_half_duplex"
+CONF_PERSISTENT_CONTROLLER = "persistent_controller"
 
 CONF_BYTES_RECEIVED = "bytes_received"
 CONF_VALID_FRAMES = "valid_frames"
@@ -33,6 +34,8 @@ CONF_LAST_DESTINATION = "last_destination"
 CONF_LAST_BODY_LENGTH = "last_body_length"
 CONF_RX_TRANSITIONS = "rx_transitions"
 CONF_RX_HIGH_PERCENT = "rx_high_percent"
+CONF_CONTROLLER_POLLS_SEEN = "controller_polls_seen"
+CONF_CONTROLLER_RESPONSES_SENT = "controller_responses_sent"
 
 CONF_LAST_FRAME = "last_frame"
 CONF_LAST_PAYLOAD = "last_payload"
@@ -101,6 +104,7 @@ CONFIG_SCHEMA = (
             ),
             cv.Optional(CONF_REGISTRATION_ATTEMPTS, default=4): cv.int_range(min=1, max=10),
             cv.Optional(CONF_HARDWARE_HALF_DUPLEX, default=False): cv.boolean,
+            cv.Optional(CONF_PERSISTENT_CONTROLLER, default=False): cv.boolean,
             cv.Optional(CONF_BYTES_RECEIVED): counter_schema,
             cv.Optional(CONF_VALID_FRAMES): counter_schema,
             cv.Optional(CONF_CHECKSUM_FAILURES): counter_schema,
@@ -118,6 +122,8 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_LAST_BODY_LENGTH): raw_value_schema,
             cv.Optional(CONF_RX_TRANSITIONS): counter_schema,
             cv.Optional(CONF_RX_HIGH_PERCENT): percentage_schema,
+            cv.Optional(CONF_CONTROLLER_POLLS_SEEN): counter_schema,
+            cv.Optional(CONF_CONTROLLER_RESPONSES_SENT): counter_schema,
             cv.Optional(CONF_LAST_FRAME): text_schema,
             cv.Optional(CONF_LAST_PAYLOAD): text_schema,
             cv.Optional(CONF_LAST_ROUTE): text_schema,
@@ -165,6 +171,7 @@ async def to_code(config):
     cg.add(var.set_active_probe_interval(config[CONF_ACTIVE_PROBE_INTERVAL]))
     cg.add(var.set_registration_attempts(config[CONF_REGISTRATION_ATTEMPTS]))
     cg.add(var.set_hardware_half_duplex(config[CONF_HARDWARE_HALF_DUPLEX]))
+    cg.add(var.set_persistent_controller(config[CONF_PERSISTENT_CONTROLLER]))
     if CONF_RX_LINE_GPIO in config:
         cg.add(var.set_rx_line_gpio(config[CONF_RX_LINE_GPIO]))
     if CONF_DIRECTION_GPIO in config:
@@ -188,6 +195,8 @@ async def to_code(config):
         CONF_LAST_BODY_LENGTH: "set_last_body_length_sensor",
         CONF_RX_TRANSITIONS: "set_rx_transitions_sensor",
         CONF_RX_HIGH_PERCENT: "set_rx_high_percent_sensor",
+        CONF_CONTROLLER_POLLS_SEEN: "set_controller_polls_seen_sensor",
+        CONF_CONTROLLER_RESPONSES_SENT: "set_controller_responses_sent_sensor",
     }
     for key, method in sensor_entities.items():
         if key in config:
