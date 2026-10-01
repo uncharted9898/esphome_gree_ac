@@ -42,6 +42,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_active_probe(bool active_probe) { this->active_probe_ = active_probe; }
   void set_active_probe_interval(uint32_t interval_ms) { this->active_probe_interval_ms_ = interval_ms; }
   void set_registration_attempts(uint8_t attempts) { this->registration_attempt_limit_ = attempts; }
+  void set_silent_bootstrap_probe(bool enabled) { this->silent_bootstrap_probe_ = enabled; }
+  void set_silent_bootstrap_delay(uint32_t delay_ms) { this->silent_bootstrap_delay_ms_ = delay_ms; }
   void set_hardware_half_duplex(bool enabled) { this->hardware_half_duplex_ = enabled; }
   void set_persistent_controller(bool enabled) { this->persistent_controller_ = enabled; }
 
@@ -147,6 +149,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   void setup() override {
+    this->setup_started_at_ = millis();
     if (!this->hardware_half_duplex_) {
       this->force_receive_mode_();
     }
@@ -189,6 +192,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                     static_cast<unsigned long>(this->active_probe_interval_ms_));
       ESP_LOGCONFIG(TAG, "  Registration attempts: %u",
                     static_cast<unsigned>(this->registration_attempt_limit_));
+      ESP_LOGCONFIG(TAG, "  Silent-bus bootstrap probe: %s after %lu ms",
+                    YESNO(this->silent_bootstrap_probe_),
+                    static_cast<unsigned long>(this->silent_bootstrap_delay_ms_));
       ESP_LOGCONFIG(TAG, "  Persistent controller runtime: %s",
                     YESNO(this->persistent_controller_));
     }
@@ -259,6 +265,29 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     if (response_window_elapsed && response_line_quiet) {
       this->finish_registration_response_window_();
+    }
+
+    const uint32_t setup_elapsed =
+        static_cast<uint32_t>(after_rx - this->setup_started_at_);
+    if (registration::silent_bootstrap_ready(
+            this->silent_bootstrap_probe_, this->active_probe_,
+            this->registration_armed_, this->registration_established_,
+            this->registration_attempts_sent_, setup_elapsed,
+            this->silent_bootstrap_delay_ms_, this->bytes_received_,
+            this->rx_line_activity_.total_transitions())) {
+      this->registration_armed_ = true;
+      this->silent_bootstrap_armed_ = true;
+      this->registration_unit_signature_ = registration::REFERENCE_UNIT_SIGNATURE;
+      controller::set_unit_signature(
+          this->controller_state_, this->registration_unit_signature_);
+      this->publish_controller_state_();
+      ESP_LOGW(TAG,
+               "REG silent-bus bootstrap armed after %lums: no UART bytes and no RX "
+               "transitions observed; using captured reference unit signature %02X%02X%02X",
+               static_cast<unsigned long>(setup_elapsed),
+               this->registration_unit_signature_[0],
+               this->registration_unit_signature_[1],
+               this->registration_unit_signature_[2]);
     }
 
     if (this->active_probe_ && this->should_send_registration_(after_rx) &&
@@ -536,7 +565,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool should_send_registration_(uint32_t now) const {
     (void) now;
     if (!this->active_probe_ || !this->registration_armed_) return false;
-    if (!this->registration_unit_signature_learned_) return false;
+    if (!this->registration_unit_signature_learned_ && !this->silent_bootstrap_armed_) return false;
     if (this->registration_waiting_for_response_) return false;
     if (this->registration_established_) return false;
     if (this->registration_attempts_sent_ >= this->registration_attempt_limit_) return false;
@@ -554,6 +583,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         learned != this->registration_unit_signature_) {
       this->registration_unit_signature_ = learned;
       this->registration_unit_signature_learned_ = true;
+      this->silent_bootstrap_armed_ = false;
       controller::set_unit_signature(this->controller_state_, learned);
       this->publish_controller_state_();
       ESP_LOGI(TAG, "REG learned target unit signature=%02X %02X %02X from FF->40",
@@ -625,11 +655,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   void send_registration_() {
-    // The packet layout was recovered from Gree wired-controller captures, but
-    // transmission is now target-gated: the indoor unit must first emit its
-    // startup 00->FF poll, and the unit signature bytes come from that target's
-    // own FF->40 status traffic. This avoids treating ESP reboot time as the
-    // indoor-unit registration window and avoids hardcoding 09 30 83.
+    // The packet layout was recovered from Gree wired-controller captures.
+    // Normal registration is target-gated by observed startup traffic and a
+    // learned FF->40 signature. A separately configured silent-bus bootstrap
+    // may use the captured reference signature only after a quiet electrical
+    // interval proves that no UART bytes or RX transitions are present.
     const uint8_t accept_counter =
         registration::counter_for_attempt(this->registration_attempts_sent_);
     controller::set_accept_counter(this->controller_state_, accept_counter);
@@ -1086,6 +1116,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   uint32_t frame_timeout_ms_{75};
   uint32_t active_probe_interval_ms_{1200};
+  uint32_t silent_bootstrap_delay_ms_{5000};
+  uint32_t setup_started_at_{0};
   uint32_t registration_response_quiet_ms_{100};
   uint32_t startup_poll_rearm_gap_ms_{5000};
   uint32_t last_startup_poll_at_{0};
@@ -1128,6 +1160,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   bool log_frames_{true};
   bool active_probe_{false};
+  bool silent_bootstrap_probe_{false};
+  bool silent_bootstrap_armed_{false};
   bool hardware_half_duplex_{false};
   bool persistent_controller_{false};
   uint8_t registration_attempt_limit_{4};
