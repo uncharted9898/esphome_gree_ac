@@ -17,6 +17,7 @@
 #include "esphome/core/helpers.h"
 #include "controller_registration.h"
 #include "line_activity.h"
+#include "registration_rx_window.h"
 #include "wired_controller_state.h"
 #include "wired_protocol.h"
 #include "wired_status.h"
@@ -231,6 +232,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       uint8_t byte = 0;
       if (!this->read_byte(&byte)) break;
       this->last_byte_at_ = millis();
+      const uint32_t byte_observed_at_us = micros();
+      if (this->registration_waiting_for_response_) {
+        this->registration_rx_window_.observe_byte(byte_observed_at_us);
+      }
       ++this->bytes_received_;
       this->raw_rx_burst_.push_back(byte);
       this->raw_rx_burst_last_at_ = this->last_byte_at_;
@@ -633,11 +638,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void finish_registration_response_window_() {
     this->registration_waiting_for_response_ = false;
+    this->registration_rx_window_.close();
     const std::string response_hex = hex_(this->registration_response_capture_);
-    ESP_LOGI(TAG, "REG response %u/%u bytes=%u: %s",
+    ESP_LOGI(TAG,
+             "REG window %u/%u unvalidated_rx=%u pending_at_rx_enable=%u "
+             "pending_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
+             "drain_span_us=%lu valid_delta=%lu bytes=%s",
              static_cast<unsigned>(this->registration_attempts_sent_),
              static_cast<unsigned>(this->registration_attempt_limit_),
              static_cast<unsigned>(this->registration_response_capture_.size()),
+             static_cast<unsigned>(this->registration_rx_window_.pending_at_probe()),
+             static_cast<unsigned long>(this->registration_rx_window_.pending_probe_delay_us()),
+             static_cast<unsigned long>(this->registration_rx_window_.first_drain_us()),
+             static_cast<unsigned long>(this->registration_rx_window_.last_drain_us()),
+             static_cast<unsigned long>(this->registration_rx_window_.drain_span_us()),
+             static_cast<unsigned long>(
+                 this->registration_rx_window_.valid_frame_delta(this->valid_frames_)),
              response_hex.empty() ? "-" : response_hex.c_str());
 
     if (this->registration_accept_evidence_) {
@@ -716,9 +732,23 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // Start the receive window only after the UART has drained and DE is LOW.
     // At 1200 baud this is the critical distinction from the old burst logic.
     this->last_registration_at_ = millis();
+    const uint32_t rx_window_opened_at_us = micros();
+    const size_t pending_at_rx_enable = this->available();
+    const uint32_t pending_probe_at_us = micros();
     this->registration_accept_evidence_ = false;
     this->registration_response_capture_.clear();
+    this->registration_rx_window_.open(
+        rx_window_opened_at_us, pending_probe_at_us, pending_at_rx_enable,
+        this->valid_frames_);
     this->registration_waiting_for_response_ = true;
+
+    ESP_LOGI(TAG,
+             "REG RX window opened attempt=%u pending=%u probe_us=%lu de=%d",
+             static_cast<unsigned>(this->registration_attempts_sent_),
+             static_cast<unsigned>(pending_at_rx_enable),
+             static_cast<unsigned long>(
+                 this->registration_rx_window_.pending_probe_delay_us()),
+             this->last_registration_de_after_);
 
     if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
       ESP_LOGW(TAG, "Controller registration TX flush was not confirmed");
@@ -1106,6 +1136,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   protocol::FrameAssembler assembler_;
   diagnostics::LineActivityTracker rx_line_activity_;
+  diagnostics::RegistrationRxWindow registration_rx_window_;
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
   std::vector<uint8_t> raw_rx_burst_;
   std::vector<uint8_t> startup_rx_capture_;
