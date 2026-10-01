@@ -36,6 +36,7 @@ CONF_RX_TRANSITIONS = "rx_transitions"
 CONF_RX_HIGH_PERCENT = "rx_high_percent"
 CONF_CONTROLLER_POLLS_SEEN = "controller_polls_seen"
 CONF_CONTROLLER_RESPONSES_SENT = "controller_responses_sent"
+CONF_REGISTERED_STATUS_FRAMES = "registered_status_frames"
 
 CONF_LAST_FRAME = "last_frame"
 CONF_LAST_PAYLOAD = "last_payload"
@@ -46,6 +47,8 @@ CONF_LAST_INVALID_FRAME = "last_invalid_frame"
 CONF_PROTOCOL = "protocol"
 CONF_SERIAL_PROFILE = "serial_profile"
 CONF_LAST_RAW_RX = "last_raw_rx"
+CONF_FF40_APPENDIX = "ff40_appendix"
+CONF_CONTROLLER_STATE = "controller_state"
 
 CONF_BUS_ACTIVE = "bus_active"
 CONF_LISTEN_ONLY = "listen_only"
@@ -53,6 +56,7 @@ CONF_RX_LINE_HIGH = "rx_line_high"
 CONF_DIRECTION_HIGH = "direction_high"
 CONF_ELECTRICAL_ACTIVITY = "electrical_activity"
 CONF_DIRECTION_HIGH_SEEN = "direction_high_seen"
+CONF_REGISTERED_STATUS = "registered_status"
 CONF_RX_LINE_GPIO = "rx_line_gpio"
 CONF_DIRECTION_GPIO = "direction_gpio"
 
@@ -124,6 +128,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_RX_HIGH_PERCENT): percentage_schema,
             cv.Optional(CONF_CONTROLLER_POLLS_SEEN): counter_schema,
             cv.Optional(CONF_CONTROLLER_RESPONSES_SENT): counter_schema,
+            cv.Optional(CONF_REGISTERED_STATUS_FRAMES): counter_schema,
             cv.Optional(CONF_LAST_FRAME): text_schema,
             cv.Optional(CONF_LAST_PAYLOAD): text_schema,
             cv.Optional(CONF_LAST_ROUTE): text_schema,
@@ -133,12 +138,15 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_PROTOCOL): text_schema,
             cv.Optional(CONF_SERIAL_PROFILE): text_schema,
             cv.Optional(CONF_LAST_RAW_RX): text_schema,
+            cv.Optional(CONF_FF40_APPENDIX): text_schema,
+            cv.Optional(CONF_CONTROLLER_STATE): text_schema,
             cv.Optional(CONF_BUS_ACTIVE): binary_schema,
             cv.Optional(CONF_LISTEN_ONLY): binary_schema,
             cv.Optional(CONF_RX_LINE_HIGH): binary_schema,
             cv.Optional(CONF_DIRECTION_HIGH): binary_schema,
             cv.Optional(CONF_ELECTRICAL_ACTIVITY): binary_schema,
             cv.Optional(CONF_DIRECTION_HIGH_SEEN): binary_schema,
+            cv.Optional(CONF_REGISTERED_STATUS): binary_schema,
             cv.Optional(CONF_RX_LINE_GPIO): cv.int_range(min=0, max=21),
             cv.Optional(CONF_DIRECTION_GPIO): cv.int_range(min=0, max=21),
         }
@@ -197,6 +205,7 @@ async def to_code(config):
         CONF_RX_HIGH_PERCENT: "set_rx_high_percent_sensor",
         CONF_CONTROLLER_POLLS_SEEN: "set_controller_polls_seen_sensor",
         CONF_CONTROLLER_RESPONSES_SENT: "set_controller_responses_sent_sensor",
+        CONF_REGISTERED_STATUS_FRAMES: "set_registered_status_frames_sensor",
     }
     for key, method in sensor_entities.items():
         if key in config:
@@ -213,6 +222,8 @@ async def to_code(config):
         CONF_PROTOCOL: "set_protocol_sensor",
         CONF_SERIAL_PROFILE: "set_serial_profile_sensor",
         CONF_LAST_RAW_RX: "set_last_raw_rx_sensor",
+        CONF_FF40_APPENDIX: "set_ff40_appendix_sensor",
+        CONF_CONTROLLER_STATE: "set_controller_state_sensor",
     }
     for key, method in text_entities.items():
         if key in config:
@@ -226,6 +237,7 @@ async def to_code(config):
         CONF_DIRECTION_HIGH: "set_direction_high_sensor",
         CONF_ELECTRICAL_ACTIVITY: "set_electrical_activity_sensor",
         CONF_DIRECTION_HIGH_SEEN: "set_direction_high_seen_sensor",
+        CONF_REGISTERED_STATUS: "set_registered_status_sensor",
     }
     for key, method in binary_entities.items():
         if key in config:
