@@ -39,6 +39,10 @@ CONF_SERIAL_PROFILE = "serial_profile"
 
 CONF_BUS_ACTIVE = "bus_active"
 CONF_LISTEN_ONLY = "listen_only"
+CONF_RX_LINE_HIGH = "rx_line_high"
+CONF_DIRECTION_HIGH = "direction_high"
+CONF_RX_LINE_GPIO = "rx_line_gpio"
+CONF_DIRECTION_GPIO = "direction_gpio"
 
 gree_wired_ns = cg.esphome_ns.namespace("gree_wired_rs485")
 GreeWiredRS485 = gree_wired_ns.class_(
@@ -102,6 +106,10 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_SERIAL_PROFILE): text_schema,
             cv.Optional(CONF_BUS_ACTIVE): binary_schema,
             cv.Optional(CONF_LISTEN_ONLY): binary_schema,
+            cv.Optional(CONF_RX_LINE_HIGH): binary_schema,
+            cv.Optional(CONF_DIRECTION_HIGH): binary_schema,
+            cv.Optional(CONF_RX_LINE_GPIO): cv.int_range(min=0, max=21),
+            cv.Optional(CONF_DIRECTION_GPIO): cv.int_range(min=0, max=21),
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -128,6 +136,10 @@ async def to_code(config):
     cg.add(var.set_log_frames(config[CONF_LOG_FRAMES]))
     cg.add(var.set_passive_scan(config[CONF_PASSIVE_SCAN]))
     cg.add(var.set_passive_scan_window(config[CONF_PASSIVE_SCAN_WINDOW]))
+    if CONF_RX_LINE_GPIO in config:
+        cg.add(var.set_rx_line_gpio(config[CONF_RX_LINE_GPIO]))
+    if CONF_DIRECTION_GPIO in config:
+        cg.add(var.set_direction_gpio(config[CONF_DIRECTION_GPIO]))
 
     sensor_entities = {
         CONF_BYTES_RECEIVED: "set_bytes_received_sensor",
@@ -169,6 +181,8 @@ async def to_code(config):
     binary_entities = {
         CONF_BUS_ACTIVE: "set_bus_active_sensor",
         CONF_LISTEN_ONLY: "set_listen_only_sensor",
+        CONF_RX_LINE_HIGH: "set_rx_line_high_sensor",
+        CONF_DIRECTION_HIGH: "set_direction_high_sensor",
     }
     for key, method in binary_entities.items():
         if key in config:
