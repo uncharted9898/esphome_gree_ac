@@ -240,6 +240,41 @@ This distinction is intentional: normal controller state/control, continuous
 layers. Unknown service traffic remains disabled until exact bytes and timing
 can be recovered or captured on the Vireo.
 
+## Structured controller-state and registered-status codecs
+
+The recovered wired-controller traffic now has explicit codecs instead of a
+single opaque registration template.
+
+For the captured `FF -> 00`, type-`0x11`, body-length-`0x22` controller
+frame, the component preserves the complete payload while exposing only fields
+that have direct capture evidence:
+
+- payload bytes 0-2: target/unit signature used during registration
+- payload byte 3: raw mode/power control byte (working-controller evidence
+  shows values such as `0x19` being accepted as Cool + ON on GKH hardware)
+- payload byte 4: retained as a raw secondary-control byte; its semantics are
+  not treated as settled
+- payload byte 12: setpoint encoded as degrees Celsius times two in the
+  working-controller captures (`0x28 = 20.0 C`)
+- payload byte 20 / raw frame index 26: accept counter; captures show an indoor
+  unit rejects repeated changes when this value does not differ from the
+  previously accepted command
+
+All other bytes remain losslessly preserved in the controller-state object.
+The runtime therefore no longer needs to rebuild a command from independently
+guessed fields.
+
+The indoor `FF -> 40` decoder now distinguishes the established
+pre-registration `0x16`/`0x17` layouts from the captured registered
+`0x29` layout. The added bytes in the `0x29` frame are retained as a
+separate appendix and logged independently. This is intentionally observation
+first: public captures prove that this appendix appears after controller
+acceptance, but do not yet prove climate meanings for every appendix byte.
+
+The public wired-controller investigations also establish that the
+COM-MANUAL protocol is separate from the 4800-8E1 Wi-Fi-module UART protocol.
+Do not transplant `0x2C/0x2F` Wi-Fi-module packets onto this RS485 bus.
+
 ## Current scope
 
 The initial component deliberately does not assign climate meanings to payload
