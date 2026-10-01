@@ -178,6 +178,10 @@ gree_wired_rs485:
   registered_status_frames:
     name: ${friendly_name} Registered Status Frames
     entity_category: diagnostic
+  registered_setpoint_candidate:
+    name: ${friendly_name} Registered Setpoint Candidate
+    entity_category: diagnostic
+    disabled_by_default: true
 
   last_frame:
     name: ${friendly_name} Last Frame
@@ -228,6 +232,10 @@ gree_wired_rs485:
   poll_changes:
     name: ${friendly_name} 00 to FF Poll Changes
     entity_category: diagnostic
+  ff40_indexed:
+    name: ${friendly_name} FF40 Indexed Payload
+    entity_category: diagnostic
+    disabled_by_default: true
 
   bus_active:
     name: ${friendly_name} COM-MANUAL Bus Active

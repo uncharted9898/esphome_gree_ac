@@ -229,3 +229,16 @@ script:
       - gree_wired_rs485.set_controller_mode_power_raw:
           id: gree_com_manual
           value: 0x19
+  - id: stage_wired_power_example
+    mode: restart
+    then:
+      - gree_wired_rs485.set_controller_power:
+          id: gree_com_manual
+          value: true
+  - id: stage_wired_payload_byte_example
+    mode: restart
+    then:
+      - gree_wired_rs485.set_controller_payload_byte:
+          id: gree_com_manual
+          index: 5
+          value: 0x1B

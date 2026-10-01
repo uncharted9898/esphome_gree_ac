@@ -57,6 +57,8 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("last_frame_role:", text)
         self.assertIn("poll_payload:", text)
         self.assertIn("poll_changes:", text)
+        self.assertIn("ff40_indexed:", text)
+        self.assertIn("registered_setpoint_candidate:", text)
         self.assertIn("#   pin 3 -> Seeed A", text)
         self.assertIn("#   pin 4 -> Seeed B", text)
         self.assertIn("#   120R termination -> OFF", text)
@@ -150,15 +152,41 @@ class WiredDeploymentContractTests(unittest.TestCase):
         text = HEADER.read_text()
         self.assertIn("class SetControllerSetpointAction", text)
         self.assertIn("class SetControllerModePowerRawAction", text)
+        self.assertIn("class SetControllerPowerAction", text)
+        self.assertIn("class SetControllerPayloadByteAction", text)
         self.assertIn("set_controller_setpoint_celsius", text)
         self.assertIn("set_controller_mode_power_raw", text)
+        self.assertIn("set_controller_power", text)
+        self.assertIn("set_controller_payload_byte", text)
 
         setpoint_start = text.index("class SetControllerSetpointAction")
+        power_start = text.index("class SetControllerPowerAction")
+        payload_start = text.index("class SetControllerPayloadByteAction")
         mode_start = text.index("class SetControllerModePowerRawAction")
         action_tail = text[setpoint_start:]
         self.assertNotIn("write_array", action_tail)
         self.assertNotIn("flush()", action_tail)
-        self.assertLess(setpoint_start, mode_start)
+        self.assertLess(setpoint_start, power_start)
+        self.assertLess(power_start, payload_start)
+        self.assertLess(payload_start, mode_start)
+
+    def test_startup_valid_frames_are_retained_and_replayed(self):
+        text = HEADER.read_text()
+        self.assertIn("startup_frame_trace_", text)
+        self.assertIn("startup_frame_trace_limit_{16}", text)
+        self.assertIn("startup_trace_replayed_", text)
+        self.assertIn("first_valid_frame_at_", text)
+        self.assertIn("startup_trace_replay_delay_ms_{5000}", text)
+        self.assertIn("startup_trace_window_complete", text)
+        self.assertIn('"STARTUP retained valid frame trace count=%u"', text)
+        self.assertIn('"STARTUP retained[%u] %s"', text)
+
+        process_start = text.index("  void process_frame_")
+        process_end = text.index("\n  void publish_counters_", process_start)
+        process = text[process_start:process_end]
+        self.assertIn("startup_frame_trace_.size()", process)
+        self.assertIn("frame_role", process)
+        self.assertIn("raw_hex", process)
 
     def test_registration_tx_evidence_is_persisted(self):
         text = HEADER.read_text()

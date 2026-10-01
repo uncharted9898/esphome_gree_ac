@@ -18,6 +18,9 @@ static constexpr size_t PAYLOAD_SIZE = static_cast<size_t>(BODY_LENGTH) - 1U;
 
 static constexpr size_t UNIT_SIGNATURE_PAYLOAD_INDEX = 0;
 static constexpr size_t MODE_POWER_PAYLOAD_INDEX = 3;
+static constexpr uint8_t POWER_MASK = 0x08;
+static constexpr uint8_t REFERENCE_MODE_POWER_OFF = 0x11;
+static constexpr uint8_t REFERENCE_MODE_POWER_COOL_ON = 0x19;
 static constexpr size_t SECONDARY_CONTROL_PAYLOAD_INDEX = 4;
 static constexpr size_t SETPOINT_X2_PAYLOAD_INDEX = 12;
 static constexpr size_t ACCEPT_COUNTER_PAYLOAD_INDEX = 20;
@@ -65,6 +68,25 @@ inline uint8_t mode_power_raw(const ControllerState &state) {
 
 inline void set_mode_power_raw(ControllerState &state, uint8_t value) {
   state.payload[MODE_POWER_PAYLOAD_INDEX] = value;
+}
+
+inline bool power_enabled(const ControllerState &state) {
+  return (mode_power_raw(state) & POWER_MASK) != 0;
+}
+
+inline void set_power_enabled(ControllerState &state, bool enabled) {
+  if (enabled) {
+    state.payload[MODE_POWER_PAYLOAD_INDEX] |= POWER_MASK;
+  } else {
+    state.payload[MODE_POWER_PAYLOAD_INDEX] &=
+        static_cast<uint8_t>(~POWER_MASK);
+  }
+}
+
+inline bool set_payload_byte(ControllerState &state, size_t index, uint8_t value) {
+  if (index >= state.payload.size()) return false;
+  state.payload[index] = value;
+  return true;
 }
 
 inline uint8_t secondary_control_raw(const ControllerState &state) {
