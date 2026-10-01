@@ -78,6 +78,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
   void set_protocol_sensor(text_sensor::TextSensor *s) { this->protocol_sensor_ = s; }
   void set_serial_profile_sensor(text_sensor::TextSensor *s) { this->serial_profile_sensor_ = s; }
+  void set_last_raw_rx_sensor(text_sensor::TextSensor *s) { this->last_raw_rx_sensor_ = s; }
 
   void set_bus_active_sensor(binary_sensor::BinarySensor *s) { this->bus_active_sensor_ = s; }
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
@@ -181,9 +182,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     if (!this->raw_rx_burst_.empty() && this->raw_rx_burst_last_at_ != 0 &&
         static_cast<uint32_t>(millis() - this->raw_rx_burst_last_at_) >= 50) {
+      this->last_raw_rx_hex_ = hex_(this->raw_rx_burst_);
+      this->last_raw_rx_size_ = this->raw_rx_burst_.size();
       ESP_LOGI(TAG, "RX raw burst (%u bytes): %s",
-               static_cast<unsigned>(this->raw_rx_burst_.size()),
-               hex_(this->raw_rx_burst_).c_str());
+               static_cast<unsigned>(this->last_raw_rx_size_),
+               this->last_raw_rx_hex_.c_str());
+      if (this->last_raw_rx_sensor_ != nullptr) {
+        this->last_raw_rx_sensor_->publish_state(this->last_raw_rx_hex_);
+      }
       this->raw_rx_burst_.clear();
     }
 
@@ -251,7 +257,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "HEALTH mode=%s reg=%u/%u profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
-               "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu",
+               "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s",
                this->active_probe_ ? "ACTIVE" : "PASSIVE",
                static_cast<unsigned>(this->registration_attempts_sent_),
                static_cast<unsigned>(this->registration_attempt_limit_),
@@ -266,7 +272,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                static_cast<unsigned long>(rx_activity.transitions),
                static_cast<unsigned long>(this->rx_line_activity_.total_transitions()),
                rx_activity.high_percent(),
-               static_cast<unsigned long>(rx_activity.samples));
+               static_cast<unsigned long>(rx_activity.samples),
+               static_cast<unsigned>(this->last_raw_rx_size_),
+               this->last_raw_rx_hex_.empty() ? "-" : this->last_raw_rx_hex_.c_str());
 
       if (!rx_recent && direction_level == 0 && rx_level == 0 &&
           rx_activity.transitions == 0) {
@@ -687,6 +695,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   diagnostics::LineActivityTracker rx_line_activity_;
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
   std::vector<uint8_t> raw_rx_burst_;
+  std::string last_raw_rx_hex_;
+  size_t last_raw_rx_size_{0};
 
   uint32_t frame_timeout_ms_{75};
   uint32_t setup_started_at_{0};
@@ -759,6 +769,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *last_invalid_frame_sensor_{nullptr};
   text_sensor::TextSensor *protocol_sensor_{nullptr};
   text_sensor::TextSensor *serial_profile_sensor_{nullptr};
+  text_sensor::TextSensor *last_raw_rx_sensor_{nullptr};
 
   binary_sensor::BinarySensor *bus_active_sensor_{nullptr};
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
