@@ -101,6 +101,8 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("ROUTE_FF_40", process)
         self.assertIn("observe_ff40_status_(frame)", process)
         self.assertIn("decoded.registered_layout", text)
+        self.assertIn("registered_status_sensor_->publish_state(decoded.registered_layout)", text)
+        self.assertIn('decoded.registered_layout && !decoded.appendix.empty()', text)
         self.assertIn("ff40_payload_sensor_", text)
         self.assertIn("ff40_changes_sensor_", text)
         self.assertIn("registration_accept_evidence_ = true", text)
