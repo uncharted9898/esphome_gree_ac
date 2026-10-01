@@ -295,3 +295,42 @@ bytes that have not been proven for the new unit. It provides:
 After collecting labelled traffic from the Vireo (power, mode, temperature,
 fan and vane changes), validated field decoders and controlled writes can be
 added without replacing this transport/capture layer.
+
+
+## Long-pass controller and telemetry surface
+
+The structured wired-controller state now exposes the fields with direct
+cross-capture support while retaining every unresolved byte unchanged.
+
+- The observed controller mode/power byte has a proven ON/OFF delta of
+  `0x08` in the working GKH ESPHome capture (`0x11 -> 0x19` when powered
+  ON in Cool). The component therefore provides a staged power action that
+  toggles only that bit and preserves the rest of the byte.
+- The captured setpoint remains body payload offset 12 using degrees-Celsius
+  times two. The expanded `FF -> 40 / 0x29` appendix also contains a
+  `0x28` byte at appendix offset 5 in the 20.0 C reference capture. Because
+  the public reverse-engineering thread still treats that echo as a candidate,
+  ESPHome publishes it as a diagnostic candidate rather than silently using
+  it as authoritative climate state.
+- A raw controller-payload-byte staging action exists for controlled
+  reverse-engineering. It mutates the in-memory 33-byte controller image only;
+  it cannot transmit directly and the qualification package still has
+  `persistent_controller: false`.
+- `ff40_indexed` publishes every decoded status payload byte as
+  `index:hex`. This is intentionally redundant with the raw payload: it makes
+  field correlation against room temperature, coil temperature, fan state,
+  compressor state and other labelled changes practical without assigning
+  guessed semantics.
+
+The Wi-Fi-module `0x2C/0x2F` protocol documented by
+`bekmansurov/gree-hvac-protocol` is not reused on COM-MANUAL. Its issue #8,
+however, is direct wired-controller evidence and is used alongside
+`maxim-smirnov/gree-wired-proto` for the `00 -> FF`, `FF -> 00`, and
+`FF -> 40` state machine.
+
+The XK19 issue also demonstrates a separate attention/session transaction
+before a poll, with an approximately 800 ms delay. The exact bytes are only
+available in logic-analyzer screenshots at present. No service-query packet is
+transmitted until those bytes are recovered exactly or independently captured;
+the implementation keeps service/query traffic separate from the proven
+controller-state path.
