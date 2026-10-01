@@ -60,6 +60,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              "CTRL staged mode_power=0x%02X; will be encoded on the next eligible indoor poll",
              value);
   }
+  void set_controller_power(bool enabled) {
+    controller::set_power_enabled(this->controller_state_, enabled);
+    this->publish_controller_state_();
+    ESP_LOGI(TAG,
+             "CTRL staged power=%s mode_power=0x%02X; will be encoded on the next eligible indoor poll",
+             enabled ? "ON" : "OFF",
+             controller::mode_power_raw(this->controller_state_));
+  }
+  bool set_controller_payload_byte(uint8_t index, uint8_t value) {
+    if (!controller::set_payload_byte(this->controller_state_, index, value)) return false;
+    this->publish_controller_state_();
+    ESP_LOGW(TAG,
+             "CTRL staged experimental payload[%u]=0x%02X; no direct TX occurs",
+             static_cast<unsigned>(index), value);
+    return true;
+  }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
@@ -89,6 +105,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_controller_polls_seen_sensor(sensor::Sensor *s) { this->controller_polls_seen_sensor_ = s; }
   void set_controller_responses_sent_sensor(sensor::Sensor *s) { this->controller_responses_sent_sensor_ = s; }
   void set_registered_status_frames_sensor(sensor::Sensor *s) { this->registered_status_frames_sensor_ = s; }
+  void set_registered_setpoint_candidate_sensor(sensor::Sensor *s) {
+    this->registered_setpoint_candidate_sensor_ = s;
+  }
 
   void set_last_frame_sensor(text_sensor::TextSensor *s) { this->last_frame_sensor_ = s; }
   void set_last_payload_sensor(text_sensor::TextSensor *s) { this->last_payload_sensor_ = s; }
@@ -110,6 +129,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_last_frame_role_sensor(text_sensor::TextSensor *s) { this->last_frame_role_sensor_ = s; }
   void set_poll_payload_sensor(text_sensor::TextSensor *s) { this->poll_payload_sensor_ = s; }
   void set_poll_changes_sensor(text_sensor::TextSensor *s) { this->poll_changes_sensor_ = s; }
+  void set_ff40_indexed_sensor(text_sensor::TextSensor *s) { this->ff40_indexed_sensor_ = s; }
 
   void set_bus_active_sensor(binary_sensor::BinarySensor *s) { this->bus_active_sensor_ = s; }
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
@@ -709,9 +729,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     const auto signature = controller::unit_signature(this->controller_state_);
     char summary[128];
     std::snprintf(summary, sizeof(summary),
-                  "unit=%02X%02X%02X mode_power=0x%02X secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
+                  "unit=%02X%02X%02X mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
                   signature[0], signature[1], signature[2],
                   controller::mode_power_raw(this->controller_state_),
+                  controller::power_enabled(this->controller_state_) ? "ON" : "OFF",
                   controller::secondary_control_raw(this->controller_state_),
                   static_cast<unsigned>(controller::setpoint_x2(this->controller_state_)),
                   controller::setpoint_celsius(this->controller_state_),
@@ -731,6 +752,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
           decoded.registered_layout && !decoded.appendix.empty()
               ? hex_(decoded.appendix)
               : "-");
+    }
+    if (decoded.has_registered_setpoint_candidate &&
+        this->registered_setpoint_candidate_sensor_ != nullptr) {
+      this->registered_setpoint_candidate_sensor_->publish_state(
+          decoded.registered_setpoint_celsius_candidate);
+    }
+    if (this->ff40_indexed_sensor_ != nullptr) {
+      std::string indexed;
+      for (size_t i = 0; i < decoded.payload.size(); ++i) {
+        char token[16];
+        std::snprintf(token, sizeof(token), "%u:%02X",
+                      static_cast<unsigned>(i), decoded.payload[i]);
+        if (!indexed.empty()) indexed.push_back(' ');
+        indexed += token;
+      }
+      this->ff40_indexed_sensor_->publish_state(indexed);
     }
 
     if (decoded.registered_layout) {
@@ -1103,6 +1140,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   sensor::Sensor *controller_polls_seen_sensor_{nullptr};
   sensor::Sensor *controller_responses_sent_sensor_{nullptr};
   sensor::Sensor *registered_status_frames_sensor_{nullptr};
+  sensor::Sensor *registered_setpoint_candidate_sensor_{nullptr};
 
   text_sensor::TextSensor *last_frame_sensor_{nullptr};
   text_sensor::TextSensor *last_payload_sensor_{nullptr};
@@ -1120,6 +1158,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *last_frame_role_sensor_{nullptr};
   text_sensor::TextSensor *poll_payload_sensor_{nullptr};
   text_sensor::TextSensor *poll_changes_sensor_{nullptr};
+  text_sensor::TextSensor *ff40_indexed_sensor_{nullptr};
 
   binary_sensor::BinarySensor *bus_active_sensor_{nullptr};
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
@@ -1146,6 +1185,43 @@ template<typename... Ts> class SetControllerSetpointAction final : public Action
  protected:
   GreeWiredRS485 *parent_;
   TemplatableValue<float, Ts...> value_{};
+};
+
+template<typename... Ts> class SetControllerPowerAction final : public Action<Ts...> {
+ public:
+  explicit SetControllerPowerAction(GreeWiredRS485 *parent) : parent_(parent) {}
+
+  template<typename V> void set_value(V value) { this->value_ = value; }
+
+  void play(const Ts &...x) override {
+    this->parent_->set_controller_power(this->value_.value(x...));
+  }
+
+ protected:
+  GreeWiredRS485 *parent_;
+  TemplatableValue<bool, Ts...> value_{};
+};
+
+template<typename... Ts> class SetControllerPayloadByteAction final : public Action<Ts...> {
+ public:
+  explicit SetControllerPayloadByteAction(GreeWiredRS485 *parent) : parent_(parent) {}
+
+  template<typename V> void set_index(V value) { this->index_ = value; }
+  template<typename V> void set_value(V value) { this->value_ = value; }
+
+  void play(const Ts &...x) override {
+    const uint8_t index = this->index_.value(x...);
+    const uint8_t value = this->value_.value(x...);
+    if (!this->parent_->set_controller_payload_byte(index, value)) {
+      ESP_LOGW(TAG, "Rejected staged controller payload index %u",
+               static_cast<unsigned>(index));
+    }
+  }
+
+ protected:
+  GreeWiredRS485 *parent_;
+  TemplatableValue<uint8_t, Ts...> index_{};
+  TemplatableValue<uint8_t, Ts...> value_{};
 };
 
 template<typename... Ts> class SetControllerModePowerRawAction final : public Action<Ts...> {
