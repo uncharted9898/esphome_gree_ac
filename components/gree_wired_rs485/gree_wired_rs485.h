@@ -286,7 +286,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
-               "HEALTH mode=%s dir=%s reg=%u/%u waiting=%s established=%s profile=%s bytes=%lu uart_window=%lu "
+               "HEALTH mode=%s dir=%s reg=%u/%u waiting=%s established=%s tx_ms=%lu tx_flush=%s tx_de=%d>%d "
+               "profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
                "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
@@ -297,6 +298,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                static_cast<unsigned>(this->registration_attempt_limit_),
                YESNO(this->registration_waiting_for_response_),
                YESNO(this->registration_established_),
+               static_cast<unsigned long>(this->last_registration_tx_elapsed_ms_),
+               this->last_registration_tx_seen_
+                   ? (this->last_registration_tx_flush_ok_ ? "OK" : "FAIL")
+                   : "N/A",
+               this->last_registration_de_before_,
+               this->last_registration_de_after_,
                this->scan_profile_(this->scan_profile_index_).name,
                static_cast<unsigned long>(this->bytes_received_),
                static_cast<unsigned long>(uart_bytes_window),
@@ -475,7 +482,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void send_registration_() {
     // Recovered controller-side FF->00 registration/state frame from a real
-    // Gree wired-controller capture. The line rate is only 1200 baud: this
+    // GKH/XK76-class Gree wired-controller capture. It remains an experimental
+    // candidate on this Vireo target until a Vireo/XE71 byte-level exchange is
+    // captured. The line rate is only 1200 baud: this
     // 40-byte frame occupies roughly 333 ms on the wire. Do not schedule the
     // next registration from the pre-TX timestamp or the frames become
     // back-to-back and collide with the indoor unit's reply.
@@ -496,6 +505,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     frame.back() = xor_checksum_(frame.data(), frame.size() - 1);
 
     ++this->registration_attempts_sent_;
+    this->last_registration_de_before_ = this->read_gpio_level_(this->direction_gpio_);
     this->tx_in_progress_ = true;
 
     if (!this->hardware_half_duplex_ && !this->set_direction_level_(1)) {
@@ -511,12 +521,34 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              frame[26],
              this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
              hex_(frame).c_str());
+
+    // Time write+flush, not just queueing. ESPHome's ESP-IDF UART backend uses
+    // uart_wait_tx_done() for flush(), so this persists evidence that the UART
+    // remained busy for the complete 40-byte / 1200-baud transmission.
+    const uint32_t tx_started_at = millis();
     this->write_array(frame.data(), frame.size());
     const auto flush_result = this->flush();
+    this->last_registration_tx_elapsed_ms_ =
+        static_cast<uint32_t>(millis() - tx_started_at);
+    this->last_registration_tx_seen_ = true;
+    this->last_registration_tx_flush_ok_ =
+        flush_result == uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS;
+
     if (!this->hardware_half_duplex_) {
       this->force_receive_mode_();
     }
     this->tx_in_progress_ = false;
+    this->last_registration_de_after_ = this->read_gpio_level_(this->direction_gpio_);
+
+    ESP_LOGI(TAG,
+             "TX complete registration %u/%u elapsed=%lums expected_wire=~333ms "
+             "flush=%s de_idle=%d>%d",
+             static_cast<unsigned>(this->registration_attempts_sent_),
+             static_cast<unsigned>(this->registration_attempt_limit_),
+             static_cast<unsigned long>(this->last_registration_tx_elapsed_ms_),
+             this->last_registration_tx_flush_ok_ ? "OK" : "FAIL",
+             this->last_registration_de_before_,
+             this->last_registration_de_after_);
 
     // Start the receive window only after the UART has drained and DE is LOW.
     // At 1200 baud this is the critical distinction from the old burst logic.
@@ -613,9 +645,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     const auto profile = this->scan_profile_(index);
     this->assembler_.reset();
 
-    // Receiver-only qualification: changing UART decode settings does not
-    // transmit anything on RS485. The deployment UART owns RX only; GPIO4 is
-    // deliberately not registered as UART RTS/flow control.
+    // Changing UART decode settings does not transmit anything on RS485.
+    // Hardware-half-duplex deployments may keep GPIO4 registered as UART
+    // RTS/DE; this profile-change path itself never writes bus data.
     this->parent_->set_baud_rate(profile.baud);
     this->parent_->set_data_bits(8);
     this->parent_->set_stop_bits(1);
@@ -778,6 +810,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t registration_start_delay_ms_{1500};
   uint32_t registration_response_quiet_ms_{100};
   uint32_t last_registration_at_{0};
+  uint32_t last_registration_tx_elapsed_ms_{0};
   uint32_t raw_rx_burst_last_at_{0};
   uint32_t bus_idle_timeout_ms_{10000};
   uint32_t last_byte_at_{0};
@@ -791,6 +824,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   size_t scan_profile_index_{0};
   int rx_line_gpio_{-1};
   int direction_gpio_{-1};
+  int last_registration_de_before_{-1};
+  int last_registration_de_after_{-1};
 
   uint32_t bytes_received_{0};
   uint32_t valid_frames_{0};
@@ -812,6 +847,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint8_t registration_attempts_sent_{0};
   bool registration_waiting_for_response_{false};
   bool registration_established_{false};
+  bool last_registration_tx_seen_{false};
+  bool last_registration_tx_flush_ok_{false};
   uint32_t registration_valid_frames_at_send_{0};
   bool tx_in_progress_{false};
   bool bus_active_{false};
