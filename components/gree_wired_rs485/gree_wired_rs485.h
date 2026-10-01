@@ -390,41 +390,20 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     this->active_probe_sent_ = true;
     this->active_probe_sent_at_ = now;
-
     this->tx_in_progress_ = true;
-    if (!this->set_direction_level_(1)) {
-      this->tx_in_progress_ = false;
-      ESP_LOGE(TAG, "Active discovery probe aborted: could not enable RS485 driver");
-      this->force_receive_mode_();
-      return;
-    }
 
-    // The Seeed board routes XIAO D4/GPIO6 to TP8485E DI. UART TX is not
-    // registered in YAML so ESP-IDF cannot own DE; route TX only for this
-    // bounded frame, then disconnect it again.
-#ifdef USE_ESP32
-    const uart_port_t uart_num = static_cast<uart_port_t>(0);
-    esp_err_t err = uart_set_pin(uart_num, 6, UART_PIN_NO_CHANGE,
-                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "Active discovery probe aborted: uart_set_pin TX failed: %s",
-               esp_err_to_name(err));
-      this->force_receive_mode_();
+    if (!this->set_direction_level_(1)) {
+      ESP_LOGE(TAG, "Active discovery probe aborted: could not enable RS485 driver");
       this->tx_in_progress_ = false;
+      this->force_receive_mode_();
       return;
     }
-#endif
 
     ESP_LOGI(TAG, "TX discovery poll 00->FF: %s",
              hex_(std::vector<uint8_t>(DISCOVERY_POLL,
                                        DISCOVERY_POLL + sizeof(DISCOVERY_POLL))).c_str());
     this->write_array(DISCOVERY_POLL, sizeof(DISCOVERY_POLL));
     const auto flush_result = this->flush();
-
-#ifdef USE_ESP32
-    uart_set_pin(uart_num, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
-                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-#endif
     this->force_receive_mode_();
     this->tx_in_progress_ = false;
 
