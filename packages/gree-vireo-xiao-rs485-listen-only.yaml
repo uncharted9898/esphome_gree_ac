@@ -219,6 +219,15 @@ gree_wired_rs485:
   ff40_changes:
     name: ${friendly_name} FF40 Status Changes
     entity_category: diagnostic
+  last_frame_role:
+    name: ${friendly_name} Last Frame Role
+    entity_category: diagnostic
+  poll_payload:
+    name: ${friendly_name} 00 to FF Poll Payload
+    entity_category: diagnostic
+  poll_changes:
+    name: ${friendly_name} 00 to FF Poll Changes
+    entity_category: diagnostic
 
   bus_active:
     name: ${friendly_name} COM-MANUAL Bus Active

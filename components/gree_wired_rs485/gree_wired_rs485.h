@@ -11,6 +11,7 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
+#include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/log.h"
 #include "esphome/core/helpers.h"
@@ -47,11 +48,17 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool set_controller_setpoint_celsius(float value) {
     if (!controller::set_setpoint_celsius(this->controller_state_, value)) return false;
     this->publish_controller_state_();
+    ESP_LOGI(TAG,
+             "CTRL staged setpoint=%.1fC; will be encoded on the next eligible indoor poll",
+             value);
     return true;
   }
   void set_controller_mode_power_raw(uint8_t value) {
     controller::set_mode_power_raw(this->controller_state_, value);
     this->publish_controller_state_();
+    ESP_LOGI(TAG,
+             "CTRL staged mode_power=0x%02X; will be encoded on the next eligible indoor poll",
+             value);
   }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
@@ -100,6 +107,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_controller_state_sensor(text_sensor::TextSensor *s) { this->controller_state_sensor_ = s; }
   void set_ff40_payload_sensor(text_sensor::TextSensor *s) { this->ff40_payload_sensor_ = s; }
   void set_ff40_changes_sensor(text_sensor::TextSensor *s) { this->ff40_changes_sensor_ = s; }
+  void set_last_frame_role_sensor(text_sensor::TextSensor *s) { this->last_frame_role_sensor_ = s; }
+  void set_poll_payload_sensor(text_sensor::TextSensor *s) { this->poll_payload_sensor_ = s; }
+  void set_poll_changes_sensor(text_sensor::TextSensor *s) { this->poll_changes_sensor_ = s; }
 
   void set_bus_active_sensor(binary_sensor::BinarySensor *s) { this->bus_active_sensor_ = s; }
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
@@ -912,8 +922,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       if (this->ff40_payload_sensor_ != nullptr) this->ff40_payload_sensor_->publish_state(payload_hex);
       if (this->ff40_changes_sensor_ != nullptr) this->ff40_changes_sensor_->publish_state(changes);
     }
+    if (frame.route == protocol::RouteKind::ROUTE_00_FF) {
+      if (this->poll_payload_sensor_ != nullptr) this->poll_payload_sensor_->publish_state(payload_hex);
+      if (this->poll_changes_sensor_ != nullptr) this->poll_changes_sensor_->publish_state(changes);
+    }
     const std::string route = route_text_(frame.source, frame.destination);
     const char *frame_class = protocol::frame_class_name(frame.frame_class);
+    const char *frame_role = protocol::frame_role_name(frame.role);
 
     // Publish on every valid source frame, including byte-for-byte duplicates,
     // so Home Assistant timestamps reflect actual bus freshness.
@@ -922,6 +937,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->last_route_sensor_ != nullptr) this->last_route_sensor_->publish_state(route);
     if (this->last_frame_class_sensor_ != nullptr) {
       this->last_frame_class_sensor_->publish_state(frame_class);
+    }
+    if (this->last_frame_role_sensor_ != nullptr) {
+      this->last_frame_role_sensor_->publish_state(frame_role);
     }
     if (this->last_changes_sensor_ != nullptr) this->last_changes_sensor_->publish_state(changes);
     if (this->last_source_sensor_ != nullptr) this->last_source_sensor_->publish_state(frame.source);
@@ -937,10 +955,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->log_frames_) {
       ESP_LOGI(TAG,
                "RX route=%s type=0x%02X body=%u payload=%u checksum=0x%02X "
-               "class=%s changes=[%s] raw=%s",
+               "class=%s role=%s changes=[%s] raw=%s",
                route.c_str(), frame.message_type, static_cast<unsigned>(frame.body_length),
                static_cast<unsigned>(frame.payload.size()), frame.checksum, frame_class,
-               changes.c_str(), raw_hex.c_str());
+               frame_role, changes.c_str(), raw_hex.c_str());
     }
   }
 
@@ -1099,6 +1117,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *controller_state_sensor_{nullptr};
   text_sensor::TextSensor *ff40_payload_sensor_{nullptr};
   text_sensor::TextSensor *ff40_changes_sensor_{nullptr};
+  text_sensor::TextSensor *last_frame_role_sensor_{nullptr};
+  text_sensor::TextSensor *poll_payload_sensor_{nullptr};
+  text_sensor::TextSensor *poll_changes_sensor_{nullptr};
 
   binary_sensor::BinarySensor *bus_active_sensor_{nullptr};
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
@@ -1107,6 +1128,39 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   binary_sensor::BinarySensor *electrical_activity_sensor_{nullptr};
   binary_sensor::BinarySensor *direction_high_seen_sensor_{nullptr};
   binary_sensor::BinarySensor *registered_status_sensor_{nullptr};
+};
+
+template<typename... Ts> class SetControllerSetpointAction final : public Action<Ts...> {
+ public:
+  explicit SetControllerSetpointAction(GreeWiredRS485 *parent) : parent_(parent) {}
+
+  template<typename V> void set_value(V value) { this->value_ = value; }
+
+  void play(const Ts &...x) override {
+    const float value = this->value_.value(x...);
+    if (!this->parent_->set_controller_setpoint_celsius(value)) {
+      ESP_LOGW(TAG, "Rejected staged controller setpoint %.2fC", value);
+    }
+  }
+
+ protected:
+  GreeWiredRS485 *parent_;
+  TemplatableValue<float, Ts...> value_{};
+};
+
+template<typename... Ts> class SetControllerModePowerRawAction final : public Action<Ts...> {
+ public:
+  explicit SetControllerModePowerRawAction(GreeWiredRS485 *parent) : parent_(parent) {}
+
+  template<typename V> void set_value(V value) { this->value_ = value; }
+
+  void play(const Ts &...x) override {
+    this->parent_->set_controller_mode_power_raw(this->value_.value(x...));
+  }
+
+ protected:
+  GreeWiredRS485 *parent_;
+  TemplatableValue<uint8_t, Ts...> value_{};
 };
 
 }  // namespace gree_wired_rs485

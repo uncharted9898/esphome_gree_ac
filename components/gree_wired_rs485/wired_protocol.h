@@ -30,6 +30,18 @@ enum class FrameClass : uint8_t {
   UNEXPECTED_MESSAGE_TYPE,
 };
 
+enum class FrameRole : uint8_t {
+  CONTROLLER_POLL_0E,
+  CONTROLLER_STATE_LEGACY_15,
+  CONTROLLER_STATE_22,
+  INDOOR_STATUS_16,
+  INDOOR_STATUS_17,
+  INDOOR_STATUS_REGISTERED_29,
+  KNOWN_ROUTE_VARIANT,
+  UNKNOWN_ROUTE,
+  UNEXPECTED_MESSAGE_TYPE,
+};
+
 struct ParsedFrame {
   uint8_t source{0};
   uint8_t destination{0};
@@ -38,6 +50,7 @@ struct ParsedFrame {
   uint8_t checksum{0};
   RouteKind route{RouteKind::UNKNOWN};
   FrameClass frame_class{FrameClass::UNKNOWN_ROUTE};
+  FrameRole role{FrameRole::UNKNOWN_ROUTE};
   bool reference_body_length{false};
   std::vector<uint8_t> payload;  // Body without the trailing XOR checksum.
 };
@@ -87,6 +100,52 @@ inline const char *route_name(RouteKind route) {
   }
 }
 
+inline FrameRole classify_role(RouteKind route, uint8_t message_type,
+                               uint8_t body_length) {
+  if (message_type != MESSAGE_TYPE) return FrameRole::UNEXPECTED_MESSAGE_TYPE;
+  switch (route) {
+    case RouteKind::ROUTE_00_FF:
+      return body_length == 0x0E ? FrameRole::CONTROLLER_POLL_0E
+                                 : FrameRole::KNOWN_ROUTE_VARIANT;
+    case RouteKind::ROUTE_FF_00:
+      if (body_length == 0x15) return FrameRole::CONTROLLER_STATE_LEGACY_15;
+      if (body_length == 0x22) return FrameRole::CONTROLLER_STATE_22;
+      return FrameRole::KNOWN_ROUTE_VARIANT;
+    case RouteKind::ROUTE_FF_40:
+      if (body_length == 0x16) return FrameRole::INDOOR_STATUS_16;
+      if (body_length == 0x17) return FrameRole::INDOOR_STATUS_17;
+      if (body_length == 0x29) return FrameRole::INDOOR_STATUS_REGISTERED_29;
+      return FrameRole::KNOWN_ROUTE_VARIANT;
+    case RouteKind::UNKNOWN:
+    default:
+      return FrameRole::UNKNOWN_ROUTE;
+  }
+}
+
+inline const char *frame_role_name(FrameRole role) {
+  switch (role) {
+    case FrameRole::CONTROLLER_POLL_0E:
+      return "controller_poll_0e";
+    case FrameRole::CONTROLLER_STATE_LEGACY_15:
+      return "controller_state_15";
+    case FrameRole::CONTROLLER_STATE_22:
+      return "controller_state_22";
+    case FrameRole::INDOOR_STATUS_16:
+      return "indoor_status_16";
+    case FrameRole::INDOOR_STATUS_17:
+      return "indoor_status_17";
+    case FrameRole::INDOOR_STATUS_REGISTERED_29:
+      return "indoor_status_registered_29";
+    case FrameRole::KNOWN_ROUTE_VARIANT:
+      return "known_route_variant";
+    case FrameRole::UNEXPECTED_MESSAGE_TYPE:
+      return "unexpected_message_type";
+    case FrameRole::UNKNOWN_ROUTE:
+    default:
+      return "unknown_route";
+  }
+}
+
 inline const char *frame_class_name(FrameClass frame_class) {
   switch (frame_class) {
     case FrameClass::REFERENCE_LAYOUT:
@@ -121,6 +180,7 @@ inline bool parse_frame(const std::vector<uint8_t> &raw, ParsedFrame &out) {
   out.checksum = raw.back();
   out.route = classify_route(out.source, out.destination);
   out.reference_body_length = is_reference_body_length(out.route, body_length);
+  out.role = classify_role(out.route, out.message_type, body_length);
   out.payload.assign(raw.begin() + HEADER_SIZE, raw.end() - 1);
 
   if (out.message_type != MESSAGE_TYPE) {

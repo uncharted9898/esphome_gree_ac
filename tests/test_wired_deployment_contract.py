@@ -54,6 +54,9 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("registration_attempts: 4", text)
         self.assertIn("hardware_half_duplex: true", text)
         self.assertIn("persistent_controller: false", text)
+        self.assertIn("last_frame_role:", text)
+        self.assertIn("poll_payload:", text)
+        self.assertIn("poll_changes:", text)
         self.assertIn("#   pin 3 -> Seeed A", text)
         self.assertIn("#   pin 4 -> Seeed B", text)
         self.assertIn("#   120R termination -> OFF", text)
@@ -142,6 +145,20 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("controller::set_accept_counter", runtime)
         self.assertIn("accept_counter", runtime)
         self.assertIn("controller_responses_sent_", runtime)
+
+    def test_controller_actions_stage_state_without_direct_tx(self):
+        text = HEADER.read_text()
+        self.assertIn("class SetControllerSetpointAction", text)
+        self.assertIn("class SetControllerModePowerRawAction", text)
+        self.assertIn("set_controller_setpoint_celsius", text)
+        self.assertIn("set_controller_mode_power_raw", text)
+
+        setpoint_start = text.index("class SetControllerSetpointAction")
+        mode_start = text.index("class SetControllerModePowerRawAction")
+        action_tail = text[setpoint_start:]
+        self.assertNotIn("write_array", action_tail)
+        self.assertNotIn("flush()", action_tail)
+        self.assertLess(setpoint_start, mode_start)
 
     def test_registration_tx_evidence_is_persisted(self):
         text = HEADER.read_text()

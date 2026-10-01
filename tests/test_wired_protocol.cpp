@@ -100,6 +100,7 @@ int main() {
   assert(parsed.route == RouteKind::ROUTE_00_FF);
   assert(parsed.body_length == 0x0E);
   assert(parsed.frame_class == FrameClass::REFERENCE_LAYOUT);
+  assert(parsed.role == FrameRole::CONTROLLER_POLL_0E);
   assert(xor_bytes(startup_poll) == 0);
 
   const auto startup_status = startup_status_ff_40();
@@ -108,6 +109,7 @@ int main() {
   assert(parsed.body_length == 0x17);
   assert(parsed.payload.size() == 22);
   assert(parsed.frame_class == FrameClass::REFERENCE_LAYOUT);
+  assert(parsed.role == FrameRole::INDOOR_STATUS_17);
   assert(xor_bytes(startup_status) == 0);
 
   const auto controller_state = controller_state_ff_00();
@@ -116,6 +118,7 @@ int main() {
   assert(parsed.body_length == 0x22);
   assert(parsed.payload.size() == 33);
   assert(parsed.frame_class == FrameClass::REFERENCE_LAYOUT);
+  assert(parsed.role == FrameRole::CONTROLLER_STATE_22);
   assert(xor_bytes(controller_state) == 0);
 
   const auto registered_status = registered_status_ff_40();
@@ -124,6 +127,7 @@ int main() {
   assert(parsed.body_length == 0x29);
   assert(parsed.payload.size() == 40);
   assert(parsed.frame_class == FrameClass::REFERENCE_LAYOUT);
+  assert(parsed.role == FrameRole::INDOOR_STATUS_REGISTERED_29);
   assert(xor_bytes(registered_status) == 0);
 
   // A known route with a new body length is retained for R32/Vireo discovery
@@ -140,6 +144,7 @@ int main() {
   assert(parsed.route == RouteKind::ROUTE_00_FF);
   assert(parsed.frame_class == FrameClass::KNOWN_ROUTE_VARIANT);
   assert(!parsed.reference_body_length);
+  assert(parsed.role == FrameRole::KNOWN_ROUTE_VARIANT);
 
   auto bad_checksum = a;
   bad_checksum.back() ^= 0x01;
