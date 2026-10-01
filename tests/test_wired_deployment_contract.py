@@ -9,16 +9,16 @@ PACKAGE = ROOT / "packages/gree-vireo-xiao-rs485-listen-only.yaml"
 
 
 class WiredDeploymentContractTests(unittest.TestCase):
-    def test_active_probe_is_bounded_and_uses_recovered_discovery_frame(self):
+    def test_active_probe_emulates_controller_registration(self):
         text = HEADER.read_text()
-        self.assertIn("if (!this->active_probe_ || this->active_probe_sent_) return false;", text)
-        self.assertIn("static const uint8_t DISCOVERY_POLL[]", text)
-        self.assertIn(
-            "0x7E, 0x7E, 0x00, 0xFF, 0x11, 0x0E",
-            text,
-        )
-        self.assertIn("this->write_array(DISCOVERY_POLL, sizeof(DISCOVERY_POLL));", text)
+        self.assertIn("should_send_registration_", text)
+        self.assertIn("send_registration_", text)
+        self.assertIn("registration_attempt_limit_", text)
+        self.assertIn("0x7E, 0x7E, 0xFF, 0x00, 0x11, 0x22", text)
+        self.assertIn("frame[26]", text)
+        self.assertIn("this->write_array(frame.data(), frame.size());", text)
         self.assertIn("this->force_receive_mode_();", text)
+        self.assertIn('ESP_LOGI(TAG, "RX raw burst', text)
 
     def test_vireo_package_uses_software_direction_and_field_mapping(self):
         text = PACKAGE.read_text()
@@ -28,6 +28,8 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("rx_pin: GPIO7", uart_block)
         self.assertIn("passive_scan: false", text)
         self.assertIn("active_probe: true", text)
+        self.assertIn("active_probe_interval: 300ms", text)
+        self.assertIn("registration_attempts: 8", text)
         self.assertIn("#   pin 3 -> Seeed A", text)
         self.assertIn("#   pin 4 -> Seeed B", text)
         self.assertIn("#   120R termination -> OFF", text)
