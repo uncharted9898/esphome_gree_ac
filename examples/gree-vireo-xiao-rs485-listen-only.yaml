@@ -92,8 +92,9 @@ gree_wired_rs485:
   frame_timeout: 75ms
   bus_idle_timeout: 10s
   log_frames: true
-  passive_scan: true
-  passive_scan_window: 2s
+  passive_scan: false
+  rx_line_gpio: 7
+  direction_gpio: 4
 
   bytes_received:
     name: ${friendly_name} Bytes Received
@@ -172,4 +173,10 @@ gree_wired_rs485:
     entity_category: diagnostic
   listen_only:
     name: ${friendly_name} Listen Only
+    entity_category: diagnostic
+  rx_line_high:
+    name: ${friendly_name} RS485 RX Line High
+    entity_category: diagnostic
+  direction_high:
+    name: ${friendly_name} RS485 DE High
     entity_category: diagnostic
