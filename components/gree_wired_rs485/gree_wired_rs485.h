@@ -180,7 +180,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     }
 
     if (!this->raw_rx_burst_.empty() && this->raw_rx_burst_last_at_ != 0 &&
-        static_cast<uint32_t>(now - this->raw_rx_burst_last_at_) >= 50) {
+        static_cast<uint32_t>(millis() - this->raw_rx_burst_last_at_) >= 50) {
       ESP_LOGI(TAG, "RX raw burst (%u bytes): %s",
                static_cast<unsigned>(this->raw_rx_burst_.size()),
                hex_(this->raw_rx_burst_).c_str());
