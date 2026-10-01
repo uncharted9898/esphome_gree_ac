@@ -107,8 +107,8 @@ gree_wired_rs485:
   log_frames: true
   passive_scan: false
   active_probe: true
-  active_probe_interval: 300ms
-  registration_attempts: 8
+  active_probe_interval: 1200ms
+  registration_attempts: 4
   rx_line_gpio: 7
   direction_gpio: 4
 
