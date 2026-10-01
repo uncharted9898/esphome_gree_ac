@@ -29,6 +29,18 @@ wifi:
 
 api:
 
+web_server:
+  port: 80
+  version: 3
+  local: true
+  log: false
+  ota: false
+  include_internal: false
+  auth:
+    type: digest
+    username: !secret gree_vireo_web_username
+    password: !secret gree_vireo_web_password
+
 ota:
   - platform: esphome
     password: !secret ota_password
