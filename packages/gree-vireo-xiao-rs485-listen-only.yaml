@@ -175,6 +175,9 @@ gree_wired_rs485:
   controller_responses_sent:
     name: ${friendly_name} Controller Responses Sent
     entity_category: diagnostic
+  registered_status_frames:
+    name: ${friendly_name} Registered Status Frames
+    entity_category: diagnostic
 
   last_frame:
     name: ${friendly_name} Last Frame
@@ -204,6 +207,18 @@ gree_wired_rs485:
   last_raw_rx:
     name: ${friendly_name} Last Raw RX Burst
     entity_category: diagnostic
+  ff40_appendix:
+    name: ${friendly_name} FF40 Registered Appendix
+    entity_category: diagnostic
+  controller_state:
+    name: ${friendly_name} Controller State Codec
+    entity_category: diagnostic
+  ff40_payload:
+    name: ${friendly_name} FF40 Status Payload
+    entity_category: diagnostic
+  ff40_changes:
+    name: ${friendly_name} FF40 Status Changes
+    entity_category: diagnostic
 
   bus_active:
     name: ${friendly_name} COM-MANUAL Bus Active
@@ -222,4 +237,7 @@ gree_wired_rs485:
     entity_category: diagnostic
   direction_high_seen:
     name: ${friendly_name} RS485 DE High Seen
+    entity_category: diagnostic
+  registered_status:
+    name: ${friendly_name} Registered FF40 Layout
     entity_category: diagnostic

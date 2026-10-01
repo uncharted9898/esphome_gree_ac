@@ -16,7 +16,9 @@
 #include "esphome/core/helpers.h"
 #include "controller_registration.h"
 #include "line_activity.h"
+#include "wired_controller_state.h"
 #include "wired_protocol.h"
+#include "wired_status.h"
 
 #ifdef USE_ESP32
 #include "driver/gpio.h"
@@ -41,6 +43,16 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_registration_attempts(uint8_t attempts) { this->registration_attempt_limit_ = attempts; }
   void set_hardware_half_duplex(bool enabled) { this->hardware_half_duplex_ = enabled; }
   void set_persistent_controller(bool enabled) { this->persistent_controller_ = enabled; }
+
+  bool set_controller_setpoint_celsius(float value) {
+    if (!controller::set_setpoint_celsius(this->controller_state_, value)) return false;
+    this->publish_controller_state_();
+    return true;
+  }
+  void set_controller_mode_power_raw(uint8_t value) {
+    controller::set_mode_power_raw(this->controller_state_, value);
+    this->publish_controller_state_();
+  }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
@@ -69,6 +81,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_rx_high_percent_sensor(sensor::Sensor *s) { this->rx_high_percent_sensor_ = s; }
   void set_controller_polls_seen_sensor(sensor::Sensor *s) { this->controller_polls_seen_sensor_ = s; }
   void set_controller_responses_sent_sensor(sensor::Sensor *s) { this->controller_responses_sent_sensor_ = s; }
+  void set_registered_status_frames_sensor(sensor::Sensor *s) { this->registered_status_frames_sensor_ = s; }
 
   void set_last_frame_sensor(text_sensor::TextSensor *s) { this->last_frame_sensor_ = s; }
   void set_last_payload_sensor(text_sensor::TextSensor *s) { this->last_payload_sensor_ = s; }
@@ -83,6 +96,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_protocol_sensor(text_sensor::TextSensor *s) { this->protocol_sensor_ = s; }
   void set_serial_profile_sensor(text_sensor::TextSensor *s) { this->serial_profile_sensor_ = s; }
   void set_last_raw_rx_sensor(text_sensor::TextSensor *s) { this->last_raw_rx_sensor_ = s; }
+  void set_ff40_appendix_sensor(text_sensor::TextSensor *s) { this->ff40_appendix_sensor_ = s; }
+  void set_controller_state_sensor(text_sensor::TextSensor *s) { this->controller_state_sensor_ = s; }
+  void set_ff40_payload_sensor(text_sensor::TextSensor *s) { this->ff40_payload_sensor_ = s; }
+  void set_ff40_changes_sensor(text_sensor::TextSensor *s) { this->ff40_changes_sensor_ = s; }
 
   void set_bus_active_sensor(binary_sensor::BinarySensor *s) { this->bus_active_sensor_ = s; }
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
@@ -90,6 +107,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_direction_high_sensor(binary_sensor::BinarySensor *s) { this->direction_high_sensor_ = s; }
   void set_electrical_activity_sensor(binary_sensor::BinarySensor *s) { this->electrical_activity_sensor_ = s; }
   void set_direction_high_seen_sensor(binary_sensor::BinarySensor *s) { this->direction_high_seen_sensor_ = s; }
+  void set_registered_status_sensor(binary_sensor::BinarySensor *s) { this->registered_status_sensor_ = s; }
 
   // Hardware half-duplex must start after the UART bus so ESP-IDF owns RTS/DE.
   // The manual fallback retains the earlier pre-UART LOW guard.
@@ -123,6 +141,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->protocol_sensor_ != nullptr) {
       this->protocol_sensor_->publish_state("1200-8N1; 7E7E; src,dst,11,len,body; xor=0");
     }
+    if (this->registered_status_sensor_ != nullptr) this->registered_status_sensor_->publish_state(false);
+    this->publish_controller_state_();
     this->publish_counters_();
     this->observe_line_activity_();
     this->publish_line_states_();
@@ -297,7 +317,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
                "HEALTH mode=%s dir=%s reg=%u/%u armed=%s waiting=%s established=%s sig=%s unit=%02X%02X%02X "
-               "runtime=%s polls=%lu replies=%lu pending=%s "
+               "runtime=%s polls=%lu replies=%lu status29=%lu pending=%s "
                "tx_ms=%lu tx_flush=%s tx_de=%d>%d "
                "profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
@@ -318,6 +338,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                this->persistent_controller_ ? "ON" : "OFF",
                static_cast<unsigned long>(this->controller_polls_seen_),
                static_cast<unsigned long>(this->controller_responses_sent_),
+               static_cast<unsigned long>(this->registered_status_frames_),
                YESNO(this->runtime_response_pending_),
                static_cast<unsigned long>(this->last_registration_tx_elapsed_ms_),
                this->last_registration_tx_seen_
@@ -487,6 +508,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         learned != this->registration_unit_signature_) {
       this->registration_unit_signature_ = learned;
       this->registration_unit_signature_learned_ = true;
+      controller::set_unit_signature(this->controller_state_, learned);
+      this->publish_controller_state_();
       ESP_LOGI(TAG, "REG learned target unit signature=%02X %02X %02X from FF->40",
                learned[0], learned[1], learned[2]);
     }
@@ -561,9 +584,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // startup 00->FF poll, and the unit signature bytes come from that target's
     // own FF->40 status traffic. This avoids treating ESP reboot time as the
     // indoor-unit registration window and avoids hardcoding 09 30 83.
+    const uint8_t accept_counter =
+        registration::counter_for_attempt(this->registration_attempts_sent_);
+    controller::set_accept_counter(this->controller_state_, accept_counter);
+    this->publish_controller_state_();
     std::vector<uint8_t> frame =
-        registration::make_frame(this->registration_attempts_sent_,
-                                 this->registration_unit_signature_);
+        controller::encode(this->controller_state_, accept_counter);
 
     ++this->registration_attempts_sent_;
     this->last_registration_de_before_ = this->read_gpio_level_(this->direction_gpio_);
@@ -631,8 +657,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     const size_t sequence =
         static_cast<size_t>(this->registration_attempts_sent_) +
         static_cast<size_t>(this->controller_responses_sent_);
+    const uint8_t accept_counter = registration::counter_for_attempt(sequence);
+    controller::set_accept_counter(this->controller_state_, accept_counter);
+    this->publish_controller_state_();
     std::vector<uint8_t> frame =
-        registration::make_frame(sequence, this->registration_unit_signature_);
+        controller::encode(this->controller_state_, accept_counter);
 
     this->runtime_response_pending_ = false;
     this->tx_in_progress_ = true;
@@ -647,7 +676,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              "TX controller runtime response poll=%lu reply=%lu counter=0x%02X direction=%s: %s",
              static_cast<unsigned long>(this->controller_polls_seen_),
              static_cast<unsigned long>(this->controller_responses_sent_ + 1),
-             frame[registration::COUNTER_INDEX],
+             accept_counter,
              this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
              hex_(frame).c_str());
 
@@ -662,6 +691,47 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     ++this->controller_responses_sent_;
     if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
       ESP_LOGW(TAG, "Controller runtime response TX flush was not confirmed");
+    }
+  }
+
+  void publish_controller_state_() {
+    if (this->controller_state_sensor_ == nullptr) return;
+    const auto signature = controller::unit_signature(this->controller_state_);
+    char summary[128];
+    std::snprintf(summary, sizeof(summary),
+                  "unit=%02X%02X%02X mode_power=0x%02X secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
+                  signature[0], signature[1], signature[2],
+                  controller::mode_power_raw(this->controller_state_),
+                  controller::secondary_control_raw(this->controller_state_),
+                  static_cast<unsigned>(controller::setpoint_x2(this->controller_state_)),
+                  controller::setpoint_celsius(this->controller_state_),
+                  controller::accept_counter(this->controller_state_));
+    this->controller_state_sensor_->publish_state(summary);
+  }
+
+  void observe_ff40_status_(const protocol::ParsedFrame &frame) {
+    status::FF40Status decoded;
+    if (!status::decode_ff40(frame, decoded)) return;
+
+    if (this->registered_status_sensor_ != nullptr) {
+      this->registered_status_sensor_->publish_state(decoded.registered_layout);
+    }
+    if (this->ff40_appendix_sensor_ != nullptr) {
+      this->ff40_appendix_sensor_->publish_state(
+          decoded.registered_layout && !decoded.appendix.empty()
+              ? hex_(decoded.appendix)
+              : "-");
+    }
+
+    if (decoded.registered_layout) {
+      ++this->registered_status_frames_;
+      if (this->registration_waiting_for_response_) {
+        this->registration_accept_evidence_ = true;
+        ESP_LOGI(TAG,
+                 "REG evidence: exact registered FF->40 body=0x%02X appendix=%s",
+                 decoded.body_length,
+                 decoded.appendix.empty() ? "-" : hex_(decoded.appendix).c_str());
+      }
     }
   }
 
@@ -784,13 +854,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (frame.route == protocol::RouteKind::ROUTE_00_FF) {
       this->observe_startup_poll_(this->last_valid_frame_at_);
     }
-    if (this->registration_waiting_for_response_ &&
-        frame.route == protocol::RouteKind::ROUTE_FF_40 &&
-        frame.body_length > 0x17) {
-      this->registration_accept_evidence_ = true;
-      ESP_LOGI(TAG,
-               "REG evidence: FF->40 body expanded to 0x%02X during response window",
-               frame.body_length);
+    if (frame.route == protocol::RouteKind::ROUTE_FF_40) {
+      this->observe_ff40_status_(frame);
     }
     if (this->passive_scan_ && !this->scan_locked_) {
       this->scan_locked_ = true;
@@ -843,6 +908,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     const std::string raw_hex = hex_(raw);
     const std::string payload_hex = hex_(frame.payload);
+    if (frame.route == protocol::RouteKind::ROUTE_FF_40) {
+      if (this->ff40_payload_sensor_ != nullptr) this->ff40_payload_sensor_->publish_state(payload_hex);
+      if (this->ff40_changes_sensor_ != nullptr) this->ff40_changes_sensor_->publish_state(changes);
+    }
     const std::string route = route_text_(frame.source, frame.destination);
     const char *frame_class = protocol::frame_class_name(frame.frame_class);
 
@@ -918,6 +987,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->controller_responses_sent_sensor_ != nullptr) {
       this->controller_responses_sent_sensor_->publish_state(this->controller_responses_sent_);
     }
+    if (this->registered_status_frames_sensor_ != nullptr) {
+      this->registered_status_frames_sensor_->publish_state(this->registered_status_frames_);
+    }
   }
 
   protocol::FrameAssembler assembler_;
@@ -966,6 +1038,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t route_ff_40_frames_{0};
   uint32_t controller_polls_seen_{0};
   uint32_t controller_responses_sent_{0};
+  uint32_t registered_status_frames_{0};
 
   bool log_frames_{true};
   bool active_probe_{false};
@@ -979,6 +1052,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool registration_unit_signature_learned_{false};
   registration::UnitSignature registration_unit_signature_{
       registration::REFERENCE_UNIT_SIGNATURE};
+  controller::ControllerState controller_state_{controller::reference_state()};
   bool registration_accept_evidence_{false};
   bool runtime_response_pending_{false};
   bool last_registration_tx_seen_{false};
@@ -1010,6 +1084,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   sensor::Sensor *rx_high_percent_sensor_{nullptr};
   sensor::Sensor *controller_polls_seen_sensor_{nullptr};
   sensor::Sensor *controller_responses_sent_sensor_{nullptr};
+  sensor::Sensor *registered_status_frames_sensor_{nullptr};
 
   text_sensor::TextSensor *last_frame_sensor_{nullptr};
   text_sensor::TextSensor *last_payload_sensor_{nullptr};
@@ -1020,6 +1095,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *protocol_sensor_{nullptr};
   text_sensor::TextSensor *serial_profile_sensor_{nullptr};
   text_sensor::TextSensor *last_raw_rx_sensor_{nullptr};
+  text_sensor::TextSensor *ff40_appendix_sensor_{nullptr};
+  text_sensor::TextSensor *controller_state_sensor_{nullptr};
+  text_sensor::TextSensor *ff40_payload_sensor_{nullptr};
+  text_sensor::TextSensor *ff40_changes_sensor_{nullptr};
 
   binary_sensor::BinarySensor *bus_active_sensor_{nullptr};
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
@@ -1027,6 +1106,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   binary_sensor::BinarySensor *direction_high_sensor_{nullptr};
   binary_sensor::BinarySensor *electrical_activity_sensor_{nullptr};
   binary_sensor::BinarySensor *direction_high_seen_sensor_{nullptr};
+  binary_sensor::BinarySensor *registered_status_sensor_{nullptr};
 };
 
 }  // namespace gree_wired_rs485

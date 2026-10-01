@@ -190,6 +190,56 @@ an `FF -> 00` controller-state response with the next accept counter. The
 bootstrap-only field package keeps this false so protocol research cannot
 silently turn into continuous control traffic.
 
+## Structured controller state and registered telemetry
+
+The recovered wired-controller traffic now has dedicated codecs rather than
+being treated as opaque registration bytes.
+
+### Proven controller-state layout
+
+The `FF -> 00`, message-type `0x11`, body-length `0x22` frame is recognized
+as the captured wired-controller state layout. The implementation preserves all
+33 payload bytes and only gives semantic names to fields supported by current
+captures:
+
+| Payload offset | Meaning supported by captures |
+|---:|---|
+| 0..2 | target/unit signature copied from `FF -> 40` |
+| 3 | mode + power raw byte; a working GKH controller report identifies `0x19` as Cool + ON |
+| 4 | secondary control raw byte; semantics remain unresolved |
+| 12 | setpoint × 2; for example `0x28` = 20.0 °C |
+| 20 | accept/change counter; the indoor unit requires it to differ for an accepted state change |
+
+Unknown bytes remain byte-for-byte preserved. The runtime state object is
+therefore safe to extend as more labelled captures arrive without reconstructing
+the frame from guessed defaults.
+
+### Registered `FF -> 40` status
+
+The exact `0x29` body length observed after successful wired-controller
+registration is now a first-class layout. Registration acceptance requires this
+specific registered form rather than the earlier loose rule of accepting any
+body length larger than `0x17`.
+
+The component separately publishes the registered appendix so changes can be
+diffed without stripping the base status bytes manually. No temperature, fan,
+coil or diagnostic meaning is assigned to appendix offsets until a labelled
+capture proves it.
+
+### Query/service traffic
+
+The XK19 reverse-engineering thread demonstrates an additional transaction:
+a controller can be made to answer after a preceding attention/session packet,
+an approximately 800 ms delay, and then a poll. The exact bytes are currently
+present only in logic-analyzer screenshots in that thread, not trustworthy
+machine-readable captures. This repository therefore documents that query layer
+but does **not** transmit a guessed service/query frame.
+
+This distinction is intentional: normal controller state/control, continuous
+`FF -> 40` telemetry, and service/query transactions are separate protocol
+layers. Unknown service traffic remains disabled until exact bytes and timing
+can be recovered or captured on the Vireo.
+
 ## Current scope
 
 The initial component deliberately does not assign climate meanings to payload

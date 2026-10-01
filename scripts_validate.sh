@@ -75,6 +75,14 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_controller_registration.cpp -o /tmp/test_controller_registration
 /tmp/test_controller_registration
 
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_wired_controller_state.cpp -o /tmp/test_wired_controller_state
+/tmp/test_wired_controller_state
+
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_wired_status.cpp -o /tmp/test_wired_status
+/tmp/test_wired_status
+
 if grep -RInE 'github://piotrva/esphome_gree_ac$|@main' examples; then
   echo 'Examples contain an unpinned or obsolete external component source' >&2
   exit 1
