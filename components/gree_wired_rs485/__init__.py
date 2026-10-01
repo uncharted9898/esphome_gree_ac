@@ -9,6 +9,8 @@ DEPENDENCIES = ["uart"]
 CONF_FRAME_TIMEOUT = "frame_timeout"
 CONF_BUS_IDLE_TIMEOUT = "bus_idle_timeout"
 CONF_LOG_FRAMES = "log_frames"
+CONF_PASSIVE_SCAN = "passive_scan"
+CONF_PASSIVE_SCAN_WINDOW = "passive_scan_window"
 
 CONF_BYTES_RECEIVED = "bytes_received"
 CONF_VALID_FRAMES = "valid_frames"
@@ -33,6 +35,7 @@ CONF_LAST_FRAME_CLASS = "last_frame_class"
 CONF_LAST_CHANGES = "last_changes"
 CONF_LAST_INVALID_FRAME = "last_invalid_frame"
 CONF_PROTOCOL = "protocol"
+CONF_SERIAL_PROFILE = "serial_profile"
 
 CONF_BUS_ACTIVE = "bus_active"
 CONF_LISTEN_ONLY = "listen_only"
@@ -66,6 +69,14 @@ CONFIG_SCHEMA = (
                 ),
             ),
             cv.Optional(CONF_LOG_FRAMES, default=True): cv.boolean,
+            cv.Optional(CONF_PASSIVE_SCAN, default=False): cv.boolean,
+            cv.Optional(CONF_PASSIVE_SCAN_WINDOW, default="2s"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(
+                    min=cv.TimePeriod(milliseconds=250),
+                    max=cv.TimePeriod(seconds=10),
+                ),
+            ),
             cv.Optional(CONF_BYTES_RECEIVED): counter_schema,
             cv.Optional(CONF_VALID_FRAMES): counter_schema,
             cv.Optional(CONF_CHECKSUM_FAILURES): counter_schema,
@@ -88,6 +99,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_LAST_CHANGES): text_schema,
             cv.Optional(CONF_LAST_INVALID_FRAME): text_schema,
             cv.Optional(CONF_PROTOCOL): text_schema,
+            cv.Optional(CONF_SERIAL_PROFILE): text_schema,
             cv.Optional(CONF_BUS_ACTIVE): binary_schema,
             cv.Optional(CONF_LISTEN_ONLY): binary_schema,
         }
@@ -114,6 +126,8 @@ async def to_code(config):
     cg.add(var.set_frame_timeout(config[CONF_FRAME_TIMEOUT]))
     cg.add(var.set_bus_idle_timeout(config[CONF_BUS_IDLE_TIMEOUT]))
     cg.add(var.set_log_frames(config[CONF_LOG_FRAMES]))
+    cg.add(var.set_passive_scan(config[CONF_PASSIVE_SCAN]))
+    cg.add(var.set_passive_scan_window(config[CONF_PASSIVE_SCAN_WINDOW]))
 
     sensor_entities = {
         CONF_BYTES_RECEIVED: "set_bytes_received_sensor",
@@ -145,6 +159,7 @@ async def to_code(config):
         CONF_LAST_CHANGES: "set_last_changes_sensor",
         CONF_LAST_INVALID_FRAME: "set_last_invalid_frame_sensor",
         CONF_PROTOCOL: "set_protocol_sensor",
+        CONF_SERIAL_PROFILE: "set_serial_profile_sensor",
     }
     for key, method in text_entities.items():
         if key in config:
