@@ -108,6 +108,8 @@ gree_wired_rs485:
   active_probe_interval: 1200ms
   registration_attempts: 4
   hardware_half_duplex: true
+  # Keep continuous controller replies disabled during protocol qualification.
+  persistent_controller: false
   rx_line_gpio: 7
   direction_gpio: 4
 
