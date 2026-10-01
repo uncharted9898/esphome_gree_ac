@@ -99,11 +99,21 @@ Recovered traffic includes these route/layout references:
 | `FF -> 00` | `0x15` |
 | `FF -> 40` | `0x16` |
 
-These lengths are **references, not compatibility gates**. A checksum-valid
-frame using a known route but a different body length is retained as
-`known_route_variant`. Unknown routes and unexpected message types are also
-retained and exposed. This is deliberate so an R32 Vireo extension of the
-older controller protocol is visible rather than discarded.
+These lengths are **references, not compatibility gates**. Captured
+Gree-derived startup/status traffic also establishes an `FF -> 40` body
+length of `0x17`, which is accepted as a reference layout alongside
+`0x16`. A checksum-valid frame using a known route but another body length is
+retained as `known_route_variant`. Unknown routes and unexpected message
+types are also retained and exposed. This is deliberate so an R32 Vireo
+extension of the older controller protocol is visible rather than discarded.
+
+Do not attach fixed semantic labels such as "wired controller" or "indoor unit"
+to address `00` solely from the earliest captures. Later bench work showed a
+wired controller can remain completely idle without an indoor unit, while a
+Gree-derived indoor unit with no wired controller attached emitted a short
+`00 -> FF` discovery burst at power-up and repeated `FF -> 40` status
+traffic. The monitor therefore treats source/destination addresses
+observationally until the target Vireo exchange proves their roles.
 
 The deployment monitor publishes every valid frame, including duplicate
 payloads, so Home Assistant timestamps represent actual bus freshness.
