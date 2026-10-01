@@ -582,9 +582,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // startup 00->FF poll, and the unit signature bytes come from that target's
     // own FF->40 status traffic. This avoids treating ESP reboot time as the
     // indoor-unit registration window and avoids hardcoding 09 30 83.
+    const uint8_t accept_counter =
+        registration::counter_for_attempt(this->registration_attempts_sent_);
+    controller::set_accept_counter(this->controller_state_, accept_counter);
+    this->publish_controller_state_();
     std::vector<uint8_t> frame =
-        registration::make_frame(this->registration_attempts_sent_,
-                                 this->registration_unit_signature_);
+        controller::encode(this->controller_state_, accept_counter);
 
     ++this->registration_attempts_sent_;
     this->last_registration_de_before_ = this->read_gpio_level_(this->direction_gpio_);
@@ -653,6 +656,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         static_cast<size_t>(this->registration_attempts_sent_) +
         static_cast<size_t>(this->controller_responses_sent_);
     const uint8_t accept_counter = registration::counter_for_attempt(sequence);
+    controller::set_accept_counter(this->controller_state_, accept_counter);
+    this->publish_controller_state_();
     std::vector<uint8_t> frame =
         controller::encode(this->controller_state_, accept_counter);
 
