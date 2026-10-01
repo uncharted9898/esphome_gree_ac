@@ -76,6 +76,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/test_controller_registration
 
 c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_wired_state_codec.cpp -o /tmp/test_wired_state_codec
+/tmp/test_wired_state_codec
+
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_wired_controller_state.cpp -o /tmp/test_wired_controller_state
 /tmp/test_wired_controller_state
 
