@@ -17,11 +17,16 @@ RS485 expansion board:
 
 The deployment firmware in
 `examples/gree-vireo-xiao-rs485-listen-only.yaml` began as a passive monitor
-and now contains a tightly bounded startup-registration experiment. ESPHome's
-UART `flow_control_pin` provides ESP-IDF-managed half-duplex direction. The
-component remains in receive mode unless a checksum-valid target `00 -> FF`
-startup poll arms registration; an ordinary ESP/OTA reboot against an already
-running indoor unit therefore does not transmit.
+and now contains a tightly bounded startup-registration experiment. The field
+package drives the Seeed board's D2/GPIO4 DE+/RE input directly: LOW is receive
+and HIGH is transmit. This avoids relying on UART RTS ownership for a board
+whose receiver and driver enables are tied together.
+
+Normal registration remains target-gated by checksum-valid startup/status
+traffic. A separate silent-bus fallback is enabled on the Vireo field package:
+after 5 seconds it may arm one bounded registration sequence only if the ESP
+has received zero UART bytes and observed zero RX-level transitions. Any
+electrical or decoded activity suppresses that fallback.
 
 ### Field-verified Vireo COM-MANUAL electrical roles
 
@@ -79,9 +84,9 @@ A/B polarity.
 The important distinction is timing. Running firmware has repeatedly shown
 `DE=0`, but that says nothing about the interval while the ESP32-C3 is in
 reset and before ESPHome configures GPIO4. The Seeed expansion board ties
-TP8485E DE and /RE to D2/GPIO4, so the next qualification gate is to hardware
-bias D2/GPIO4 LOW through reset. A 4.7k-10k pull-down is strong enough to define
-the reset state while remaining easy for the ESP32 to drive later.
+TP8485E DE and /RE to D2/GPIO4. Firmware now explicitly owns that pin instead
+of routing it through UART RTS; an external 4.7k-10k pull-down remains useful
+if a defined receive state is required during reset itself.
 
 Until a cold boot remains clean with that reset bias, do not add active
 COM-MANUAL probes. If the startup `FE` still appears with DE hardware-biased
