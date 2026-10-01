@@ -32,6 +32,20 @@ inline uint8_t counter_for_attempt(size_t attempt) {
   return ACCEPT_COUNTERS[attempt % ACCEPT_COUNTERS.size()];
 }
 
+inline bool silent_bootstrap_ready(bool enabled,
+                                   bool active_probe,
+                                   bool armed,
+                                   bool established,
+                                   uint8_t attempts_sent,
+                                   uint32_t elapsed_ms,
+                                   uint32_t delay_ms,
+                                   uint32_t bytes_received,
+                                   uint32_t rx_transitions) {
+  return enabled && active_probe && !armed && !established &&
+         attempts_sent == 0 && elapsed_ms >= delay_ms &&
+         bytes_received == 0 && rx_transitions == 0;
+}
+
 inline std::vector<uint8_t> make_frame(size_t attempt,
                                        const UnitSignature &unit_signature) {
   auto state = controller::reference_state(unit_signature);
