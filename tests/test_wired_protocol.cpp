@@ -144,6 +144,7 @@ int main() {
   assert(parsed.route == RouteKind::ROUTE_00_FF);
   assert(parsed.frame_class == FrameClass::KNOWN_ROUTE_VARIANT);
   assert(!parsed.reference_body_length);
+  assert(parsed.role == FrameRole::KNOWN_ROUTE_VARIANT);
 
   auto bad_checksum = a;
   bad_checksum.back() ^= 0x01;
