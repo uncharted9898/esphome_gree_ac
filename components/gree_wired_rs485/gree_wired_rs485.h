@@ -201,6 +201,17 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                static_cast<unsigned long>(this->invalid_lengths_),
                static_cast<unsigned long>(this->frame_timeouts_),
                YESNO(rx_recent), YESNO(this->bus_active_), rx_level, direction_level);
+
+      if (!rx_recent && direction_level == 0 && rx_level == 0) {
+        if (!this->warned_rx_held_low_) {
+          ESP_LOGW(TAG,
+                   "RS485 receiver output is held LOW while DE is disabled and no traffic is "
+                   "being decoded; A/B polarity or bus bias is suspect");
+          this->warned_rx_held_low_ = true;
+        }
+      } else if (rx_level == 1) {
+        this->warned_rx_held_low_ = false;
+      }
     }
   }
 
@@ -492,6 +503,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool bus_active_{false};
   bool passive_scan_{false};
   bool scan_locked_{false};
+  bool warned_rx_held_low_{false};
 
   sensor::Sensor *bytes_received_sensor_{nullptr};
   sensor::Sensor *valid_frames_sensor_{nullptr};
