@@ -36,10 +36,6 @@ web_server:
   log: false
   ota: false
   include_internal: false
-  auth:
-    type: digest
-    username: !secret gree_vireo_web_username
-    password: !secret gree_vireo_web_password
 
 ota:
   - platform: esphome
