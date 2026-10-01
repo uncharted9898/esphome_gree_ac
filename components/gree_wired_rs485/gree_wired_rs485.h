@@ -37,6 +37,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_direction_gpio(int gpio) { this->direction_gpio_ = gpio; }
   void set_active_probe(bool active_probe) { this->active_probe_ = active_probe; }
   void set_active_probe_interval(uint32_t interval_ms) { this->active_probe_interval_ms_ = interval_ms; }
+  void set_registration_attempts(uint8_t attempts) { this->registration_attempt_limit_ = attempts; }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
@@ -94,8 +95,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->force_receive_mode_();
 
     // GPIO4 is never delegated to ESP-IDF RTS. In passive mode it stays LOW
-    // continuously. In active-probe mode this component alone may raise DE for
-    // the duration of a bounded, protocol-valid discovery frame.
+    // continuously. In active-controller mode this component alone may raise
+    // DE for a bounded FF->00 controller-registration frame.
     ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor in software-directed RS485 mode active_probe=%s",
              YESNO(this->active_probe_));
     ESP_LOGI(TAG, "Protocol profile: 1200 baud 8N1, 7E 7E framing, type 0x11, XOR checksum");
@@ -122,10 +123,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void dump_config() override {
     ESP_LOGCONFIG(TAG, "Gree wired-controller RS485 monitor:");
-    ESP_LOGCONFIG(TAG, "  Mode: %s", this->active_probe_ ? "active discovery" : "listen-only");
+    ESP_LOGCONFIG(TAG, "  Mode: %s", this->active_probe_ ? "active controller registration" : "listen-only");
     if (this->active_probe_) {
-      ESP_LOGCONFIG(TAG, "  Active probe interval: %lu ms",
+      ESP_LOGCONFIG(TAG, "  Registration interval: %lu ms",
                     static_cast<unsigned long>(this->active_probe_interval_ms_));
+      ESP_LOGCONFIG(TAG, "  Registration attempts: %u",
+                    static_cast<unsigned>(this->registration_attempt_limit_));
     }
     ESP_LOGCONFIG(TAG, "  Frame gap timeout: %lu ms",
                   static_cast<unsigned long>(this->frame_timeout_ms_));
@@ -152,8 +155,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       ESP_LOGW(TAG, "Discarded partial COM-MANUAL frame after inter-byte timeout");
     }
 
-    if (this->active_probe_ && this->should_send_active_probe_(now)) {
-      this->send_active_probe_(now);
+    if (this->active_probe_ && this->should_send_registration_(now)) {
+      this->send_registration_(now);
     }
 
     while (this->available()) {
@@ -161,6 +164,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       if (!this->read_byte(&byte)) break;
       this->last_byte_at_ = millis();
       ++this->bytes_received_;
+      this->raw_rx_burst_.push_back(byte);
+      this->raw_rx_burst_last_at_ = this->last_byte_at_;
 
       std::vector<uint8_t> complete;
       const auto result = this->assembler_.push(byte, complete);
@@ -171,6 +176,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       } else if (result == protocol::AssembleResult::FRAME_READY) {
         this->process_frame_(complete);
       }
+    }
+
+    if (!this->raw_rx_burst_.empty() && this->raw_rx_burst_last_at_ != 0 &&
+        static_cast<uint32_t>(now - this->raw_rx_burst_last_at_) >= 50) {
+      ESP_LOGI(TAG, "RX raw burst (%u bytes): %s",
+               static_cast<unsigned>(this->raw_rx_burst_.size()),
+               hex_(this->raw_rx_burst_).c_str());
+      this->raw_rx_burst_.clear();
     }
 
     if (this->bus_active_ && this->last_valid_frame_at_ != 0 &&
@@ -234,12 +247,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
-               "HEALTH mode=%s probe_sent=%s profile=%s bytes=%lu uart_window=%lu "
+               "HEALTH mode=%s reg=%u/%u profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
                "rx_edges_total=%lu rx_high=%.1f%% rx_samples=%lu",
                this->active_probe_ ? "ACTIVE" : "PASSIVE",
-               YESNO(this->active_probe_sent_),
+               static_cast<unsigned>(this->registration_attempts_sent_),
+               static_cast<unsigned>(this->registration_attempt_limit_),
                this->scan_profile_(this->scan_profile_index_).name,
                static_cast<unsigned long>(this->bytes_received_),
                static_cast<unsigned long>(uart_bytes_window),
@@ -377,42 +391,67 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 #endif
   }
 
-  bool should_send_active_probe_(uint32_t now) const {
-    if (!this->active_probe_ || this->active_probe_sent_) return false;
-    if (this->last_byte_at_ != 0) return false;
-    return static_cast<uint32_t>(now - this->setup_started_at_) >= this->active_probe_interval_ms_;
+  static uint8_t xor_checksum_(const uint8_t *data, size_t len_without_checksum) {
+    uint8_t value = 0;
+    for (size_t i = 0; i < len_without_checksum; ++i) value ^= data[i];
+    return value;
   }
 
-  void send_active_probe_(uint32_t now) {
-    // Recovered indoor-unit startup poll from multiple independent Gree wired
-    // controller captures. This frame is a discovery/presence poll (00->FF),
-    // not a power/mode/setpoint command.
-    static const uint8_t DISCOVERY_POLL[] = {
-        0x7E, 0x7E, 0x00, 0xFF, 0x11, 0x0E,
-        0x00, 0x00, 0x02, 0x00, 0x3C, 0x3C, 0x00,
-        0xF6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x14};
+  bool should_send_registration_(uint32_t now) const {
+    if (!this->active_probe_) return false;
+    if (this->registration_attempts_sent_ >= this->registration_attempt_limit_) return false;
+    if (this->last_registration_at_ == 0) {
+      return static_cast<uint32_t>(now - this->setup_started_at_) >= this->registration_start_delay_ms_;
+    }
+    return static_cast<uint32_t>(now - this->last_registration_at_) >= this->active_probe_interval_ms_;
+  }
 
+  void send_registration_(uint32_t now) {
+    // Recovered controller-side FF->00 registration/state frame from a real
+    // Gree wired controller capture. Public traces show the indoor unit's
+    // startup 00->FF frames are polls; the controller answers with FF->00.
+    //
+    // The accept counter at raw index 26 must differ between commands. Cycle
+    // through the observed 0x21..0x29,0x20 sequence and recompute XOR.
+    static const uint8_t REGISTRATION_TEMPLATE[] = {
+        0x7E, 0x7E, 0xFF, 0x00, 0x11, 0x22,
+        0x09, 0x30, 0x83, 0x11, 0x1B, 0x00, 0x00, 0x10,
+        0xE0, 0xE0, 0x08, 0x00, 0x28, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x30, 0x58};
+
+    std::vector<uint8_t> frame(REGISTRATION_TEMPLATE,
+                               REGISTRATION_TEMPLATE + sizeof(REGISTRATION_TEMPLATE));
+    static const uint8_t COUNTERS[] = {
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x20};
+    frame[26] = COUNTERS[this->registration_attempts_sent_ %
+                         (sizeof(COUNTERS) / sizeof(COUNTERS[0]))];
+    frame.back() = xor_checksum_(frame.data(), frame.size() - 1);
+
+    this->last_registration_at_ = now;
+    ++this->registration_attempts_sent_;
     this->active_probe_sent_ = true;
-    this->active_probe_sent_at_ = now;
     this->tx_in_progress_ = true;
 
     if (!this->set_direction_level_(1)) {
-      ESP_LOGE(TAG, "Active discovery probe aborted: could not enable RS485 driver");
+      ESP_LOGE(TAG, "Controller registration aborted: could not enable RS485 driver");
       this->tx_in_progress_ = false;
       this->force_receive_mode_();
       return;
     }
 
-    ESP_LOGI(TAG, "TX discovery poll 00->FF: %s",
-             hex_(std::vector<uint8_t>(DISCOVERY_POLL,
-                                       DISCOVERY_POLL + sizeof(DISCOVERY_POLL))).c_str());
-    this->write_array(DISCOVERY_POLL, sizeof(DISCOVERY_POLL));
+    ESP_LOGI(TAG, "TX controller registration %u/%u counter=0x%02X: %s",
+             static_cast<unsigned>(this->registration_attempts_sent_),
+             static_cast<unsigned>(this->registration_attempt_limit_),
+             frame[26], hex_(frame).c_str());
+    this->write_array(frame.data(), frame.size());
     const auto flush_result = this->flush();
     this->force_receive_mode_();
     this->tx_in_progress_ = false;
 
     if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
-      ESP_LOGW(TAG, "Active discovery probe TX flush was not confirmed");
+      ESP_LOGW(TAG, "Controller registration TX flush was not confirmed");
     }
   }
 
@@ -646,11 +685,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   protocol::FrameAssembler assembler_;
   diagnostics::LineActivityTracker rx_line_activity_;
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
+  std::vector<uint8_t> raw_rx_burst_;
 
   uint32_t frame_timeout_ms_{75};
   uint32_t setup_started_at_{0};
-  uint32_t active_probe_interval_ms_{1500};
-  uint32_t active_probe_sent_at_{0};
+  uint32_t active_probe_interval_ms_{300};
+  uint32_t registration_start_delay_ms_{250};
+  uint32_t last_registration_at_{0};
+  uint32_t raw_rx_burst_last_at_{0};
   uint32_t bus_idle_timeout_ms_{10000};
   uint32_t last_byte_at_{0};
   uint32_t last_valid_frame_at_{0};
@@ -680,6 +722,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool log_frames_{true};
   bool active_probe_{false};
   bool active_probe_sent_{false};
+  uint8_t registration_attempt_limit_{8};
+  uint8_t registration_attempts_sent_{0};
   bool tx_in_progress_{false};
   bool bus_active_{false};
   bool passive_scan_{false};
