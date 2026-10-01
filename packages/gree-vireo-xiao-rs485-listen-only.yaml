@@ -112,6 +112,9 @@ gree_wired_rs485:
   active_probe_interval: 1200ms
   registration_attempts: 4
   hardware_half_duplex: true
+  # Runtime controller replies stay disabled until the target Vireo proves
+  # registration by expanding FF->40 beyond the pre-registration layout.
+  persistent_controller: false
   rx_line_gpio: 7
   direction_gpio: 4
 
@@ -165,6 +168,12 @@ gree_wired_rs485:
     entity_category: diagnostic
   rx_high_percent:
     name: ${friendly_name} RX High Percent
+    entity_category: diagnostic
+  controller_polls_seen:
+    name: ${friendly_name} Controller Polls Seen
+    entity_category: diagnostic
+  controller_responses_sent:
+    name: ${friendly_name} Controller Responses Sent
     entity_category: diagnostic
 
   last_frame:

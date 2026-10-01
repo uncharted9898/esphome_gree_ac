@@ -168,6 +168,28 @@ pretends to recreate the indoor unit's startup registration window.
 The deployment monitor publishes every valid frame, including duplicate
 payloads, so Home Assistant timestamps represent actual bus freshness.
 
+## Controller runtime model
+
+The COM-MANUAL bus is not the same transport as the Gree commercial
+COM-BMS/CN3 Modbus interface. The latter uses 9600-baud Modbus RTU register
+reads; the Vireo R32 wiring diagram places its optional wired controller on
+COM-MANUAL, which is the 1200-baud `7E 7E` framed bus documented here.
+
+Recovered wired-controller sessions show the indoor unit acting as the bus
+master during controller discovery: the indoor unit emits `00 -> FF` polls,
+the wired controller answers with an `FF -> 00` state frame, and successful
+early registration expands the indoor unit's recurring `FF -> 40` status
+broadcast. The controller frame contains a rolling accept counter; captures
+show that the indoor unit requires that counter to differ between accepted
+state changes.
+
+The component therefore has a separate `persistent_controller` runtime mode.
+It is disabled by default during Vireo qualification. Once registration is
+field-proven, enabling it causes established `00 -> FF` runtime polls to queue
+an `FF -> 00` controller-state response with the next accept counter. The
+bootstrap-only field package keeps this false so protocol research cannot
+silently turn into continuous control traffic.
+
 ## Current scope
 
 The initial component deliberately does not assign climate meanings to payload

@@ -40,6 +40,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_active_probe_interval(uint32_t interval_ms) { this->active_probe_interval_ms_ = interval_ms; }
   void set_registration_attempts(uint8_t attempts) { this->registration_attempt_limit_ = attempts; }
   void set_hardware_half_duplex(bool enabled) { this->hardware_half_duplex_ = enabled; }
+  void set_persistent_controller(bool enabled) { this->persistent_controller_ = enabled; }
 
   void set_bytes_received_sensor(sensor::Sensor *s) { this->bytes_received_sensor_ = s; }
   void set_valid_frames_sensor(sensor::Sensor *s) { this->valid_frames_sensor_ = s; }
@@ -66,6 +67,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_last_body_length_sensor(sensor::Sensor *s) { this->last_body_length_sensor_ = s; }
   void set_rx_transitions_sensor(sensor::Sensor *s) { this->rx_transitions_sensor_ = s; }
   void set_rx_high_percent_sensor(sensor::Sensor *s) { this->rx_high_percent_sensor_ = s; }
+  void set_controller_polls_seen_sensor(sensor::Sensor *s) { this->controller_polls_seen_sensor_ = s; }
+  void set_controller_responses_sent_sensor(sensor::Sensor *s) { this->controller_responses_sent_sensor_ = s; }
 
   void set_last_frame_sensor(text_sensor::TextSensor *s) { this->last_frame_sensor_ = s; }
   void set_last_payload_sensor(text_sensor::TextSensor *s) { this->last_payload_sensor_ = s; }
@@ -136,6 +139,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                     static_cast<unsigned long>(this->active_probe_interval_ms_));
       ESP_LOGCONFIG(TAG, "  Registration attempts: %u",
                     static_cast<unsigned>(this->registration_attempt_limit_));
+      ESP_LOGCONFIG(TAG, "  Persistent controller runtime: %s",
+                    YESNO(this->persistent_controller_));
     }
     ESP_LOGCONFIG(TAG, "  Frame gap timeout: %lu ms",
                   static_cast<unsigned long>(this->frame_timeout_ms_));
@@ -209,6 +214,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->active_probe_ && this->should_send_registration_(after_rx) &&
         this->available() == 0) {
       this->send_registration_();
+    }
+
+    if (this->persistent_controller_ && this->registration_established_ &&
+        this->runtime_response_pending_ && !this->registration_waiting_for_response_ &&
+        this->available() == 0) {
+      this->send_runtime_controller_response_();
     }
 
     if (!this->raw_rx_burst_.empty() && this->raw_rx_burst_last_at_ != 0 &&
@@ -286,6 +297,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
       ESP_LOGI(TAG,
                "HEALTH mode=%s dir=%s reg=%u/%u armed=%s waiting=%s established=%s sig=%s unit=%02X%02X%02X "
+               "runtime=%s polls=%lu replies=%lu pending=%s "
                "tx_ms=%lu tx_flush=%s tx_de=%d>%d "
                "profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
@@ -303,6 +315,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                this->registration_unit_signature_[0],
                this->registration_unit_signature_[1],
                this->registration_unit_signature_[2],
+               this->persistent_controller_ ? "ON" : "OFF",
+               static_cast<unsigned long>(this->controller_polls_seen_),
+               static_cast<unsigned long>(this->controller_responses_sent_),
+               YESNO(this->runtime_response_pending_),
                static_cast<unsigned long>(this->last_registration_tx_elapsed_ms_),
                this->last_registration_tx_seen_
                    ? (this->last_registration_tx_flush_ok_ ? "OK" : "FAIL")
@@ -477,6 +493,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   void observe_startup_poll_(uint32_t now) {
+    ++this->controller_polls_seen_;
+
+    // Once the indoor unit has accepted controller registration, later 00->FF
+    // packets are runtime polls, not a reason to restart the bootstrap state
+    // machine. Persistent runtime responses are deliberately opt-in until the
+    // target Vireo has field-proven the captured controller frame family.
+    if (this->active_probe_ && this->registration_established_) {
+      if (this->persistent_controller_) {
+        this->runtime_response_pending_ = true;
+        ESP_LOGD(TAG, "CTRL runtime poll queued response poll=%lu",
+                 static_cast<unsigned long>(this->controller_polls_seen_));
+      }
+      this->last_startup_poll_at_ = now;
+      return;
+    }
+
     const bool new_startup_sequence =
         this->last_startup_poll_at_ == 0 ||
         static_cast<uint32_t>(now - this->last_startup_poll_at_) >
@@ -512,6 +544,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->registration_accept_evidence_) {
       this->registration_established_ = true;
       this->registration_armed_ = false;
+      this->runtime_response_pending_ = false;
       ESP_LOGI(TAG,
                "REG accepted: FF->40 expanded beyond pre-registration layout");
     } else if (this->registration_attempts_sent_ >= this->registration_attempt_limit_) {
@@ -587,6 +620,48 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
       ESP_LOGW(TAG, "Controller registration TX flush was not confirmed");
+    }
+  }
+
+  void send_runtime_controller_response_() {
+    // COM-MANUAL is master/slave inverted relative to the Livo UART module:
+    // the indoor unit emits 00->FF polls and the wired controller answers with
+    // FF->00 state. Keep this disabled by default until Vireo registration is
+    // field-qualified; when enabled, answer only after registration succeeds.
+    const size_t sequence =
+        static_cast<size_t>(this->registration_attempts_sent_) +
+        static_cast<size_t>(this->controller_responses_sent_);
+    std::vector<uint8_t> frame =
+        registration::make_frame(sequence, this->registration_unit_signature_);
+
+    this->runtime_response_pending_ = false;
+    this->tx_in_progress_ = true;
+    if (!this->hardware_half_duplex_ && !this->set_direction_level_(1)) {
+      ESP_LOGE(TAG, "Controller runtime response aborted: could not enable RS485 driver");
+      this->tx_in_progress_ = false;
+      this->force_receive_mode_();
+      return;
+    }
+
+    ESP_LOGI(TAG,
+             "TX controller runtime response poll=%lu reply=%lu counter=0x%02X direction=%s: %s",
+             static_cast<unsigned long>(this->controller_polls_seen_),
+             static_cast<unsigned long>(this->controller_responses_sent_ + 1),
+             frame[registration::COUNTER_INDEX],
+             this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
+             hex_(frame).c_str());
+
+    this->write_array(frame.data(), frame.size());
+    const auto flush_result = this->flush();
+
+    if (!this->hardware_half_duplex_) {
+      this->force_receive_mode_();
+    }
+    this->tx_in_progress_ = false;
+
+    ++this->controller_responses_sent_;
+    if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
+      ESP_LOGW(TAG, "Controller runtime response TX flush was not confirmed");
     }
   }
 
@@ -837,6 +912,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->route_ff_40_frames_sensor_ != nullptr) {
       this->route_ff_40_frames_sensor_->publish_state(this->route_ff_40_frames_);
     }
+    if (this->controller_polls_seen_sensor_ != nullptr) {
+      this->controller_polls_seen_sensor_->publish_state(this->controller_polls_seen_);
+    }
+    if (this->controller_responses_sent_sensor_ != nullptr) {
+      this->controller_responses_sent_sensor_->publish_state(this->controller_responses_sent_);
+    }
   }
 
   protocol::FrameAssembler assembler_;
@@ -883,10 +964,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t route_00_ff_frames_{0};
   uint32_t route_ff_00_frames_{0};
   uint32_t route_ff_40_frames_{0};
+  uint32_t controller_polls_seen_{0};
+  uint32_t controller_responses_sent_{0};
 
   bool log_frames_{true};
   bool active_probe_{false};
   bool hardware_half_duplex_{false};
+  bool persistent_controller_{false};
   uint8_t registration_attempt_limit_{4};
   uint8_t registration_attempts_sent_{0};
   bool registration_armed_{false};
@@ -896,6 +980,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   registration::UnitSignature registration_unit_signature_{
       registration::REFERENCE_UNIT_SIGNATURE};
   bool registration_accept_evidence_{false};
+  bool runtime_response_pending_{false};
   bool last_registration_tx_seen_{false};
   bool last_registration_tx_flush_ok_{false};
   bool tx_in_progress_{false};
@@ -923,6 +1008,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   sensor::Sensor *last_body_length_sensor_{nullptr};
   sensor::Sensor *rx_transitions_sensor_{nullptr};
   sensor::Sensor *rx_high_percent_sensor_{nullptr};
+  sensor::Sensor *controller_polls_seen_sensor_{nullptr};
+  sensor::Sensor *controller_responses_sent_sensor_{nullptr};
 
   text_sensor::TextSensor *last_frame_sensor_{nullptr};
   text_sensor::TextSensor *last_payload_sensor_{nullptr};
