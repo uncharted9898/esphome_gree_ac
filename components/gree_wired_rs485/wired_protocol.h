@@ -60,12 +60,13 @@ inline bool is_reference_body_length(RouteKind route, uint8_t body_length) {
     case RouteKind::ROUTE_00_FF:
       return body_length == 0x0E;
     case RouteKind::ROUTE_FF_00:
-      return body_length == 0x15;
+      // 0x15 appears in older/alternate controller captures; 0x22 is the
+      // proven controller-state layout used by XK76/GKH sessions.
+      return body_length == 0x15 || body_length == 0x22;
     case RouteKind::ROUTE_FF_40:
-      // Captures exist with both 0x16 and 0x17 bodies on Gree-derived indoor
-      // boards. Treat both as established layouts; other lengths remain
-      // visible as known-route variants.
-      return body_length == 0x16 || body_length == 0x17;
+      // 0x16/0x17 are unregistered/startup layouts. 0x29 is the expanded
+      // status layout observed after a wired controller is accepted.
+      return body_length == 0x16 || body_length == 0x17 || body_length == 0x29;
     case RouteKind::UNKNOWN:
     default:
       return false;
