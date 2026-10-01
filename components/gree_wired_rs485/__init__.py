@@ -41,6 +41,7 @@ CONF_LAST_CHANGES = "last_changes"
 CONF_LAST_INVALID_FRAME = "last_invalid_frame"
 CONF_PROTOCOL = "protocol"
 CONF_SERIAL_PROFILE = "serial_profile"
+CONF_LAST_RAW_RX = "last_raw_rx"
 
 CONF_BUS_ACTIVE = "bus_active"
 CONF_LISTEN_ONLY = "listen_only"
@@ -123,6 +124,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_LAST_INVALID_FRAME): text_schema,
             cv.Optional(CONF_PROTOCOL): text_schema,
             cv.Optional(CONF_SERIAL_PROFILE): text_schema,
+            cv.Optional(CONF_LAST_RAW_RX): text_schema,
             cv.Optional(CONF_BUS_ACTIVE): binary_schema,
             cv.Optional(CONF_LISTEN_ONLY): binary_schema,
             cv.Optional(CONF_RX_LINE_HIGH): binary_schema,
@@ -198,6 +200,7 @@ async def to_code(config):
         CONF_LAST_INVALID_FRAME: "set_last_invalid_frame_sensor",
         CONF_PROTOCOL: "set_protocol_sensor",
         CONF_SERIAL_PROFILE: "set_serial_profile_sensor",
+        CONF_LAST_RAW_RX: "set_last_raw_rx_sensor",
     }
     for key, method in text_entities.items():
         if key in config:

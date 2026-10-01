@@ -189,6 +189,9 @@ gree_wired_rs485:
   serial_profile:
     name: ${friendly_name} Serial Profile
     entity_category: diagnostic
+  last_raw_rx:
+    name: ${friendly_name} Last Raw RX Burst
+    entity_category: diagnostic
 
   bus_active:
     name: ${friendly_name} COM-MANUAL Bus Active
