@@ -146,6 +146,6 @@ done
 esphome compile examples/.validation-gree-livo-oem-boot-probe.yaml
 
 # Compile the deployment target for the pre-soldered Seeed XIAO ESP32-C3 +
-# RS485 expansion board. This verifies 1200-8N1 UART, ESP-IDF-owned GPIO4
-# RTS/DE half-duplex direction, and the wired-controller registration path.
+# RS485 expansion board. This verifies 1200-8N1 UART, firmware-owned GPIO4
+# manual DE direction, and the wired-controller registration path.
 esphome compile examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml
