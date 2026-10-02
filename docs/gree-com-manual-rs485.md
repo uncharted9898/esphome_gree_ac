@@ -99,11 +99,29 @@ The monitor now also exposes electrical activity independently of the legacy
 1200-8N1 frame parser. GPIO7 has a passive any-edge interrupt counter in
 addition to the older main-loop samples, so short bit transitions are not
 mistaken for a permanently idle-high receiver. Each bounded registration
-window records interrupt-timed RX edge count/first/last/span, UART bytes already
-pending immediately after DE returns to receive, and first/last UART-drain
-offsets. These observations remain diagnostic only; they are not treated as a
-registration acknowledgement unless the recovered protocol parser supplies
-valid acceptance evidence.
+window records interrupt-timed RX edge count/first/last/span, UART bytes pending
+at the first post-release FIFO probe, and first/last UART-drain offsets. These
+observations remain diagnostic only; they are not treated as a registration
+acknowledgement unless the recovered protocol parser supplies valid acceptance
+evidence.
+
+The late October 1 ESPHome 2026.9.1 field run exposed an instrumentation flaw
+rather than proving those short byte groups were target replies or self-echo.
+The four attempts produced 11 decoded bytes total: `F0 00 B4`, `FA 00 23`,
+`F0 00`, and `E2 00 35`. Every group was already pending by the old software
+probe and every old per-window edge counter was zero. However, the old manual-DE
+path lowered GPIO4 and then emitted two log messages before it armed the edge
+window and probed the UART FIFO. That created a multi-millisecond blind interval;
+one observed attempt left roughly 13 ms between the DE-low log and the RX-window
+log, which is longer than one 1200-8N1 character.
+
+The corrected path now quarantines any UART bytes that are already pending
+while manual DE is still HIGH, arms the GPIO7 edge window before releasing DE,
+timestamps the DE release and FIFO probe before any logging, and separately
+accounts RX edges observed while our own transmitter owns the wire. The next
+field capture can therefore distinguish TX-era residue from a real immediate
+Vireo response without changing baud, parity, A/B polarity, or registration
+payload contents.
 
 ## Minimal per-device YAML
 
@@ -373,9 +391,11 @@ that main-loop sampling could not see, while also showing that the activity was
 bounded rather than continuous background chatter.
 
 Because API/log attachment can occur after the four registration attempts
-finish, the component now retains every registration-window summary and replays
-the complete set after 30 seconds. Each retained attempt includes UART bytes,
-pending FIFO depth at RX-enable, first/last drain timing, interrupt edge count,
-first/last edge timing, edge span, and minimum/maximum inter-edge gaps. Those
-inter-edge gaps are evidence for the actual signaling cadence and should be
-used before changing baud/parity or controller frame contents.
+finish, the component retains every registration-window summary and replays the
+complete set after 30 seconds. The corrected trace separates bytes quarantined
+while manual DE is still HIGH from bytes observed after release, records
+arm-to-DE and DE-to-FIFO-probe latency, first/last drain timing, post-release
+interrupt edge count, first/last edge timing, edge span, minimum/maximum
+inter-edge gaps, and the RX-edge count accumulated during our own TX. Those
+measurements are evidence for the actual signaling cadence and should be used
+before changing baud/parity or controller frame contents.
