@@ -360,3 +360,22 @@ This complements the original 128-byte startup raw buffer: malformed or
 not-yet-decodable traffic still appears in the raw capture, while complete
 valid discovery, registration and expanded-status frames survive long enough
 to be visible after Wi-Fi/API logging attaches.
+
+
+### October 1, 2026 retained-edge qualification
+
+The first field run with the GPIO7 any-edge ISR produced a useful distinction:
+the old main-loop sampler remained at zero transitions while the interrupt
+counter reached 277. The UART decoder captured only 12 bytes during the bounded
+startup exchange and then remained completely quiet for the rest of the long
+observation window. This proves the physical bus had short startup activity
+that main-loop sampling could not see, while also showing that the activity was
+bounded rather than continuous background chatter.
+
+Because API/log attachment can occur after the four registration attempts
+finish, the component now retains every registration-window summary and replays
+the complete set after 30 seconds. Each retained attempt includes UART bytes,
+pending FIFO depth at RX-enable, first/last drain timing, interrupt edge count,
+first/last edge timing, edge span, and minimum/maximum inter-edge gaps. Those
+inter-edge gaps are evidence for the actual signaling cadence and should be
+used before changing baud/parity or controller frame contents.
