@@ -9,10 +9,12 @@ using esphome::gree_wired_rs485::diagnostics::RegistrationRxWindow;
 int main() {
   RegistrationRxWindow window;
 
-  window.open(1000, 1250, 2, 7);
+  window.open(1000, 1100, 1250, 2, 7);
   assert(window.active());
   assert(window.pending_at_probe() == 2);
+  assert(window.de_release_delay_us() == 100);
   assert(window.pending_probe_delay_us() == 250);
+  assert(window.release_to_probe_delay_us() == 150);
   assert(window.bytes_observed() == 0);
   assert(window.first_drain_us() == 0);
   assert(window.drain_span_us() == 0);
@@ -35,20 +37,24 @@ int main() {
   assert(window.bytes_observed() == 2);
 
   // uint32_t subtraction intentionally provides wrap-safe microsecond deltas.
-  window.open(0xFFFFFF00u, 0xFFFFFF80u, 0, 11);
+  window.open(0xFFFFFF00u, 0xFFFFFF40u, 0xFFFFFF80u, 0, 11);
   window.observe_byte(0x00000020u);
   window.observe_byte(0x00000120u);
+  assert(window.de_release_delay_us() == 0x40u);
   assert(window.pending_probe_delay_us() == 0x80u);
+  assert(window.release_to_probe_delay_us() == 0x40u);
   assert(window.first_drain_us() == 0x120u);
   assert(window.last_drain_us() == 0x220u);
   assert(window.drain_span_us() == 0x100u);
   assert(window.valid_frame_delta(12) == 1);
 
   // Reopening a window must discard prior attempt timing.
-  window.open(5000, 5005, 1, 20);
+  window.open(5000, 5002, 5005, 1, 20);
   assert(window.active());
   assert(window.pending_at_probe() == 1);
+  assert(window.de_release_delay_us() == 2);
   assert(window.pending_probe_delay_us() == 5);
+  assert(window.release_to_probe_delay_us() == 3);
   assert(window.bytes_observed() == 0);
   assert(window.drain_offsets_us().empty());
   assert(window.valid_frame_delta(20) == 0);
