@@ -112,6 +112,10 @@ gree_wired_rs485:
   silent_bootstrap_probe: true
   silent_bootstrap_delay: 5s
   hardware_half_duplex: false
+  # The Seeed TP8485E board ties DE and /RE together. With DE high the receiver
+  # output is high-impedance and the board's optional RX pull-up is not fitted,
+  # so keep the ESP32 UART input weakly idle-high during our TX interval.
+  rx_idle_pullup: true
   # Runtime controller replies stay disabled until the target Vireo proves
   # registration by expanding FF->40 beyond the pre-registration layout.
   persistent_controller: false

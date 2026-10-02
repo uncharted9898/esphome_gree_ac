@@ -47,6 +47,7 @@ class RegistrationRxWindow {
 
   bool active() const { return this->active_; }
   uint32_t opened_at_us() const { return this->opened_at_us_; }
+  uint32_t de_released_at_us() const { return this->de_released_at_us_; }
   size_t pending_at_probe() const { return this->pending_at_probe_; }
   uint32_t de_release_delay_us() const {
     return static_cast<uint32_t>(

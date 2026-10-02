@@ -41,6 +41,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_passive_scan_window(uint32_t window_ms) { this->passive_scan_window_ms_ = window_ms; }
   void set_rx_line_gpio(int gpio) { this->rx_line_gpio_ = gpio; }
   void set_direction_gpio(int gpio) { this->direction_gpio_ = gpio; }
+  void set_rx_idle_pullup(bool enabled) { this->rx_idle_pullup_ = enabled; }
   void set_active_probe(bool active_probe) { this->active_probe_ = active_probe; }
   void set_active_probe_interval(uint32_t interval_ms) { this->active_probe_interval_ms_ = interval_ms; }
   void set_registration_attempts(uint8_t attempts) { this->registration_attempt_limit_ = attempts; }
@@ -227,6 +228,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                     static_cast<unsigned long>(this->passive_scan_window_ms_));
     }
     ESP_LOGCONFIG(TAG, "  RX line GPIO: %d", this->rx_line_gpio_);
+    ESP_LOGCONFIG(TAG, "  RX idle pull-up: %s", YESNO(this->rx_idle_pullup_));
     ESP_LOGCONFIG(TAG, "  Direction/DE GPIO: %d", this->direction_gpio_);
   }
 
@@ -386,9 +388,17 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       const uint32_t tx_rx_edges_window =
           this->tx_rx_edges_total_ - this->last_health_tx_rx_edge_count_;
       this->last_health_tx_rx_edge_count_ = this->tx_rx_edges_total_;
+      const uint32_t turnaround_edges_window =
+          this->turnaround_rx_edges_total_ -
+          this->last_health_turnaround_rx_edge_count_;
+      this->last_health_turnaround_rx_edge_count_ =
+          this->turnaround_rx_edges_total_;
+      const uint32_t non_external_edges_window =
+          tx_rx_edges_window + turnaround_edges_window;
       const uint32_t rx_isr_edges_window =
-          rx_isr_edges_window_raw >= tx_rx_edges_window
-              ? static_cast<uint32_t>(rx_isr_edges_window_raw - tx_rx_edges_window)
+          rx_isr_edges_window_raw >= non_external_edges_window
+              ? static_cast<uint32_t>(
+                    rx_isr_edges_window_raw - non_external_edges_window)
               : 0;
       const uint32_t tx_residue_window =
           this->tx_residue_bytes_total_ - this->last_health_tx_residue_byte_count_;
@@ -418,7 +428,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
-               "tx_rx_edges_window=%lu rx_edges_total=%lu tx_residue_window=%lu "
+               "tx_rx_edges_window=%lu turnaround_edges_window=%lu "
+               "rx_edges_total=%lu tx_residue_window=%lu "
                "tx_residue_total=%lu rx_sampled_edges_window=%lu "
                "rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
                "startup_rx=%u:%s",
@@ -454,6 +465,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                YESNO(rx_recent), YESNO(this->bus_active_), rx_level, direction_level,
                static_cast<unsigned long>(rx_isr_edges_window),
                static_cast<unsigned long>(tx_rx_edges_window),
+               static_cast<unsigned long>(turnaround_edges_window),
                static_cast<unsigned long>(rx_isr_edges_total),
                static_cast<unsigned long>(tx_residue_window),
                static_cast<unsigned long>(this->tx_residue_bytes_total_),
@@ -700,23 +712,32 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void finish_registration_response_window_() {
     this->registration_waiting_for_response_ = false;
+    this->rx_edge_response_phase_ = false;
     this->rx_edge_window_active_ = false;
     this->registration_rx_window_.close();
-    const uint32_t edge_count = this->rx_edge_window_count_;
-    const uint32_t edge_first_us = this->rx_edge_window_first_us_;
-    const uint32_t edge_last_us = this->rx_edge_window_last_us_;
+
+    const uint32_t armed_edge_count = this->rx_edge_window_count_;
+    const uint32_t edge_count = this->rx_edge_response_count_;
+    const uint32_t edge_first_us = this->rx_edge_response_first_us_;
+    const uint32_t edge_last_us = this->rx_edge_response_last_us_;
     const uint32_t edge_first_offset_us =
         edge_count == 0 ? 0 : static_cast<uint32_t>(
-            edge_first_us - this->registration_rx_window_.opened_at_us());
+            edge_first_us - this->registration_rx_window_.de_released_at_us());
     const uint32_t edge_last_offset_us =
         edge_count == 0 ? 0 : static_cast<uint32_t>(
-            edge_last_us - this->registration_rx_window_.opened_at_us());
+            edge_last_us - this->registration_rx_window_.de_released_at_us());
     const uint32_t edge_span_us =
         edge_count < 2 ? 0 : static_cast<uint32_t>(edge_last_us - edge_first_us);
     const uint32_t edge_min_gap_us =
-        edge_count < 2 ? 0 : this->rx_edge_window_min_gap_us_;
+        edge_count < 2 ? 0 : this->rx_edge_response_min_gap_us_;
     const uint32_t edge_max_gap_us =
-        edge_count < 2 ? 0 : this->rx_edge_window_max_gap_us_;
+        edge_count < 2 ? 0 : this->rx_edge_response_max_gap_us_;
+    const uint32_t classified_edge_count =
+        this->last_registration_turnaround_rx_edges_ + edge_count;
+    const uint32_t phase_gap_edges =
+        armed_edge_count > classified_edge_count
+            ? static_cast<uint32_t>(armed_edge_count - classified_edge_count)
+            : 0;
     const std::string response_hex = hex_(this->registration_response_capture_);
     const std::string tx_residue_hex =
         hex_(this->registration_tx_residue_capture_);
@@ -727,6 +748,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         "arm_to_de_us=%lu de_to_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
         "drain_span_us=%lu rx_edges=%lu first_edge_us=%lu last_edge_us=%lu "
         "edge_span_us=%lu edge_min_gap_us=%lu edge_max_gap_us=%lu "
+        "turnaround_edges=%lu phase_gap_edges=%lu "
         "tx_rx_edges=%lu tx_residue=%u:",
         static_cast<unsigned>(this->registration_attempts_sent_),
         static_cast<unsigned>(this->registration_attempt_limit_),
@@ -743,6 +765,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         static_cast<unsigned long>(edge_span_us),
         static_cast<unsigned long>(edge_min_gap_us),
         static_cast<unsigned long>(edge_max_gap_us),
+        static_cast<unsigned long>(this->last_registration_turnaround_rx_edges_),
+        static_cast<unsigned long>(phase_gap_edges),
         static_cast<unsigned long>(this->last_registration_tx_rx_edges_),
         static_cast<unsigned>(this->registration_tx_residue_capture_.size()));
     std::string registration_summary(registration_meta);
@@ -761,6 +785,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              "arm_to_de_us=%lu de_to_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
              "drain_span_us=%lu rx_edges=%lu first_edge_us=%lu last_edge_us=%lu "
              "edge_span_us=%lu edge_min_gap_us=%lu edge_max_gap_us=%lu "
+             "turnaround_edges=%lu phase_gap_edges=%lu "
              "tx_rx_edges=%lu tx_residue=%u:%s valid_delta=%lu bytes=%s",
              static_cast<unsigned>(this->registration_attempts_sent_),
              static_cast<unsigned>(this->registration_attempt_limit_),
@@ -777,6 +802,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              static_cast<unsigned long>(edge_span_us),
              static_cast<unsigned long>(edge_min_gap_us),
              static_cast<unsigned long>(edge_max_gap_us),
+             static_cast<unsigned long>(this->last_registration_turnaround_rx_edges_),
+             static_cast<unsigned long>(phase_gap_edges),
              static_cast<unsigned long>(this->last_registration_tx_rx_edges_),
              static_cast<unsigned>(this->registration_tx_residue_capture_.size()),
              tx_residue_hex.empty() ? "-" : tx_residue_hex.c_str(),
@@ -879,6 +906,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->rx_edge_window_previous_us_ = 0;
     this->rx_edge_window_min_gap_us_ = 0;
     this->rx_edge_window_max_gap_us_ = 0;
+    this->rx_edge_response_phase_ = false;
+    this->rx_edge_response_count_ = 0;
+    this->rx_edge_response_first_us_ = 0;
+    this->rx_edge_response_last_us_ = 0;
+    this->rx_edge_response_previous_us_ = 0;
+    this->rx_edge_response_min_gap_us_ = 0;
+    this->rx_edge_response_max_gap_us_ = 0;
     const uint32_t rx_window_armed_at_us = micros();
     this->rx_edge_window_active_ = true;
 
@@ -894,6 +928,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // release timestamp and FIFO depth before any logging can consume several
     // milliseconds and hide the first 1200-baud character.
     const uint32_t de_released_at_us = micros();
+    this->last_registration_turnaround_rx_edges_ =
+        this->rx_edge_window_count_;
+    this->turnaround_rx_edges_total_ +=
+        this->last_registration_turnaround_rx_edges_;
+    this->rx_edge_response_phase_ = true;
     this->tx_in_progress_ = false;
     this->last_registration_de_after_ = this->read_gpio_level_(this->direction_gpio_);
     const size_t pending_after_release = this->available();
@@ -1070,6 +1109,27 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       }
       self->rx_edge_window_last_us_ = now_us;
       ++self->rx_edge_window_count_;
+
+      if (self->rx_edge_response_phase_) {
+        if (self->rx_edge_response_count_ == 0) {
+          self->rx_edge_response_first_us_ = now_us;
+          self->rx_edge_response_previous_us_ = now_us;
+        } else {
+          const uint32_t response_gap_us =
+              static_cast<uint32_t>(
+                  now_us - self->rx_edge_response_previous_us_);
+          if (self->rx_edge_response_min_gap_us_ == 0 ||
+              response_gap_us < self->rx_edge_response_min_gap_us_) {
+            self->rx_edge_response_min_gap_us_ = response_gap_us;
+          }
+          if (response_gap_us > self->rx_edge_response_max_gap_us_) {
+            self->rx_edge_response_max_gap_us_ = response_gap_us;
+          }
+          self->rx_edge_response_previous_us_ = now_us;
+        }
+        self->rx_edge_response_last_us_ = now_us;
+        ++self->rx_edge_response_count_;
+      }
     }
 #else
     (void) arg;
@@ -1080,6 +1140,20 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 #ifdef USE_ESP32
     if (this->rx_line_gpio_ < 0 || this->rx_edge_monitor_installed_) return;
     const auto gpio = static_cast<gpio_num_t>(this->rx_line_gpio_);
+
+    if (this->rx_idle_pullup_) {
+      esp_err_t pull_err = gpio_pullup_en(gpio);
+      if (pull_err == ESP_OK) {
+        pull_err = gpio_pulldown_dis(gpio);
+      }
+      if (pull_err == ESP_OK) {
+        this->rx_idle_pullup_active_ = true;
+      } else {
+        ESP_LOGW(TAG,
+                 "RX idle pull-up could not be enabled on GPIO%d: %s",
+                 this->rx_line_gpio_, esp_err_to_name(pull_err));
+      }
+    }
 
     esp_err_t err = gpio_install_isr_service(0);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
@@ -1110,8 +1184,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     this->rx_edge_monitor_installed_ = true;
     ESP_LOGI(TAG,
-             "RX edge monitor active on GPIO%d; UART RX remains unchanged",
-             this->rx_line_gpio_);
+             "RX edge monitor active on GPIO%d; UART RX remains unchanged; "
+             "idle_pullup=%s",
+             this->rx_line_gpio_, YESNO(this->rx_idle_pullup_active_));
 #endif
   }
 
@@ -1424,6 +1499,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t last_health_byte_count_{0};
   uint32_t last_health_isr_edge_count_{0};
   uint32_t last_health_tx_rx_edge_count_{0};
+  uint32_t last_health_turnaround_rx_edge_count_{0};
   uint32_t last_health_tx_residue_byte_count_{0};
   uint32_t health_log_interval_ms_{10000};
   uint32_t passive_scan_window_ms_{2000};
@@ -1452,7 +1528,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t controller_responses_sent_{0};
   uint32_t registered_status_frames_{0};
   uint32_t last_registration_tx_rx_edges_{0};
+  uint32_t last_registration_turnaround_rx_edges_{0};
   uint32_t tx_rx_edges_total_{0};
+  uint32_t turnaround_rx_edges_total_{0};
   uint32_t tx_residue_bytes_total_{0};
 
   bool log_frames_{true};
@@ -1461,6 +1539,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool silent_bootstrap_armed_{false};
   bool hardware_half_duplex_{false};
   bool persistent_controller_{false};
+  bool rx_idle_pullup_{false};
+  bool rx_idle_pullup_active_{false};
   uint8_t registration_attempt_limit_{4};
   uint8_t registration_attempts_sent_{0};
   bool registration_armed_{false};
@@ -1493,6 +1573,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   volatile uint32_t rx_edge_window_previous_us_{0};
   volatile uint32_t rx_edge_window_min_gap_us_{0};
   volatile uint32_t rx_edge_window_max_gap_us_{0};
+  volatile bool rx_edge_response_phase_{false};
+  volatile uint32_t rx_edge_response_count_{0};
+  volatile uint32_t rx_edge_response_first_us_{0};
+  volatile uint32_t rx_edge_response_last_us_{0};
+  volatile uint32_t rx_edge_response_previous_us_{0};
+  volatile uint32_t rx_edge_response_min_gap_us_{0};
+  volatile uint32_t rx_edge_response_max_gap_us_{0};
 #else
   uint32_t rx_isr_edges_total_{0};
   bool rx_edge_window_active_{false};
@@ -1502,6 +1589,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t rx_edge_window_previous_us_{0};
   uint32_t rx_edge_window_min_gap_us_{0};
   uint32_t rx_edge_window_max_gap_us_{0};
+  bool rx_edge_response_phase_{false};
+  uint32_t rx_edge_response_count_{0};
+  uint32_t rx_edge_response_first_us_{0};
+  uint32_t rx_edge_response_last_us_{0};
+  uint32_t rx_edge_response_previous_us_{0};
+  uint32_t rx_edge_response_min_gap_us_{0};
+  uint32_t rx_edge_response_max_gap_us_{0};
 #endif
 
   sensor::Sensor *bytes_received_sensor_{nullptr};

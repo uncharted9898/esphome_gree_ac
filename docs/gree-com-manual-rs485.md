@@ -123,6 +123,40 @@ field capture can therefore distinguish TX-era residue from a real immediate
 Vireo response without changing baud, parity, A/B polarity, or registration
 payload contents.
 
+### October 2, 2026 TX-residue qualification
+
+The corrected-turnaround build resolved the ambiguity. Across all four bounded
+registration attempts, the component quarantined exactly three UART bytes
+*before* DE was released and observed zero UART bytes after release:
+
+- attempt 1: `D3 00 23`
+- attempt 2: `F3 00 23`
+- attempt 3: `E2 00 34`
+- attempt 4: `FA 01 04`
+
+Every attempt reported `pending_after_release=0`,
+`unvalidated_rx=0`, and `valid_delta=0`. The FIFO probe occurred only
+5-6 us after the measured DE release. The one edge attributed to each old
+response window occurred 19-20 us after arming, while DE release occurred
+26-27 us after arming, so those four edges were also pre-release turnaround
+activity rather than target response traffic.
+
+This means the earlier 2-4 byte groups must not be described as Vireo replies.
+They are TX-era receiver-side artifacts. The Seeed XIAO RS485 V1.1 schematic
+uses a TP8485E transceiver with DE and active-low /RE controlled together and
+shows its optional receiver-output pull-up as not populated. The TP8485E
+receiver output is high-impedance when /RE is high, so the XIAO GPIO7 UART input
+can float while this board is transmitting. The Vireo package therefore enables
+a weak ESP32-side `rx_idle_pullup`; this changes only the TTL receiver input
+and does not bias the A/B bus.
+
+The edge journal is also split at the DE-release boundary. `rx_edges` and
+its first/last/gap timing now describe only post-release response activity;
+`turnaround_edges` records the already-armed edges seen before response
+ownership begins, and health-level electrical activity subtracts both TX-era
+and turnaround edges. A subsequent run should therefore remain electrically
+inactive unless the target itself changes the receiver line after release.
+
 ## Minimal per-device YAML
 
 The full XIAO/RS485 definition lives in
@@ -226,6 +260,11 @@ The recovered wired-controller traffic now has dedicated codecs rather than
 being treated as opaque registration bytes.
 
 ### Proven controller-state layout
+
+The current Vireo R32 product submittal identifies XE71 as an optional wired
+controller. That makes XE71 behavior the target reference for this unit; older
+XK19 and working GKH captures remain useful protocol evidence but are not
+treated as proof that the Vireo R32 accepts the same bootstrap transaction.
 
 The `FF -> 00`, message-type `0x11`, body-length `0x22` frame is recognized
 as the captured wired-controller state layout. The implementation preserves all

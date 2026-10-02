@@ -19,6 +19,7 @@ CONF_SILENT_BOOTSTRAP_PROBE = "silent_bootstrap_probe"
 CONF_SILENT_BOOTSTRAP_DELAY = "silent_bootstrap_delay"
 CONF_HARDWARE_HALF_DUPLEX = "hardware_half_duplex"
 CONF_PERSISTENT_CONTROLLER = "persistent_controller"
+CONF_RX_IDLE_PULLUP = "rx_idle_pullup"
 
 CONF_BYTES_RECEIVED = "bytes_received"
 CONF_VALID_FRAMES = "valid_frames"
@@ -139,6 +140,7 @@ CONFIG_SCHEMA = (
             ),
             cv.Optional(CONF_HARDWARE_HALF_DUPLEX, default=False): cv.boolean,
             cv.Optional(CONF_PERSISTENT_CONTROLLER, default=False): cv.boolean,
+            cv.Optional(CONF_RX_IDLE_PULLUP, default=False): cv.boolean,
             cv.Optional(CONF_BYTES_RECEIVED): counter_schema,
             cv.Optional(CONF_VALID_FRAMES): counter_schema,
             cv.Optional(CONF_CHECKSUM_FAILURES): counter_schema,
@@ -224,6 +226,7 @@ async def to_code(config):
     cg.add(var.set_silent_bootstrap_delay(config[CONF_SILENT_BOOTSTRAP_DELAY]))
     cg.add(var.set_hardware_half_duplex(config[CONF_HARDWARE_HALF_DUPLEX]))
     cg.add(var.set_persistent_controller(config[CONF_PERSISTENT_CONTROLLER]))
+    cg.add(var.set_rx_idle_pullup(config[CONF_RX_IDLE_PULLUP]))
     if CONF_RX_LINE_GPIO in config:
         cg.add(var.set_rx_line_gpio(config[CONF_RX_LINE_GPIO]))
     if CONF_DIRECTION_GPIO in config:

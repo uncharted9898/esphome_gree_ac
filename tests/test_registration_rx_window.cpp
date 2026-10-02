@@ -12,6 +12,7 @@ int main() {
   window.open(1000, 1100, 1250, 2, 7);
   assert(window.active());
   assert(window.pending_at_probe() == 2);
+  assert(window.de_released_at_us() == 1100);
   assert(window.de_release_delay_us() == 100);
   assert(window.pending_probe_delay_us() == 250);
   assert(window.release_to_probe_delay_us() == 150);
@@ -40,6 +41,7 @@ int main() {
   window.open(0xFFFFFF00u, 0xFFFFFF40u, 0xFFFFFF80u, 0, 11);
   window.observe_byte(0x00000020u);
   window.observe_byte(0x00000120u);
+  assert(window.de_released_at_us() == 0xFFFFFF40u);
   assert(window.de_release_delay_us() == 0x40u);
   assert(window.pending_probe_delay_us() == 0x80u);
   assert(window.release_to_probe_delay_us() == 0x40u);
