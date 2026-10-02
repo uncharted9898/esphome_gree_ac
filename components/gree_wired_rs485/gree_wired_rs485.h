@@ -467,6 +467,27 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         this->startup_trace_replayed_ = true;
       }
 
+      const bool registration_trace_complete =
+          !this->registration_waiting_for_response_ &&
+          !this->registration_attempt_trace_.empty() &&
+          (this->registration_established_ ||
+           this->registration_attempts_sent_ >= this->registration_attempt_limit_ ||
+           !this->registration_armed_);
+      const bool registration_trace_replay_ready =
+          static_cast<uint32_t>(now - this->setup_started_at_) >=
+              this->registration_trace_replay_delay_ms_;
+      if (!this->registration_trace_replayed_ && registration_trace_complete &&
+          registration_trace_replay_ready) {
+        ESP_LOGI(TAG, "REG retained window trace count=%u",
+                 static_cast<unsigned>(this->registration_attempt_trace_.size()));
+        for (size_t i = 0; i < this->registration_attempt_trace_.size(); ++i) {
+          ESP_LOGI(TAG, "REG retained[%u] %s",
+                   static_cast<unsigned>(i + 1),
+                   this->registration_attempt_trace_[i].c_str());
+        }
+        this->registration_trace_replayed_ = true;
+      }
+
       if (!rx_recent && direction_level == 0 && rx_level == 0 &&
           rx_activity.transitions == 0) {
         if (!this->warned_rx_held_low_) {
@@ -652,6 +673,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->registration_attempts_sent_ = 0;
     this->last_registration_at_ = 0;
     this->registration_response_capture_.clear();
+    this->registration_attempt_trace_.clear();
+    this->registration_trace_replayed_ = false;
 
     ESP_LOGI(TAG,
              "REG armed by target 00->FF startup poll signature=%s unit=%02X %02X %02X",
@@ -676,12 +699,47 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
             edge_last_us - this->registration_rx_window_.opened_at_us());
     const uint32_t edge_span_us =
         edge_count < 2 ? 0 : static_cast<uint32_t>(edge_last_us - edge_first_us);
+    const uint32_t edge_min_gap_us =
+        edge_count < 2 ? 0 : this->rx_edge_window_min_gap_us_;
+    const uint32_t edge_max_gap_us =
+        edge_count < 2 ? 0 : this->rx_edge_window_max_gap_us_;
     const std::string response_hex = hex_(this->registration_response_capture_);
+    char registration_meta[384];
+    std::snprintf(
+        registration_meta, sizeof(registration_meta),
+        "attempt=%u/%u unvalidated_rx=%u pending_at_rx_enable=%u "
+        "pending_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
+        "drain_span_us=%lu rx_edges=%lu first_edge_us=%lu last_edge_us=%lu "
+        "edge_span_us=%lu edge_min_gap_us=%lu edge_max_gap_us=%lu "
+        "valid_delta=%lu bytes=",
+        static_cast<unsigned>(this->registration_attempts_sent_),
+        static_cast<unsigned>(this->registration_attempt_limit_),
+        static_cast<unsigned>(this->registration_response_capture_.size()),
+        static_cast<unsigned>(this->registration_rx_window_.pending_at_probe()),
+        static_cast<unsigned long>(this->registration_rx_window_.pending_probe_delay_us()),
+        static_cast<unsigned long>(this->registration_rx_window_.first_drain_us()),
+        static_cast<unsigned long>(this->registration_rx_window_.last_drain_us()),
+        static_cast<unsigned long>(this->registration_rx_window_.drain_span_us()),
+        static_cast<unsigned long>(edge_count),
+        static_cast<unsigned long>(edge_first_offset_us),
+        static_cast<unsigned long>(edge_last_offset_us),
+        static_cast<unsigned long>(edge_span_us),
+        static_cast<unsigned long>(edge_min_gap_us),
+        static_cast<unsigned long>(edge_max_gap_us),
+        static_cast<unsigned long>(
+            this->registration_rx_window_.valid_frame_delta(this->valid_frames_)));
+    std::string registration_summary(registration_meta);
+    registration_summary += response_hex.empty() ? "-" : response_hex;
+    if (this->registration_attempt_trace_.size() < 10) {
+      this->registration_attempt_trace_.push_back(registration_summary);
+    }
+
     ESP_LOGI(TAG,
              "REG window %u/%u unvalidated_rx=%u pending_at_rx_enable=%u "
              "pending_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
              "drain_span_us=%lu rx_edges=%lu first_edge_us=%lu last_edge_us=%lu "
-             "edge_span_us=%lu valid_delta=%lu bytes=%s",
+             "edge_span_us=%lu edge_min_gap_us=%lu edge_max_gap_us=%lu "
+             "valid_delta=%lu bytes=%s",
              static_cast<unsigned>(this->registration_attempts_sent_),
              static_cast<unsigned>(this->registration_attempt_limit_),
              static_cast<unsigned>(this->registration_response_capture_.size()),
@@ -694,6 +752,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              static_cast<unsigned long>(edge_first_offset_us),
              static_cast<unsigned long>(edge_last_offset_us),
              static_cast<unsigned long>(edge_span_us),
+             static_cast<unsigned long>(edge_min_gap_us),
+             static_cast<unsigned long>(edge_max_gap_us),
              static_cast<unsigned long>(
                  this->registration_rx_window_.valid_frame_delta(this->valid_frames_)),
              response_hex.empty() ? "-" : response_hex.c_str());
@@ -785,6 +845,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->rx_edge_window_count_ = 0;
     this->rx_edge_window_first_us_ = 0;
     this->rx_edge_window_last_us_ = 0;
+    this->rx_edge_window_previous_us_ = 0;
+    this->rx_edge_window_min_gap_us_ = 0;
+    this->rx_edge_window_max_gap_us_ = 0;
     this->rx_edge_window_active_ = true;
     this->registration_waiting_for_response_ = true;
 
@@ -919,6 +982,18 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (self->rx_edge_window_active_) {
       if (self->rx_edge_window_count_ == 0) {
         self->rx_edge_window_first_us_ = now_us;
+        self->rx_edge_window_previous_us_ = now_us;
+      } else {
+        const uint32_t gap_us =
+            static_cast<uint32_t>(now_us - self->rx_edge_window_previous_us_);
+        if (self->rx_edge_window_min_gap_us_ == 0 ||
+            gap_us < self->rx_edge_window_min_gap_us_) {
+          self->rx_edge_window_min_gap_us_ = gap_us;
+        }
+        if (gap_us > self->rx_edge_window_max_gap_us_) {
+          self->rx_edge_window_max_gap_us_ = gap_us;
+        }
+        self->rx_edge_window_previous_us_ = now_us;
       }
       self->rx_edge_window_last_us_ = now_us;
       ++self->rx_edge_window_count_;
@@ -1251,6 +1326,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   std::vector<uint8_t> startup_rx_capture_;
   std::vector<uint8_t> registration_response_capture_;
   std::vector<std::string> startup_frame_trace_;
+  std::vector<std::string> registration_attempt_trace_;
   std::string last_raw_rx_hex_;
   size_t last_raw_rx_size_{0};
 
@@ -1269,6 +1345,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t last_valid_frame_at_{0};
   uint32_t first_valid_frame_at_{0};
   uint32_t startup_trace_replay_delay_ms_{5000};
+  uint32_t registration_trace_replay_delay_ms_{30000};
   uint32_t last_health_log_at_{0};
   uint32_t last_health_byte_count_{0};
   uint32_t last_health_isr_edge_count_{0};
@@ -1326,6 +1403,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool warned_edges_without_uart_{false};
   bool direction_high_seen_{false};
   bool startup_trace_replayed_{false};
+  bool registration_trace_replayed_{false};
   bool rx_edge_monitor_installed_{false};
 #ifdef USE_ESP32
   volatile uint32_t rx_isr_edges_total_{0};
@@ -1333,12 +1411,18 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   volatile uint32_t rx_edge_window_count_{0};
   volatile uint32_t rx_edge_window_first_us_{0};
   volatile uint32_t rx_edge_window_last_us_{0};
+  volatile uint32_t rx_edge_window_previous_us_{0};
+  volatile uint32_t rx_edge_window_min_gap_us_{0};
+  volatile uint32_t rx_edge_window_max_gap_us_{0};
 #else
   uint32_t rx_isr_edges_total_{0};
   bool rx_edge_window_active_{false};
   uint32_t rx_edge_window_count_{0};
   uint32_t rx_edge_window_first_us_{0};
   uint32_t rx_edge_window_last_us_{0};
+  uint32_t rx_edge_window_previous_us_{0};
+  uint32_t rx_edge_window_min_gap_us_{0};
+  uint32_t rx_edge_window_max_gap_us_{0};
 #endif
 
   sensor::Sensor *bytes_received_sensor_{nullptr};
