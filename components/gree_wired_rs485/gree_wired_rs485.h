@@ -380,9 +380,19 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
       const auto rx_activity = this->rx_line_activity_.take_window();
       const uint32_t rx_isr_edges_total = this->rx_transition_total_();
-      const uint32_t rx_isr_edges_window =
+      const uint32_t rx_isr_edges_window_raw =
           rx_isr_edges_total - this->last_health_isr_edge_count_;
       this->last_health_isr_edge_count_ = rx_isr_edges_total;
+      const uint32_t tx_rx_edges_window =
+          this->tx_rx_edges_total_ - this->last_health_tx_rx_edge_count_;
+      this->last_health_tx_rx_edge_count_ = this->tx_rx_edges_total_;
+      const uint32_t rx_isr_edges_window =
+          rx_isr_edges_window_raw >= tx_rx_edges_window
+              ? static_cast<uint32_t>(rx_isr_edges_window_raw - tx_rx_edges_window)
+              : 0;
+      const uint32_t tx_residue_window =
+          this->tx_residue_bytes_total_ - this->last_health_tx_residue_byte_count_;
+      this->last_health_tx_residue_byte_count_ = this->tx_residue_bytes_total_;
       const uint32_t uart_bytes_window = this->bytes_received_ - this->last_health_byte_count_;
       this->last_health_byte_count_ = this->bytes_received_;
       const bool electrical_activity =
@@ -408,7 +418,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "profile=%s bytes=%lu uart_window=%lu "
                "valid=%lu xor_fail=%lu invalid_len=%lu timeouts=%lu rx_recent=%s "
                "valid_bus=%s rx_level=%d de_level=%d rx_edges_window=%lu "
-               "rx_edges_total=%lu rx_sampled_edges_window=%lu "
+               "tx_rx_edges_window=%lu rx_edges_total=%lu tx_residue_window=%lu "
+               "tx_residue_total=%lu rx_sampled_edges_window=%lu "
                "rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
                "startup_rx=%u:%s",
                this->active_probe_ ? "ACTIVE" : "PASSIVE",
@@ -442,7 +453,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                static_cast<unsigned long>(this->frame_timeouts_),
                YESNO(rx_recent), YESNO(this->bus_active_), rx_level, direction_level,
                static_cast<unsigned long>(rx_isr_edges_window),
+               static_cast<unsigned long>(tx_rx_edges_window),
                static_cast<unsigned long>(rx_isr_edges_total),
+               static_cast<unsigned long>(tx_residue_window),
+               static_cast<unsigned long>(this->tx_residue_bytes_total_),
                static_cast<unsigned long>(rx_activity.transitions),
                rx_activity.high_percent(),
                static_cast<unsigned long>(rx_activity.samples),
@@ -704,19 +718,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     const uint32_t edge_max_gap_us =
         edge_count < 2 ? 0 : this->rx_edge_window_max_gap_us_;
     const std::string response_hex = hex_(this->registration_response_capture_);
-    char registration_meta[384];
+    const std::string tx_residue_hex =
+        hex_(this->registration_tx_residue_capture_);
+    char registration_meta[512];
     std::snprintf(
         registration_meta, sizeof(registration_meta),
-        "attempt=%u/%u unvalidated_rx=%u pending_at_rx_enable=%u "
-        "pending_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
+        "attempt=%u/%u unvalidated_rx=%u pending_after_release=%u "
+        "arm_to_de_us=%lu de_to_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
         "drain_span_us=%lu rx_edges=%lu first_edge_us=%lu last_edge_us=%lu "
         "edge_span_us=%lu edge_min_gap_us=%lu edge_max_gap_us=%lu "
-        "valid_delta=%lu bytes=",
+        "tx_rx_edges=%lu tx_residue=%u:",
         static_cast<unsigned>(this->registration_attempts_sent_),
         static_cast<unsigned>(this->registration_attempt_limit_),
         static_cast<unsigned>(this->registration_response_capture_.size()),
         static_cast<unsigned>(this->registration_rx_window_.pending_at_probe()),
-        static_cast<unsigned long>(this->registration_rx_window_.pending_probe_delay_us()),
+        static_cast<unsigned long>(this->registration_rx_window_.de_release_delay_us()),
+        static_cast<unsigned long>(this->registration_rx_window_.release_to_probe_delay_us()),
         static_cast<unsigned long>(this->registration_rx_window_.first_drain_us()),
         static_cast<unsigned long>(this->registration_rx_window_.last_drain_us()),
         static_cast<unsigned long>(this->registration_rx_window_.drain_span_us()),
@@ -726,25 +743,31 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         static_cast<unsigned long>(edge_span_us),
         static_cast<unsigned long>(edge_min_gap_us),
         static_cast<unsigned long>(edge_max_gap_us),
-        static_cast<unsigned long>(
-            this->registration_rx_window_.valid_frame_delta(this->valid_frames_)));
+        static_cast<unsigned long>(this->last_registration_tx_rx_edges_),
+        static_cast<unsigned>(this->registration_tx_residue_capture_.size()));
     std::string registration_summary(registration_meta);
+    registration_summary += tx_residue_hex.empty() ? "-" : tx_residue_hex;
+    registration_summary += " valid_delta=";
+    registration_summary += std::to_string(
+        this->registration_rx_window_.valid_frame_delta(this->valid_frames_));
+    registration_summary += " bytes=";
     registration_summary += response_hex.empty() ? "-" : response_hex;
     if (this->registration_attempt_trace_.size() < 10) {
       this->registration_attempt_trace_.push_back(registration_summary);
     }
 
     ESP_LOGI(TAG,
-             "REG window %u/%u unvalidated_rx=%u pending_at_rx_enable=%u "
-             "pending_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
+             "REG window %u/%u unvalidated_rx=%u pending_after_release=%u "
+             "arm_to_de_us=%lu de_to_probe_us=%lu first_drain_us=%lu last_drain_us=%lu "
              "drain_span_us=%lu rx_edges=%lu first_edge_us=%lu last_edge_us=%lu "
              "edge_span_us=%lu edge_min_gap_us=%lu edge_max_gap_us=%lu "
-             "valid_delta=%lu bytes=%s",
+             "tx_rx_edges=%lu tx_residue=%u:%s valid_delta=%lu bytes=%s",
              static_cast<unsigned>(this->registration_attempts_sent_),
              static_cast<unsigned>(this->registration_attempt_limit_),
              static_cast<unsigned>(this->registration_response_capture_.size()),
              static_cast<unsigned>(this->registration_rx_window_.pending_at_probe()),
-             static_cast<unsigned long>(this->registration_rx_window_.pending_probe_delay_us()),
+             static_cast<unsigned long>(this->registration_rx_window_.de_release_delay_us()),
+             static_cast<unsigned long>(this->registration_rx_window_.release_to_probe_delay_us()),
              static_cast<unsigned long>(this->registration_rx_window_.first_drain_us()),
              static_cast<unsigned long>(this->registration_rx_window_.last_drain_us()),
              static_cast<unsigned long>(this->registration_rx_window_.drain_span_us()),
@@ -754,6 +777,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              static_cast<unsigned long>(edge_span_us),
              static_cast<unsigned long>(edge_min_gap_us),
              static_cast<unsigned long>(edge_max_gap_us),
+             static_cast<unsigned long>(this->last_registration_tx_rx_edges_),
+             static_cast<unsigned>(this->registration_tx_residue_capture_.size()),
+             tx_residue_hex.empty() ? "-" : tx_residue_hex.c_str(),
              static_cast<unsigned long>(
                  this->registration_rx_window_.valid_frame_delta(this->valid_frames_)),
              response_hex.empty() ? "-" : response_hex.c_str());
@@ -787,6 +813,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     ++this->registration_attempts_sent_;
     this->last_registration_de_before_ = this->read_gpio_level_(this->direction_gpio_);
+    this->registration_tx_residue_capture_.clear();
+    const uint32_t tx_rx_edges_before = this->rx_transition_total_();
     this->tx_in_progress_ = true;
 
     if (!this->hardware_half_duplex_ && !this->set_direction_level_(1)) {
@@ -815,48 +843,93 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->last_registration_tx_flush_ok_ =
         flush_result == uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS;
 
+    // In manual-DE mode the driver is still asserted here. Any complete UART
+    // bytes already pending therefore arrived while this controller owned the
+    // wire; quarantine them before releasing the bus so they cannot masquerade
+    // as a Vireo response or contaminate the frame assembler.
     if (!this->hardware_half_duplex_) {
-      this->force_receive_mode_();
+      const size_t tx_residue_pending = this->available();
+      for (size_t i = 0; i < tx_residue_pending; ++i) {
+        uint8_t byte = 0;
+        if (!this->read_byte(&byte)) break;
+        if (this->registration_tx_residue_capture_.size() < 128) {
+          this->registration_tx_residue_capture_.push_back(byte);
+        }
+      }
+      const uint32_t tx_rx_edges_after = this->rx_transition_total_();
+      this->last_registration_tx_rx_edges_ =
+          static_cast<uint32_t>(tx_rx_edges_after - tx_rx_edges_before);
+      this->tx_rx_edges_total_ += this->last_registration_tx_rx_edges_;
+      this->tx_residue_bytes_total_ +=
+          static_cast<uint32_t>(this->registration_tx_residue_capture_.size());
+    } else {
+      // ESP-IDF controls DE in hardware mode, so flush() may already have
+      // released the wire. Do not discard pending bytes there: they could be
+      // the beginning of a legitimate response.
+      this->last_registration_tx_rx_edges_ = 0;
     }
-    this->tx_in_progress_ = false;
-    this->last_registration_de_after_ = this->read_gpio_level_(this->direction_gpio_);
 
-    ESP_LOGI(TAG,
-             "TX complete registration %u/%u elapsed=%lums expected_wire=~333ms "
-             "flush=%s de_idle=%d>%d",
-             static_cast<unsigned>(this->registration_attempts_sent_),
-             static_cast<unsigned>(this->registration_attempt_limit_),
-             static_cast<unsigned long>(this->last_registration_tx_elapsed_ms_),
-             this->last_registration_tx_flush_ok_ ? "OK" : "FAIL",
-             this->last_registration_de_before_,
-             this->last_registration_de_after_);
-
-    // Start the receive window only after the UART has drained and DE is LOW.
-    // At 1200 baud this is the critical distinction from the old burst logic.
-    this->last_registration_at_ = millis();
-    const uint32_t rx_window_opened_at_us = micros();
-    const size_t pending_at_rx_enable = this->available();
-    const uint32_t pending_probe_at_us = micros();
-    this->registration_accept_evidence_ = false;
-    this->registration_response_capture_.clear();
-    this->registration_rx_window_.open(
-        rx_window_opened_at_us, pending_probe_at_us, pending_at_rx_enable,
-        this->valid_frames_);
+    // Arm edge capture BEFORE manual DE is released. The previous ordering
+    // lowered DE, logged twice, and only then opened this window, leaving a
+    // multi-millisecond blind spot at 1200 baud.
+    this->rx_edge_window_active_ = false;
     this->rx_edge_window_count_ = 0;
     this->rx_edge_window_first_us_ = 0;
     this->rx_edge_window_last_us_ = 0;
     this->rx_edge_window_previous_us_ = 0;
     this->rx_edge_window_min_gap_us_ = 0;
     this->rx_edge_window_max_gap_us_ = 0;
+    const uint32_t rx_window_armed_at_us = micros();
     this->rx_edge_window_active_ = true;
+
+    if (!this->hardware_half_duplex_ && !this->set_direction_level_(0)) {
+      this->rx_edge_window_active_ = false;
+      this->tx_in_progress_ = false;
+      ESP_LOGE(TAG, "Controller registration aborted: could not release RS485 driver");
+      this->force_receive_mode_();
+      return;
+    }
+
+    // From here onward the target owns the opportunity to respond. Capture the
+    // release timestamp and FIFO depth before any logging can consume several
+    // milliseconds and hide the first 1200-baud character.
+    const uint32_t de_released_at_us = micros();
+    this->tx_in_progress_ = false;
+    this->last_registration_de_after_ = this->read_gpio_level_(this->direction_gpio_);
+    const size_t pending_after_release = this->available();
+    const uint32_t pending_probe_at_us = micros();
+    this->last_registration_at_ = millis();
+    this->registration_accept_evidence_ = false;
+    this->registration_response_capture_.clear();
+    this->registration_rx_window_.open(
+        rx_window_armed_at_us, de_released_at_us, pending_probe_at_us,
+        pending_after_release, this->valid_frames_);
     this->registration_waiting_for_response_ = true;
 
+    const std::string tx_residue_hex =
+        hex_(this->registration_tx_residue_capture_);
     ESP_LOGI(TAG,
-             "REG RX window opened attempt=%u pending=%u probe_us=%lu de=%d",
+             "TX complete registration %u/%u elapsed=%lums expected_wire=~333ms "
+             "flush=%s de_idle=%d>%d tx_rx_edges=%lu tx_residue=%u:%s",
              static_cast<unsigned>(this->registration_attempts_sent_),
-             static_cast<unsigned>(pending_at_rx_enable),
+             static_cast<unsigned>(this->registration_attempt_limit_),
+             static_cast<unsigned long>(this->last_registration_tx_elapsed_ms_),
+             this->last_registration_tx_flush_ok_ ? "OK" : "FAIL",
+             this->last_registration_de_before_,
+             this->last_registration_de_after_,
+             static_cast<unsigned long>(this->last_registration_tx_rx_edges_),
+             static_cast<unsigned>(this->registration_tx_residue_capture_.size()),
+             tx_residue_hex.empty() ? "-" : tx_residue_hex.c_str());
+
+    ESP_LOGI(TAG,
+             "REG RX window opened attempt=%u pending_after_release=%u "
+             "arm_to_de_us=%lu de_to_probe_us=%lu de=%d",
+             static_cast<unsigned>(this->registration_attempts_sent_),
+             static_cast<unsigned>(pending_after_release),
              static_cast<unsigned long>(
-                 this->registration_rx_window_.pending_probe_delay_us()),
+                 this->registration_rx_window_.de_release_delay_us()),
+             static_cast<unsigned long>(
+                 this->registration_rx_window_.release_to_probe_delay_us()),
              this->last_registration_de_after_);
 
     if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
@@ -1325,6 +1398,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   std::vector<uint8_t> raw_rx_burst_;
   std::vector<uint8_t> startup_rx_capture_;
   std::vector<uint8_t> registration_response_capture_;
+  std::vector<uint8_t> registration_tx_residue_capture_;
   std::vector<std::string> startup_frame_trace_;
   std::vector<std::string> registration_attempt_trace_;
   std::string last_raw_rx_hex_;
@@ -1349,6 +1423,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t last_health_log_at_{0};
   uint32_t last_health_byte_count_{0};
   uint32_t last_health_isr_edge_count_{0};
+  uint32_t last_health_tx_rx_edge_count_{0};
+  uint32_t last_health_tx_residue_byte_count_{0};
   uint32_t health_log_interval_ms_{10000};
   uint32_t passive_scan_window_ms_{2000};
   uint32_t scan_profile_started_at_{0};
@@ -1375,6 +1451,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t controller_polls_seen_{0};
   uint32_t controller_responses_sent_{0};
   uint32_t registered_status_frames_{0};
+  uint32_t last_registration_tx_rx_edges_{0};
+  uint32_t tx_rx_edges_total_{0};
+  uint32_t tx_residue_bytes_total_{0};
 
   bool log_frames_{true};
   bool active_probe_{false};
