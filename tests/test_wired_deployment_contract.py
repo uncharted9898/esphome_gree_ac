@@ -49,10 +49,10 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("rx_pin: GPIO7", uart_block)
         self.assertNotIn("flow_control_pin:", uart_block)
         self.assertIn("passive_scan: false", text)
-        self.assertIn("active_probe: true", text)
+        self.assertIn("active_probe: false", text)
         self.assertIn("active_probe_interval: 1200ms", text)
         self.assertIn("registration_attempts: 4", text)
-        self.assertIn("silent_bootstrap_probe: true", text)
+        self.assertIn("silent_bootstrap_probe: false", text)
         self.assertIn("silent_bootstrap_delay: 5s", text)
         self.assertIn("hardware_half_duplex: false", text)
         self.assertIn("rx_idle_pullup: true", text)
@@ -67,6 +67,13 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("#   120R termination -> OFF", text)
         self.assertIn("#   5V selector -> IN", text)
         self.assertIn("Deterministic manual RS485 direction", text)
+
+    def test_vireo_deployment_is_receive_only_after_failed_legacy_probe(self):
+        text = PACKAGE.read_text()
+        self.assertIn("active_probe: false", text)
+        self.assertIn("silent_bootstrap_probe: false", text)
+        self.assertIn("persistent_controller: false", text)
+        self.assertIn("rx_idle_pullup: true", text)
 
     def test_silent_bootstrap_requires_complete_electrical_silence(self):
         text = HEADER.read_text()

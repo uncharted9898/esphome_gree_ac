@@ -102,12 +102,16 @@ gree_wired_rs485:
   bus_idle_timeout: 10s
   log_frames: true
   passive_scan: false
-  active_probe: true
+  active_probe: false
   active_probe_interval: 1200ms
   registration_attempts: 4
-  silent_bootstrap_probe: true
+  silent_bootstrap_probe: false
   silent_bootstrap_delay: 5s
   hardware_half_duplex: false
+  # The Seeed TP8485E receiver output is high-impedance while DE+/RE disables
+  # receive. Keep the XIAO UART input deterministically idle-high without
+  # adding any bias to the RS485 A/B pair.
+  rx_idle_pullup: true
   # Keep continuous controller replies disabled during protocol qualification.
   persistent_controller: false
   rx_line_gpio: 7

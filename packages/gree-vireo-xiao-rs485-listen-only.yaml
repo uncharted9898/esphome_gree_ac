@@ -106,10 +106,14 @@ gree_wired_rs485:
   bus_idle_timeout: 10s
   log_frames: true
   passive_scan: false
-  active_probe: true
+  # October 2 Vireo qualification proved the borrowed GKH/XK76 bootstrap gets
+  # no post-release UART byte or GPIO edge from this target. Keep the normal
+  # deployment package genuinely receive-only until an XE71-specific session
+  # transaction is recovered.
+  active_probe: false
   active_probe_interval: 1200ms
   registration_attempts: 4
-  silent_bootstrap_probe: true
+  silent_bootstrap_probe: false
   silent_bootstrap_delay: 5s
   hardware_half_duplex: false
   # The Seeed TP8485E board ties DE and /RE together. With DE high the receiver

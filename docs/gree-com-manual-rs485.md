@@ -73,6 +73,12 @@ For first connection:
    true HVAC/ESP cold start. Do not add another hardware-bias requirement merely
    to repeat that test; preserve the current field wiring while protocol
    qualification continues.
+8. The October 2 pull-up qualification eliminated every TX-side artifact and
+   left the bus at zero decoded bytes and zero GPIO edges before, during and
+   after all four legacy registration attempts. The normal deployment package
+   is therefore receive-only again; the legacy GKH/XK76 bootstrap remains in
+   the component for deliberate experiments but is no longer emitted merely by
+   booting the Vireo field package.
 
 ## R32 startup FE finding and safety gate
 
@@ -81,6 +87,22 @@ RS485 A/B pair makes the indoor display flash `FE` several times and then
 recover; swapping A/B does not remove the behavior, while disconnecting the
 data pair does. The transient `FE` therefore cannot be used as evidence for
 A/B polarity.
+
+The source provenance matters here. The public XK19 reverse-engineering
+repository documents the 1200-8N1 `7E 7E` / message-type-`0x11` frame
+family, but its captured XK19 controller-state frame is `FF -> 00 / 0x15`
+with a `0C 30 83` signature. The later `FF -> 00 / 0x22`,
+`09 30 83` controller frame used by this repository came from XK76/GKH
+field captures in bekmansurov/gree-hvac-protocol issue #8. That same issue
+shows the GKH indoor unit expanding `FF -> 40` from `0x17` to `0x29`
+after the XK76 frame is accepted. Those observations prove the legacy GKH
+transaction, not XE71 behavior on Vireo R32.
+
+GREE's XE71 owner documentation independently confirms that XE71 CN1 is a
+485 communication interface for the four-core indoor-unit cable. It does not
+publish the XE71 application-layer initialization bytes. For this Vireo, the
+electrical interface is therefore supported by manufacturer documentation,
+while the bootstrap transaction remains unresolved.
 
 A breaker-off cold-start qualification on October 1, 2026 exercised the same
 manual GPIO4 direction path from a true HVAC/ESP power-up. After five seconds
@@ -156,6 +178,21 @@ its first/last/gap timing now describe only post-release response activity;
 ownership begins, and health-level electrical activity subtracts both TX-era
 and turnaround edges. A subsequent run should therefore remain electrically
 inactive unless the target itself changes the receiver line after release.
+
+The follow-up pull-up run did exactly that: all four attempts completed with
+`tx_rx_edges=0`, `tx_residue=0`, `turnaround_edges=0`,
+`phase_gap_edges=0`, `rx_edges=0`, `pending_after_release=0` and no
+decoded bytes. The health log remained at `rx_edges_total=0`,
+`bytes=0`, `valid=0`, `polls=0`, and `status29=0` for the rest of
+the capture. This closes the floating-RO/self-echo question and leaves the
+XE71/Vireo session layer as the next unresolved boundary.
+
+Because this evidence is negative but clean, the normal
+`gree-vireo-xiao-rs485-listen-only.yaml` package no longer enables the
+legacy silent bootstrap. To reproduce that historical GKH/XK76 experiment
+deliberately, override `active_probe: true` and
+`silent_bootstrap_probe: true` in a field-only YAML; do not make those
+overrides part of the default Vireo deployment.
 
 ## Minimal per-device YAML
 
