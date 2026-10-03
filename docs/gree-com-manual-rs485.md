@@ -189,10 +189,11 @@ XE71/Vireo session layer as the next unresolved boundary.
 
 Because this evidence is negative but clean, the normal
 `gree-vireo-xiao-rs485-listen-only.yaml` package no longer enables the
-legacy silent bootstrap. To reproduce that historical GKH/XK76 experiment
-deliberately, override `active_probe: true` and
-`silent_bootstrap_probe: true` in a field-only YAML; do not make those
-overrides part of the default Vireo deployment.
+legacy silent bootstrap. To reproduce that historical GKH/XK76 experiment,
+layer `packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml` on the
+passive Vireo package. The explicit `legacy_gkh_xk76_probe: true` setting is
+required alongside `active_probe: true`; configuration validation rejects the
+legacy active profile without that provenance acknowledgement.
 
 ## Minimal per-device YAML
 
@@ -221,9 +222,14 @@ This keeps device-specific Wi-Fi/OTA values local while all hardware,
 diagnostics, parser, Web UI and future COM-MANUAL decoder changes remain in
 the repository package.
 
-## Established framing profile
+## Legacy reference framing profile
 
-The current parser wraps the previously recovered wired-controller framing:
+The current parser retains the previously recovered XK19/GKH wired-controller
+framing as a comparison profile. It is not established as the XE71/Vireo
+application protocol; passive discovery may test other decoder profiles without
+enabling controller traffic.
+
+Legacy reference:
 
 - 1200 baud
 - 8 data bits, no parity, 1 stop bit
@@ -272,9 +278,11 @@ payloads, so Home Assistant timestamps represent actual bus freshness.
 ## Controller runtime model
 
 The COM-MANUAL bus is not the same transport as the Gree commercial
-COM-BMS/CN3 Modbus interface. The latter uses 9600-baud Modbus RTU register
-reads; the Vireo R32 wiring diagram places its optional wired controller on
-COM-MANUAL, which is the 1200-baud `7E 7E` framed bus documented here.
+COM-BMS/CN3 Modbus interface. The Vireo R32 material and XE71 manual place the
+optional wired controller on the four-core COM-MANUAL/CN1 RS485 path, but they
+do not publish its application-layer baud or framing. The 1200-baud `7E 7E`
+format below is therefore legacy XK19/GKH evidence until an authentic
+XE71/Vireo capture proves it on this target.
 
 Recovered wired-controller sessions show the indoor unit acting as the bus
 master during controller discovery: the indoor unit emits `00 -> FF` polls,
@@ -322,10 +330,10 @@ the frame from guessed defaults.
 
 ### Registered `FF -> 40` status
 
-The exact `0x29` body length observed after successful wired-controller
-registration is now a first-class layout. Registration acceptance requires this
-specific registered form rather than the earlier loose rule of accepting any
-body length larger than `0x17`.
+The exact `0x29` body length observed after successful GKH/XK76
+wired-controller registration is retained as a first-class legacy reference
+layout. It is acceptance evidence for that explicit legacy experiment, not an
+XE71/Vireo acceptance rule.
 
 The component separately publishes the registered appendix so changes can be
 diffed without stripping the base status bytes manually. No temperature, fan,
