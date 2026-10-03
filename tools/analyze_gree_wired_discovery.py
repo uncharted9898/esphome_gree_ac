@@ -192,6 +192,8 @@ def cadence_hints(min_gap_us: int, tolerance: float = 0.12) -> list[CadenceHint]
 def conclusion(analysis: DiscoveryAnalysis) -> str:
     if analysis.transmit_lines:
         return "capture_contains_tx_evidence"
+    if not analysis.health and not analysis.profiles:
+        return "insufficient_evidence"
     if any(item.legacy_valid_frames > 0 for item in analysis.profiles) or analysis.max_valid_frames > 0:
         return "legacy_frame_evidence_present"
     if analysis.max_edges_total == 0 and analysis.max_bytes_total == 0:

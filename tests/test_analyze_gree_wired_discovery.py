@@ -10,6 +10,13 @@ import analyze_gree_wired_discovery as discovery  # noqa: E402
 
 
 class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
+    def test_empty_or_unrelated_log_is_not_called_electrically_silent(self):
+        analysis = discovery.analyze_log("")
+        self.assertEqual(discovery.conclusion(analysis), "insufficient_evidence")
+
+        unrelated = discovery.analyze_log("INFO WiFi connected\nINFO API ready\n")
+        self.assertEqual(discovery.conclusion(unrelated), "insufficient_evidence")
+
     def test_clean_vireo_capture_is_reported_as_electrically_silent(self):
         text = """
 [02:25:48.608][I][gree_wired_rs485:424]: HEALTH mode=PASSIVE dir=MANUAL profile=1200-8N1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0
