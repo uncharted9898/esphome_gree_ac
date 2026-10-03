@@ -72,7 +72,7 @@ class GreeWiredTraceAnalyzerTests(unittest.TestCase):
         )
         self.assertTrue(all(frame.xor_valid for frame in analysis.frames))
 
-    def test_esphome_log_timestamp_is_preserved(self):
+    def test_esphome_log_tx_direction_and_timestamp_are_preserved(self):
         line = (
             "[02:25:43.543][I][gree_wired_rs485:854]: TX legacy: "
             + GKH_XK76_CONTROLLER
@@ -85,6 +85,21 @@ class GreeWiredTraceAnalyzerTests(unittest.TestCase):
             places=6,
         )
         self.assertEqual(analysis.frames[0].source_line, 1)
+        self.assertEqual(analysis.frames[0].direction, "tx")
+
+    def test_esphome_rx_line_is_not_confused_with_local_tx(self):
+        line = (
+            "[02:25:44.000][I][gree_wired_rs485:999]: RX raw burst: "
+            + XK19_CONTROLLER
+        )
+        analysis = trace.analyze_text(line)
+        self.assertEqual(len(analysis.frames), 1)
+        self.assertEqual(analysis.frames[0].direction, "rx")
+
+    def test_unlabeled_sniffer_frame_remains_observed(self):
+        analysis = trace.analyze_text(XK19_CONTROLLER)
+        self.assertEqual(len(analysis.frames), 1)
+        self.assertEqual(analysis.frames[0].direction, "observed")
 
     def test_saleae_byte_csv_is_reassembled_by_declared_length(self):
         values = [int(token, 16) for token in XK19_CONTROLLER.split()]
@@ -102,6 +117,7 @@ class GreeWiredTraceAnalyzerTests(unittest.TestCase):
             "xk19_controller_state_ff00_15",
         )
         self.assertEqual(analysis.frames[0].timestamp_s, 0.0)
+        self.assertEqual(analysis.frames[0].direction, "observed")
 
     def test_bad_xor_is_retained_as_evidence(self):
         values = [int(token, 16) for token in GKH_PRE_STATUS.split()]

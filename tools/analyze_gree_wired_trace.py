@@ -40,6 +40,7 @@ REFERENCE_LAYOUTS = {
 class FrameRecord:
     timestamp_s: Optional[float]
     source_line: Optional[int]
+    direction: str
     raw_hex: str
     source: int
     destination: int
@@ -94,6 +95,7 @@ def decode_frame(
     *,
     timestamp_s: Optional[float] = None,
     source_line: Optional[int] = None,
+    direction: str = "observed",
 ) -> FrameRecord:
     data = [int(value) & 0xFF for value in raw]
     if len(data) < 7:
@@ -124,6 +126,7 @@ def decode_frame(
     return FrameRecord(
         timestamp_s=timestamp_s,
         source_line=source_line,
+        direction=direction,
         raw_hex=" ".join(f"{value:02X}" for value in data),
         source=source,
         destination=destination,
@@ -142,6 +145,7 @@ def _scan_sequence(
     *,
     timestamps: Optional[list[Optional[float]]] = None,
     source_line: Optional[int] = None,
+    direction: str = "observed",
 ) -> TraceAnalysis:
     frames: list[FrameRecord] = []
     truncated = 0
@@ -170,11 +174,26 @@ def _scan_sequence(
             values[index:end],
             timestamp_s=timestamp_s,
             source_line=source_line,
+            direction=direction,
         )
         frames.append(frame)
         index = end
 
     return TraceAnalysis(frames=frames, truncated_candidates=truncated)
+
+
+def _direction_for_text_line(line: str, marker_start: int) -> str:
+    prefix = line[:marker_start].upper()
+    if "TX " in prefix or "TX:" in prefix:
+        return "tx"
+    if (
+        "RX " in prefix
+        or "RX:" in prefix
+        or "UART_DEBUG" in prefix
+        or "[COM-MANUAL]" in prefix
+    ):
+        return "rx"
+    return "observed"
 
 
 def analyze_text(text: str) -> TraceAnalysis:
@@ -191,6 +210,7 @@ def analyze_text(text: str) -> TraceAnalysis:
             values,
             timestamps=[_clock_to_seconds(line)] * len(values),
             source_line=line_number,
+            direction=_direction_for_text_line(line, marker.start()),
         )
         frames.extend(result.frames)
         truncated += result.truncated_candidates
@@ -259,6 +279,7 @@ def analyze_capture(text: str) -> TraceAnalysis:
 def _summary_dict(analysis: TraceAnalysis) -> dict:
     route_counts = Counter(frame.route for frame in analysis.frames)
     layout_counts = Counter(frame.reference_layout for frame in analysis.frames)
+    direction_counts = Counter(frame.direction for frame in analysis.frames)
     signatures = Counter(
         frame.signature for frame in analysis.frames if frame.signature is not None
     )
@@ -269,6 +290,7 @@ def _summary_dict(analysis: TraceAnalysis) -> dict:
         "truncated_candidates": analysis.truncated_candidates,
         "routes": dict(sorted(route_counts.items())),
         "reference_layouts": dict(sorted(layout_counts.items())),
+        "directions": dict(sorted(direction_counts.items())),
         "signatures": dict(sorted(signatures.items())),
     }
 
@@ -289,8 +311,9 @@ def _print_human(analysis: TraceAnalysis) -> None:
             previous_timestamp = frame.timestamp_s
         signature = frame.signature or "-"
         print(
-            f"{index:04d} t={timestamp} dt={delta} route={frame.route} "
-            f"type=0x{frame.message_type:02X} len=0x{frame.body_length:02X} "
+            f"{index:04d} t={timestamp} dt={delta} dir={frame.direction} "
+            f"route={frame.route} type=0x{frame.message_type:02X} "
+            f"len=0x{frame.body_length:02X} "
             f"xor={'OK' if frame.xor_valid else 'BAD'} "
             f"layout={frame.reference_layout} sig={signature}"
         )
@@ -303,6 +326,8 @@ def _print_human(analysis: TraceAnalysis) -> None:
             "reference_layouts:",
             json.dumps(summary["reference_layouts"], sort_keys=True),
         )
+    if summary["directions"]:
+        print("directions:", json.dumps(summary["directions"], sort_keys=True))
     if summary["signatures"]:
         print("signatures:", json.dumps(summary["signatures"], sort_keys=True))
 
@@ -313,9 +338,19 @@ def main() -> int:
     )
     parser.add_argument("capture", type=Path, help="text log or Saleae async-serial CSV")
     parser.add_argument("--json", action="store_true", help="emit JSON")
+    parser.add_argument(
+        "--exclude-tx",
+        action="store_true",
+        help="exclude frames explicitly logged as local TX",
+    )
     args = parser.parse_args()
 
     analysis = analyze_capture(args.capture.read_text(errors="replace"))
+    if args.exclude_tx:
+        analysis = TraceAnalysis(
+            frames=[frame for frame in analysis.frames if frame.direction != "tx"],
+            truncated_candidates=analysis.truncated_candidates,
+        )
     if args.json:
         print(
             json.dumps(
