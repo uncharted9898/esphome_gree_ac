@@ -217,8 +217,13 @@ baud; correlate cadence with repeated bursts or a logic-analyzer capture.
 
 A rotating scan alone is insufficient for a protocol that may speak only at
 cold power-up. The scanner therefore has a configurable
-`passive_scan_start_profile`. That decoder is applied immediately when the
-component starts, before the first scan window begins.
+`passive_scan_start_profile`. That decoder is staged immediately when the
+Gree component starts, before the first scan window begins. On ESP-IDF the
+Gree component intentionally runs before the UART component so it can force
+manual DE LOW; the boot profile therefore changes the UART configuration fields
+without prematurely installing/reloading the UART driver. ESPHome's UART
+BUS-priority setup then installs the driver with the staged profile. Later scan
+rotations reload the already-initialized UART normally.
 
 For a real XE71/XE72 cold-start qualification, use **one breaker-off run per
 profile** and set the boot profile explicitly:

@@ -181,7 +181,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       // Apply the selected decoder immediately during component setup. This is
       // critical for cold-start-only traffic: rotating to the right profile
       // several seconds later can miss the only useful burst entirely.
-      this->apply_scan_profile_(this->scan_profile_index_);
+      this->apply_scan_profile_(this->scan_profile_index_, false);
       this->scan_profile_started_at_ = millis();
       this->scan_profile_byte_start_ = this->bytes_received_;
       this->scan_profile_valid_start_ = this->valid_frames_;
@@ -406,7 +406,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       } else {
         this->scan_profile_index_ =
             (this->scan_profile_index_ + 1) % PASSIVE_SCAN_PROFILE_COUNT;
-        this->apply_scan_profile_(this->scan_profile_index_);
+        this->apply_scan_profile_(this->scan_profile_index_, true);
         this->scan_profile_started_at_ = now;
         this->scan_profile_byte_start_ = this->bytes_received_;
         this->scan_profile_valid_start_ = this->valid_frames_;
@@ -1362,21 +1362,29 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     }
   }
 
-  void apply_scan_profile_(size_t index) {
+  void apply_scan_profile_(size_t index, bool reload_uart) {
     const auto profile = this->scan_profile_(index);
     this->assembler_.reset();
 
     // Changing UART decode settings does not transmit anything on RS485.
-    // Hardware-half-duplex deployments may keep GPIO4 registered as UART
-    // RTS/DE; this profile-change path itself never writes bus data.
+    // Manual-DE deployments intentionally run this component at POWER-1 so DE
+    // is forced LOW before the UART component's BUS-priority setup. During that
+    // early setup, stage the selected boot profile only; IDFUARTComponent::setup()
+    // will install the driver using these fields. Runtime scan rotations happen
+    // after setup and may safely reload the live UART driver.
     this->parent_->set_baud_rate(profile.baud);
     this->parent_->set_data_bits(8);
     this->parent_->set_stop_bits(1);
     this->parent_->set_parity(profile.parity);
 #if defined(USE_ESP32)
-    this->parent_->load_settings(false);
+    if (reload_uart) {
+      this->parent_->load_settings(false);
+    }
+#else
+    (void) reload_uart;
 #endif
-    ESP_LOGI(TAG, "SCAN listening profile=%s", profile.name);
+    ESP_LOGI(TAG, "SCAN listening profile=%s phase=%s", profile.name,
+             reload_uart ? "runtime-reload" : "boot-staged");
     this->publish_serial_profile_();
   }
 
