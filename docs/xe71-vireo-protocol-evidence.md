@@ -111,6 +111,15 @@ recognize the known legacy indoor-first ordering and status expansion without
 calling that ordering XE71 protocol. This is intended for comparing a future
 XE71 capture structurally before assigning field semantics.
 
+Passive firmware diagnostics follow the same provenance rule. The legacy
+controller codec still needs a reference state internally, but passive health
+logs now print `unit=UNLEARNED` and the controller-state diagnostic labels
+that state as `provenance=legacy_codec_reference`. The `09 30 83` reference
+may appear as `LEGACY_REF` only when the deliberately enabled silent legacy
+probe uses it, or as `LEARNED` only after the explicit legacy probe learns
+three bytes from a compatible `FF->40` frame. Passive XE71/Vireo captures do
+not learn or publish a target registration signature.
+
 ## Current conclusion
 
 The electrical target remains COM-MANUAL RS485, and the public XK19/GKH work

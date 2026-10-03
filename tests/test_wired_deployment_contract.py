@@ -86,6 +86,9 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("XE71/Vireo application protocol is unproven", text)
         self.assertIn("candidate legacy wired profile", text)
         self.assertIn("XE71/Vireo unproven", text)
+        self.assertIn("unit=UNLEARNED", text)
+        self.assertIn("provenance=legacy_codec_reference", text)
+        self.assertIn("LEGACY_REF:%02X%02X%02X", text)
 
     def test_vireo_deployment_is_receive_only_after_failed_legacy_probe(self):
         text = PACKAGE.read_text()
@@ -206,6 +209,7 @@ class WiredDeploymentContractTests(unittest.TestCase):
         learn_start = text.index("  void learn_registration_signature_")
         learn_end = text.index("\n  void observe_startup_poll_", learn_start)
         learn = text[learn_start:learn_end]
+        self.assertIn("legacy_gkh_xk76_probe_enabled_()", learn)
         self.assertIn("controller::set_unit_signature", learn)
         self.assertNotIn("REGISTRATION_TEMPLATE", send)
         self.assertIn("armed=%s", text)

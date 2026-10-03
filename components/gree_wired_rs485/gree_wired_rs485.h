@@ -465,8 +465,24 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
       const int rx_level = this->read_gpio_level_(this->rx_line_gpio_);
       const int direction_level = this->read_gpio_level_(this->direction_gpio_);
+      char unit_signature_text[32];
+      if (this->registration_unit_signature_learned_) {
+        std::snprintf(unit_signature_text, sizeof(unit_signature_text),
+                      "LEARNED:%02X%02X%02X",
+                      this->registration_unit_signature_[0],
+                      this->registration_unit_signature_[1],
+                      this->registration_unit_signature_[2]);
+      } else if (this->silent_bootstrap_armed_) {
+        std::snprintf(unit_signature_text, sizeof(unit_signature_text),
+                      "LEGACY_REF:%02X%02X%02X",
+                      this->registration_unit_signature_[0],
+                      this->registration_unit_signature_[1],
+                      this->registration_unit_signature_[2]);
+      } else {
+        std::snprintf(unit_signature_text, sizeof(unit_signature_text), "UNLEARNED");
+      }
       ESP_LOGI(TAG,
-               "HEALTH mode=%s dir=%s reg=%u/%u armed=%s waiting=%s established=%s sig=%s unit=%02X%02X%02X "
+               "HEALTH mode=%s dir=%s reg=%u/%u armed=%s waiting=%s established=%s unit=%s "
                "runtime=%s polls=%lu replies=%lu status29=%lu pending=%s "
                "tx_ms=%lu tx_flush=%s tx_de=%d>%d "
                "profile=%s bytes=%lu uart_window=%lu "
@@ -488,10 +504,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                YESNO(this->registration_armed_),
                YESNO(this->registration_waiting_for_response_),
                YESNO(this->registration_established_),
-               this->registration_unit_signature_learned_ ? "LEARNED" : "WAITING",
-               this->registration_unit_signature_[0],
-               this->registration_unit_signature_[1],
-               this->registration_unit_signature_[2],
+               unit_signature_text,
                this->persistent_controller_ ? "ON" : "OFF",
                static_cast<unsigned long>(this->controller_polls_seen_),
                static_cast<unsigned long>(this->controller_responses_sent_),
@@ -710,6 +723,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   void learn_registration_signature_(const protocol::ParsedFrame &frame) {
+    // The first three FF->40 payload bytes are a registration signature only
+    // for the explicitly acknowledged legacy GKH/XK76 experiment. Passive
+    // XE71/Vireo discovery must preserve those bytes as evidence without
+    // promoting them into controller-session semantics.
+    if (!this->legacy_gkh_xk76_probe_enabled_()) return;
     if (frame.route != protocol::RouteKind::ROUTE_FF_40 || frame.payload.size() < 3) return;
 
     const registration::UnitSignature learned = {
@@ -1086,16 +1104,32 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void publish_controller_state_() {
     if (this->controller_state_sensor_ == nullptr) return;
     const auto signature = controller::unit_signature(this->controller_state_);
-    char summary[128];
-    std::snprintf(summary, sizeof(summary),
-                  "unit=%02X%02X%02X mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
-                  signature[0], signature[1], signature[2],
-                  controller::mode_power_raw(this->controller_state_),
-                  controller::power_enabled(this->controller_state_) ? "ON" : "OFF",
-                  controller::secondary_control_raw(this->controller_state_),
-                  static_cast<unsigned>(controller::setpoint_x2(this->controller_state_)),
-                  controller::setpoint_celsius(this->controller_state_),
-                  controller::accept_counter(this->controller_state_));
+    const bool signature_is_session_evidence =
+        this->registration_unit_signature_learned_ || this->silent_bootstrap_armed_;
+    char summary[176];
+    if (signature_is_session_evidence) {
+      std::snprintf(
+          summary, sizeof(summary),
+          "provenance=%s unit=%02X%02X%02X mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
+          this->registration_unit_signature_learned_ ? "learned_legacy_bus" : "legacy_reference_probe",
+          signature[0], signature[1], signature[2],
+          controller::mode_power_raw(this->controller_state_),
+          controller::power_enabled(this->controller_state_) ? "ON" : "OFF",
+          controller::secondary_control_raw(this->controller_state_),
+          static_cast<unsigned>(controller::setpoint_x2(this->controller_state_)),
+          controller::setpoint_celsius(this->controller_state_),
+          controller::accept_counter(this->controller_state_));
+    } else {
+      std::snprintf(
+          summary, sizeof(summary),
+          "provenance=legacy_codec_reference unit=UNLEARNED mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
+          controller::mode_power_raw(this->controller_state_),
+          controller::power_enabled(this->controller_state_) ? "ON" : "OFF",
+          controller::secondary_control_raw(this->controller_state_),
+          static_cast<unsigned>(controller::setpoint_x2(this->controller_state_)),
+          controller::setpoint_celsius(this->controller_state_),
+          controller::accept_counter(this->controller_state_));
+    }
     this->controller_state_sensor_->publish_state(summary);
   }
 
@@ -1406,9 +1440,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       this->first_valid_frame_at_ = this->last_valid_frame_at_;
     }
 
-    // Registration is synchronized to the target's startup traffic. FF->40
-    // provides the target-specific three-byte signature used in controller
-    // state frames; 00->FF opens the short controller-registration window.
+    // Legacy registration, when explicitly enabled, is synchronized to the
+    // target's startup traffic. Passive XE71/Vireo discovery never promotes
+    // FF->40 payload bytes into registration semantics.
     this->learn_registration_signature_(frame);
     if (frame.route == protocol::RouteKind::ROUTE_00_FF) {
       this->observe_startup_poll_(this->last_valid_frame_at_);
