@@ -121,8 +121,9 @@ gree_wired_rs485:
   # output is high-impedance and the board's optional RX pull-up is not fitted,
   # so keep the ESP32 UART input weakly idle-high during our TX interval.
   rx_idle_pullup: true
-  # Runtime controller replies stay disabled until the target Vireo proves
-  # registration by expanding FF->40 beyond the pre-registration layout.
+  # Runtime controller replies belong to the legacy GKH/XK76 codec and stay
+  # disabled in normal XE71/Vireo discovery. A future XE71 runtime path must be
+  # backed by XE71-specific capture evidence rather than legacy status expansion.
   persistent_controller: false
   rx_line_gpio: 7
   direction_gpio: 4
@@ -179,16 +180,16 @@ gree_wired_rs485:
     name: ${friendly_name} RX High Percent
     entity_category: diagnostic
   controller_polls_seen:
-    name: ${friendly_name} Controller Polls Seen
+    name: ${friendly_name} Legacy 00-FF Polls Seen
     entity_category: diagnostic
   controller_responses_sent:
-    name: ${friendly_name} Controller Responses Sent
+    name: ${friendly_name} Legacy Controller Responses Sent
     entity_category: diagnostic
   registered_status_frames:
-    name: ${friendly_name} Registered Status Frames
+    name: ${friendly_name} Legacy Registered Status Frames
     entity_category: diagnostic
   registered_setpoint_candidate:
-    name: ${friendly_name} Registered Setpoint Candidate
+    name: ${friendly_name} Legacy Registered Setpoint Candidate
     entity_category: diagnostic
     disabled_by_default: true
 
@@ -221,10 +222,10 @@ gree_wired_rs485:
     name: ${friendly_name} Last Raw RX Burst
     entity_category: diagnostic
   ff40_appendix:
-    name: ${friendly_name} FF40 Registered Appendix
+    name: ${friendly_name} Legacy FF40 Registered Appendix
     entity_category: diagnostic
   controller_state:
-    name: ${friendly_name} Controller State Codec
+    name: ${friendly_name} Legacy Controller State Codec
     entity_category: diagnostic
   ff40_payload:
     name: ${friendly_name} FF40 Status Payload
@@ -236,10 +237,10 @@ gree_wired_rs485:
     name: ${friendly_name} Last Frame Role
     entity_category: diagnostic
   poll_payload:
-    name: ${friendly_name} 00 to FF Poll Payload
+    name: ${friendly_name} Legacy 00-FF Poll Payload
     entity_category: diagnostic
   poll_changes:
-    name: ${friendly_name} 00 to FF Poll Changes
+    name: ${friendly_name} Legacy 00-FF Poll Changes
     entity_category: diagnostic
   ff40_indexed:
     name: ${friendly_name} FF40 Indexed Payload
@@ -265,5 +266,5 @@ gree_wired_rs485:
     name: ${friendly_name} RS485 DE High Seen
     entity_category: diagnostic
   registered_status:
-    name: ${friendly_name} Registered FF40 Layout
+    name: ${friendly_name} Legacy Registered FF40 Layout
     entity_category: diagnostic

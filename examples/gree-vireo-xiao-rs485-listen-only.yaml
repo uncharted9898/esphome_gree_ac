@@ -113,7 +113,8 @@ gree_wired_rs485:
   # receive. Keep the XIAO UART input deterministically idle-high without
   # adding any bias to the RS485 A/B pair.
   rx_idle_pullup: true
-  # Keep continuous controller replies disabled during protocol qualification.
+  # This switch controls only the legacy GKH/XK76 response codec. Keep it
+  # disabled during XE71/Vireo protocol qualification.
   persistent_controller: false
   rx_line_gpio: 7
   direction_gpio: 4

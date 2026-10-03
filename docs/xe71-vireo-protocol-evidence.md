@@ -120,6 +120,13 @@ probe uses it, or as `LEARNED` only after the explicit legacy probe learns
 three bytes from a compatible `FF->40` frame. Passive XE71/Vireo captures do
 not learn or publish a target registration signature.
 
+The Home Assistant display labels follow that boundary as well. Existing YAML
+keys remain stable for compatibility, but entities derived from the captured
+GKH/XK76 state machine are visibly prefixed `Legacy` (polls, controller
+responses, registered status/setpoint, FF40 appendix/layout, and controller
+state codec). This prevents a passive Vireo dashboard from presenting those
+reference concepts as already-proven XE71 semantics.
+
 ## Current conclusion
 
 The electrical target remains COM-MANUAL RS485, and the public XK19/GKH work
