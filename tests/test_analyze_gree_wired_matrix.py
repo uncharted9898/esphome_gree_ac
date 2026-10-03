@@ -15,6 +15,13 @@ def capture(profile: str, *, tx: bool = False, seconds: int = 65) -> str:
         "TX legacy GKH/XK76 registration 1/4: 7E 7E FF 00\n"
         if tx else ""
     )
+
+    first_health_s = 2 * 3600 + 25 * 60 + 1
+    end_total_s = first_health_s + seconds
+    end_hour, remainder = divmod(end_total_s, 3600)
+    end_minute, end_second = divmod(remainder, 60)
+    end_timestamp = f"{end_hour:02d}:{end_minute:02d}:{end_second:02d}.000"
+
     return (
         f"[02:25:00.000][I][gree_wired_rs485]: Passive UART profile scan enabled; "
         f"RS485 transmitter remains disabled; boot_profile={profile}\n"
@@ -23,7 +30,7 @@ def capture(profile: str, *, tx: bool = False, seconds: int = 65) -> str:
         f"[02:25:01.000][I][gree_wired_rs485]: HEALTH mode=PASSIVE profile={profile} "
         "bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 "
         "edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0\n"
-        f"[02:26:{seconds - 60 + 1:02d}.000][I][gree_wired_rs485]: HEALTH mode=PASSIVE "
+        f"[{end_timestamp}][I][gree_wired_rs485]: HEALTH mode=PASSIVE "
         f"profile={profile} bytes=0 uart_window=0 valid=0 rx_edges_window=0 "
         "rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 "
         "edge_max_gap_us=0 edge_last_gap_us=0\n"
