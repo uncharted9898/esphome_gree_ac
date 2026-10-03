@@ -1103,15 +1103,35 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void publish_controller_state_() {
     if (this->controller_state_sensor_ == nullptr) return;
+
+    // In normal passive XE71/Vireo discovery controller_state_ is only the
+    // seeded GKH/XK76 codec reference. Publishing its mode/setpoint/counter
+    // fields would make static research defaults look like live HVAC data.
+    if (!this->registration_unit_signature_learned_ &&
+        !this->silent_bootstrap_armed_ &&
+        !this->legacy_gkh_xk76_probe_enabled_()) {
+      this->controller_state_sensor_->publish_state(
+          "provenance=legacy_codec_reference unit=UNLEARNED live_data=NO");
+      return;
+    }
+
     const auto signature = controller::unit_signature(this->controller_state_);
-    const bool signature_is_session_evidence =
-        this->registration_unit_signature_learned_ || this->silent_bootstrap_armed_;
-    char summary[176];
-    if (signature_is_session_evidence) {
+    char summary[208];
+    if (this->registration_unit_signature_learned_) {
       std::snprintf(
           summary, sizeof(summary),
-          "provenance=%s unit=%02X%02X%02X mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
-          this->registration_unit_signature_learned_ ? "learned_legacy_bus" : "legacy_reference_probe",
+          "provenance=learned_legacy_bus unit=%02X%02X%02X live_data=LEGACY mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
+          signature[0], signature[1], signature[2],
+          controller::mode_power_raw(this->controller_state_),
+          controller::power_enabled(this->controller_state_) ? "ON" : "OFF",
+          controller::secondary_control_raw(this->controller_state_),
+          static_cast<unsigned>(controller::setpoint_x2(this->controller_state_)),
+          controller::setpoint_celsius(this->controller_state_),
+          controller::accept_counter(this->controller_state_));
+    } else if (this->silent_bootstrap_armed_) {
+      std::snprintf(
+          summary, sizeof(summary),
+          "provenance=legacy_reference_probe unit=%02X%02X%02X live_data=NO mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
           signature[0], signature[1], signature[2],
           controller::mode_power_raw(this->controller_state_),
           controller::power_enabled(this->controller_state_) ? "ON" : "OFF",
@@ -1120,9 +1140,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
           controller::setpoint_celsius(this->controller_state_),
           controller::accept_counter(this->controller_state_));
     } else {
+      // An explicitly enabled legacy experiment may stage codec fields before
+      // any compatible unit signature has been learned. Label that state as
+      // staged configuration, not target telemetry.
       std::snprintf(
           summary, sizeof(summary),
-          "provenance=legacy_codec_reference unit=UNLEARNED mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
+          "provenance=legacy_codec_staged unit=UNLEARNED live_data=NO mode_power=0x%02X power=%s secondary=0x%02X setpoint_x2=%u setpoint=%.1fC counter=0x%02X",
           controller::mode_power_raw(this->controller_state_),
           controller::power_enabled(this->controller_state_) ? "ON" : "OFF",
           controller::secondary_control_raw(this->controller_state_),

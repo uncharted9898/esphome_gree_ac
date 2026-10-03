@@ -169,6 +169,23 @@ responses, registered status/setpoint, FF40 appendix/layout, and controller
 state codec). This prevents a passive Vireo dashboard from presenting those
 reference concepts as already-proven XE71 semantics.
 
+The Legacy Controller State Codec is also fail-closed in passive Vireo mode.
+Its internal encoder is intentionally initialized from the known GKH/XK76
+reference payload, but those seeded values are not target telemetry. Until a
+legacy experiment is explicitly enabled or a compatible legacy signature is
+actually learned, the entity publishes only:
+
+```text
+provenance=legacy_codec_reference unit=UNLEARNED live_data=NO
+```
+
+It must not expose the seeded reference mode, power, secondary-control,
+setpoint or counter values as though they came from the Vireo. An explicitly
+enabled but not-yet-learned legacy experiment is labeled
+`provenance=legacy_codec_staged`; a silent reference probe is labeled
+`legacy_reference_probe`; only a learned compatible legacy bus is labeled
+`learned_legacy_bus`.
+
 ## Current conclusion
 
 The electrical target remains COM-MANUAL RS485, and the public XK19/GKH work

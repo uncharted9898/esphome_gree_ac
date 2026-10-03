@@ -95,6 +95,13 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("XE71/Vireo unproven", text)
         self.assertIn("unit=UNLEARNED", text)
         self.assertIn("provenance=legacy_codec_reference", text)
+        self.assertIn(
+            "provenance=legacy_codec_reference unit=UNLEARNED live_data=NO",
+            text,
+        )
+        self.assertIn("provenance=legacy_codec_staged", text)
+        self.assertIn("provenance=learned_legacy_bus", text)
+        self.assertIn("provenance=legacy_reference_probe", text)
         self.assertIn("LEGACY_REF:%02X%02X%02X", text)
 
     def test_vireo_deployment_is_receive_only_after_failed_legacy_probe(self):
@@ -223,6 +230,22 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("established=%s unit=%s", text)
         self.assertIn('"UNLEARNED"', text)
         self.assertIn('"LEGACY_REF:%02X%02X%02X"', text)
+
+    def test_passive_controller_codec_does_not_expose_reference_defaults(self):
+        text = HEADER.read_text()
+        start = text.index("  void publish_controller_state_() {")
+        end = text.index("\n  void observe_ff40_status_", start)
+        publish = text[start:end]
+
+        passive_marker = (
+            'this->controller_state_sensor_->publish_state(\n'
+            '          "provenance=legacy_codec_reference unit=UNLEARNED live_data=NO");'
+        )
+        passive_pos = publish.index(passive_marker)
+        passive_return = publish.index("return;", passive_pos)
+        detailed_mode = publish.index("mode_power=0x%02X")
+        self.assertLess(passive_pos, passive_return)
+        self.assertLess(passive_return, detailed_mode)
 
     def test_registration_success_requires_expanded_ff40(self):
         text = HEADER.read_text()
