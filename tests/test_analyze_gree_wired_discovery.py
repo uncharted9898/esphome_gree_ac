@@ -67,7 +67,36 @@ class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
         self.assertGreater(len(analysis.health), 10)
         self.assertEqual(discovery.conclusion(analysis), "electrically_silent")
         self.assertEqual(discovery.summary_dict(analysis)["max_edges_total"], 0)
-        self.assertEqual(discovery.summary_dict(analysis)["max_bytes_total"], 0)
+        summary = discovery.summary_dict(analysis)
+        self.assertEqual(summary["max_bytes_total"], 0)
+        self.assertTrue(summary["sustained_physical_silence"])
+        self.assertEqual(
+            summary["recommended_next_step"],
+            "change_topology_or_attach_supported_controller_before_profile_sweep",
+        )
+
+    def test_short_zero_activity_capture_requires_more_time(self):
+        text = """
+[02:25:00.000][I][gree_wired_rs485]: HEALTH mode=PASSIVE profile=1200-8N1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0
+[02:25:20.000][I][gree_wired_rs485]: HEALTH mode=PASSIVE profile=1200-8N1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0
+"""
+        analysis = discovery.analyze_log(text)
+        self.assertFalse(discovery.sustained_physical_silence(analysis))
+        self.assertEqual(
+            discovery.recommended_next_step(analysis),
+            "extend_capture_to_60s_before_concluding_physical_silence",
+        )
+
+    def test_physical_edges_route_to_profile_matrix(self):
+        text = """
+[02:25:00.000][I][gree_wired_rs485]: HEALTH mode=PASSIVE profile=1200-8N1 bytes=0 uart_window=0 valid=0 rx_edges_window=12 rx_edges_total=12 edge_cadence_samples=10 edge_min_gap_us=833 edge_max_gap_us=3332 edge_last_gap_us=1666
+[02:26:05.000][I][gree_wired_rs485]: HEALTH mode=PASSIVE profile=1200-8N1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=12 edge_cadence_samples=10 edge_min_gap_us=833 edge_max_gap_us=3332 edge_last_gap_us=1666
+"""
+        analysis = discovery.analyze_log(text)
+        self.assertEqual(
+            discovery.recommended_next_step(analysis),
+            "run_cold_start_serial_profile_matrix",
+        )
 
     def test_scan_only_byte_evidence_is_not_called_silent(self):
         text = """

@@ -249,6 +249,46 @@ def cadence_hints(min_gap_us: int, tolerance: float = 0.12) -> list[CadenceHint]
     return hints
 
 
+def sustained_physical_silence(
+    analysis: DiscoveryAnalysis,
+    min_duration_s: float = 60.0,
+) -> bool:
+    """True only for a long passive capture with no physical or UART activity.
+
+    GPIO edge observation is below UART framing. Once a complete cold-start
+    capture has zero receiver edges, changing baud/parity cannot reveal traffic
+    that never toggled the receiver input.
+    """
+    if analysis.transmit_lines:
+        return False
+    duration = analysis.capture_duration_s
+    if duration is None or duration < min_duration_s:
+        return False
+    return (
+        analysis.max_edges_total == 0
+        and analysis.max_bytes_total == 0
+        and analysis.profile_bytes_total == 0
+        and analysis.max_valid_frames == 0
+    )
+
+
+def recommended_next_step(analysis: DiscoveryAnalysis) -> str:
+    state = conclusion(analysis)
+    if analysis.transmit_lines:
+        return "repeat_as_receive_only_capture"
+    if sustained_physical_silence(analysis):
+        return "change_topology_or_attach_supported_controller_before_profile_sweep"
+    if state == "edge_activity_without_uart_decode":
+        return "run_cold_start_serial_profile_matrix"
+    if state == "uart_decode_candidates_without_legacy_validation":
+        return "preserve_raw_bytes_and_compare_candidate_profiles"
+    if state == "legacy_frame_evidence_present":
+        return "analyze_complete_frames_and_timing"
+    if state == "electrically_silent":
+        return "extend_capture_to_60s_before_concluding_physical_silence"
+    return "capture_more_evidence"
+
+
 def conclusion(analysis: DiscoveryAnalysis) -> str:
     if analysis.transmit_lines:
         return "capture_contains_tx_evidence"
@@ -299,6 +339,8 @@ def summary_dict(analysis: DiscoveryAnalysis) -> dict:
         "declared_boot_profile": analysis.declared_boot_profile,
         "boot_profile_conflict": analysis.boot_profile_conflict,
         "capture_duration_s": analysis.capture_duration_s,
+        "sustained_physical_silence": sustained_physical_silence(analysis),
+        "recommended_next_step": recommended_next_step(analysis),
         "health_modes": dict(sorted(modes.items())),
         "max_edges_total": analysis.max_edges_total,
         "max_bytes_total": analysis.max_bytes_total,
@@ -313,6 +355,7 @@ def summary_dict(analysis: DiscoveryAnalysis) -> dict:
 def _print_human(analysis: DiscoveryAnalysis) -> None:
     summary = summary_dict(analysis)
     print(f"conclusion={summary['conclusion']}")
+    print(f"next_step={summary['recommended_next_step']}")
     print(
         "capture "
         f"boot_profile={summary['declared_boot_profile'] or 'UNKNOWN'} "

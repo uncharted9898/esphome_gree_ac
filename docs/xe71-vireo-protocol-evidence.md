@@ -179,6 +179,58 @@ Possible top-level conclusions are intentionally descriptive:
 A capture containing the historical GKH/XK76 TX path is explicitly marked
 non-passive so it cannot be mixed into genuine XE71/XE72 evidence by accident.
 
+## Vireo R32 indoor-board topology
+
+For the target VIR12HP230V1R32AH family, the official parts material identifies
+main board 300002064385. The Vireo R32 PCB print labels the board family
+GRJ869-A V1 and shows a dedicated COM-MANUAL connector beside DOOR-C(DRY-C),
+T-SENSOR and the display-side headers. In the board legend, COM-MANUAL is the
+wired-controller interface.
+
+The Vireo R32 wiring diagram places the optional AP3 wired controller and AP6
+gas sensor on the COM-MANUAL path. This matches the field photo history: the
+red four-position factory COM-MANUAL pigtail has an existing factory branch and
+an unused parallel leg. A passive tap on that unused leg is therefore the
+preferred non-invasive location.
+
+Do not move the experiment to T-SENSOR, DISP, SWING, HEALTH/UVC or
+DOOR-C(DRY-C) merely because COM-MANUAL is quiet; those are different
+functions. A direct board-header tap is useful only as a continuity/control
+experiment to prove the factory pigtail is straight-through, not because a
+different application bus is expected there.
+
+### Board variants
+
+- VIR09/VIR12 R32 indoor units: main board 300002064385
+- VIR18/VIR24 R32 indoor units: main board 300002064384
+- PCB print family in the service manual: GRJ869-A V1
+- Gas sensor part used across the listed Vireo R32 indoor units:
+  34002406001601
+
+## October 3 sustained-silence qualification
+
+The fully passive post-cleanup capture stayed electrically inactive for more
+than one minute with manual DE LOW and RX idle HIGH. The health journal remained
+at zero UART bytes, zero valid frames, zero controller polls and, critically,
+zero GPIO7 edges.
+
+The GPIO edge observer sits below UART framing. If it sees no transition for an
+entire cold-start window, changing baud or parity on the unchanged topology
+cannot reveal a hidden stream because there is no waveform to decode.
+Accordingly, the 12-profile UART matrix is now conditional rather than the next
+automatic experiment.
+
+The next topology checks, in order of information value, are:
+
+1. powered-off continuity from the unused factory pigtail leg to the board's
+   COM-MANUAL header, confirming all four conductors are straight-through;
+2. a receive-only direct tap at the COM-MANUAL board header as a control against
+   a defective or non-parallel pigtail;
+3. passive observation with a genuine XE71/XE72 attached, which can establish
+   whether this bus is controller-initiated and otherwise silent;
+4. only if physical RX edges appear without trustworthy UART decode, run the
+   12-profile cold-start serial matrix.
+
 ## Next capture that can advance the protocol
 
 The highest-value evidence is a passive, cold-power-up capture with a genuine
@@ -243,8 +295,9 @@ without prematurely installing/reloading the UART driver. ESPHome's UART
 BUS-priority setup then installs the driver with the staged profile. Later scan
 rotations reload the already-initialized UART normally.
 
-For a real XE71/XE72 cold-start qualification, use **one breaker-off run per
-profile** and set the boot profile through the scan-overlay substitution:
+If physical RX edges exist but the UART still cannot decode a trustworthy
+frame, use **one breaker-off run per profile** and set the boot profile through
+the scan-overlay substitution:
 
 ```yaml
 substitutions:
@@ -260,7 +313,7 @@ enabled and once when that decoder is staged before UART setup. The discovery
 analyzer now retains both declarations and flags disagreement, so a capture
 cannot quietly be filed under the wrong breaker-cycle profile.
 
-Repeat for all 12 current hypotheses:
+Only after that physical-activity gate is met, repeat all 12 current hypotheses:
 `1200/2400/4800/9600/19200/38400` with `8N1` and `8E1`. Keep each
 capture from before indoor-unit power-up through at least the first minute.
 
