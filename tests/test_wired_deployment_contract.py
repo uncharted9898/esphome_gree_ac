@@ -10,6 +10,7 @@ REGISTRATION = ROOT / "components/gree_wired_rs485/controller_registration.h"
 CONTROLLER = ROOT / "components/gree_wired_rs485/wired_controller_state.h"
 PACKAGE = ROOT / "packages/gree-vireo-xiao-rs485-listen-only.yaml"
 LEGACY_OVERLAY = ROOT / "packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml"
+PASSIVE_SCAN_OVERLAY = ROOT / "packages/gree-vireo-xiao-rs485-passive-profile-scan.yaml"
 VALIDATE_SCRIPT = ROOT / "scripts_validate.sh"
 
 
@@ -104,6 +105,29 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("legacy_gkh_xk76_probe_enabled_()", text)
         self.assertIn("active_probe_ && this->legacy_gkh_xk76_probe_", text)
         self.assertIn("TX legacy GKH/XK76 registration", text)
+
+    def test_passive_profile_scan_does_not_lock_on_raw_garbage(self):
+        text = HEADER.read_text()
+        self.assertIn("PASSIVE_SCAN_PROFILE_COUNT = 12", text)
+        self.assertIn("scan_profile_valid_start_", text)
+        self.assertIn("profile_valid_frames", text)
+        self.assertIn("if (profile_valid_frames > 0)", text)
+        self.assertNotIn("if (profile_bytes >= 4)", text)
+        for profile in (
+            "1200-8N1", "1200-8E1", "2400-8N1", "2400-8E1",
+            "4800-8N1", "4800-8E1", "9600-8N1", "9600-8E1",
+            "19200-8N1", "19200-8E1", "38400-8N1", "38400-8E1",
+        ):
+            self.assertIn(profile, text)
+
+    def test_passive_profile_scan_overlay_cannot_transmit(self):
+        text = PASSIVE_SCAN_OVERLAY.read_text()
+        self.assertIn("id: gree_com_manual", text)
+        self.assertIn("passive_scan: true", text)
+        self.assertIn("active_probe: false", text)
+        self.assertIn("legacy_gkh_xk76_probe: false", text)
+        self.assertIn("silent_bootstrap_probe: false", text)
+        self.assertIn("persistent_controller: false", text)
 
     def test_legacy_probe_overlay_requires_explicit_acknowledgement(self):
         text = LEGACY_OVERLAY.read_text()

@@ -173,6 +173,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       ESP_LOGI(TAG, "Passive UART profile scan enabled; RS485 transmitter remains disabled");
       this->scan_profile_started_at_ = millis();
       this->scan_profile_byte_start_ = this->bytes_received_;
+      this->scan_profile_valid_start_ = this->valid_frames_;
       this->publish_serial_profile_();
     } else {
       this->publish_serial_profile_();
@@ -369,25 +370,34 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->passive_scan_ && !this->scan_locked_ &&
         static_cast<uint32_t>(now - this->scan_profile_started_at_) >=
             this->passive_scan_window_ms_) {
-      const uint32_t profile_bytes = this->bytes_received_ - this->scan_profile_byte_start_;
+      const uint32_t profile_bytes =
+          this->bytes_received_ - this->scan_profile_byte_start_;
+      const uint32_t profile_valid_frames =
+          this->valid_frames_ - this->scan_profile_valid_start_;
       const auto profile = this->scan_profile_(this->scan_profile_index_);
-      ESP_LOGI(TAG, "SCAN profile=%s bytes=%lu",
-               profile.name, static_cast<unsigned long>(profile_bytes));
+      ESP_LOGI(TAG, "SCAN profile=%s bytes=%lu legacy_valid=%lu",
+               profile.name, static_cast<unsigned long>(profile_bytes),
+               static_cast<unsigned long>(profile_valid_frames));
 
-      // A handful of bytes in a short passive window is enough to distinguish
-      // real UART activity from the one-byte startup artifact seen during
-      // qualification. Lock to the first profile with sustained RX so the raw
-      // debugger can capture a contiguous stream.
-      if (profile_bytes >= 4) {
+      // Raw bytes alone are not enough to select a serial profile: a wrong
+      // baud/parity can still decode several garbage characters. Auto-lock
+      // only when the legacy 7E7E/XOR parser validates a complete frame.
+      // Unknown XE71/XE72 traffic is intentionally left unlocked so every
+      // candidate decoder continues to get an observation window.
+      if (profile_valid_frames > 0) {
         this->scan_locked_ = true;
-        ESP_LOGI(TAG, "SCAN locked profile=%s after %lu received bytes",
-                 profile.name, static_cast<unsigned long>(profile_bytes));
+        ESP_LOGI(TAG,
+                 "SCAN locked legacy reference profile=%s after %lu valid frame(s)",
+                 profile.name,
+                 static_cast<unsigned long>(profile_valid_frames));
         this->publish_serial_profile_();
       } else {
-        this->scan_profile_index_ = (this->scan_profile_index_ + 1) % PASSIVE_SCAN_PROFILE_COUNT;
+        this->scan_profile_index_ =
+            (this->scan_profile_index_ + 1) % PASSIVE_SCAN_PROFILE_COUNT;
         this->apply_scan_profile_(this->scan_profile_index_);
         this->scan_profile_started_at_ = now;
         this->scan_profile_byte_start_ = this->bytes_received_;
+        this->scan_profile_valid_start_ = this->valid_frames_;
       }
     }
 
@@ -1301,27 +1311,35 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     const char *name;
   };
 
-  static constexpr size_t PASSIVE_SCAN_PROFILE_COUNT = 8;
+  static constexpr size_t PASSIVE_SCAN_PROFILE_COUNT = 12;
 
   static PassiveScanProfile scan_profile_(size_t index) {
     switch (index % PASSIVE_SCAN_PROFILE_COUNT) {
       case 0:
         return {1200, uart::UART_CONFIG_PARITY_NONE, "1200-8N1"};
       case 1:
-        return {4800, uart::UART_CONFIG_PARITY_NONE, "4800-8N1"};
+        return {1200, uart::UART_CONFIG_PARITY_EVEN, "1200-8E1"};
       case 2:
-        return {9600, uart::UART_CONFIG_PARITY_NONE, "9600-8N1"};
-      case 3:
-        return {4800, uart::UART_CONFIG_PARITY_EVEN, "4800-8E1"};
-      case 4:
-        return {9600, uart::UART_CONFIG_PARITY_EVEN, "9600-8E1"};
-      case 5:
         return {2400, uart::UART_CONFIG_PARITY_NONE, "2400-8N1"};
+      case 3:
+        return {2400, uart::UART_CONFIG_PARITY_EVEN, "2400-8E1"};
+      case 4:
+        return {4800, uart::UART_CONFIG_PARITY_NONE, "4800-8N1"};
+      case 5:
+        return {4800, uart::UART_CONFIG_PARITY_EVEN, "4800-8E1"};
       case 6:
-        return {19200, uart::UART_CONFIG_PARITY_NONE, "19200-8N1"};
+        return {9600, uart::UART_CONFIG_PARITY_NONE, "9600-8N1"};
       case 7:
-      default:
+        return {9600, uart::UART_CONFIG_PARITY_EVEN, "9600-8E1"};
+      case 8:
+        return {19200, uart::UART_CONFIG_PARITY_NONE, "19200-8N1"};
+      case 9:
+        return {19200, uart::UART_CONFIG_PARITY_EVEN, "19200-8E1"};
+      case 10:
         return {38400, uart::UART_CONFIG_PARITY_NONE, "38400-8N1"};
+      case 11:
+      default:
+        return {38400, uart::UART_CONFIG_PARITY_EVEN, "38400-8E1"};
     }
   }
 
@@ -1568,6 +1586,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t passive_scan_window_ms_{2000};
   uint32_t scan_profile_started_at_{0};
   uint32_t scan_profile_byte_start_{0};
+  uint32_t scan_profile_valid_start_{0};
   size_t scan_profile_index_{0};
   size_t startup_frame_trace_limit_{16};
   int rx_line_gpio_{-1};

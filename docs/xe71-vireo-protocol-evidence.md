@@ -173,6 +173,20 @@ Repeated multiples are normal because a UART waveform only changes level when
 adjacent bits differ. A single anomalously tiny gap is not enough to select a
 baud; correlate cadence with repeated bursts or a logic-analyzer capture.
 
+### Passive serial-profile scan overlay
+
+For receive-only serial discovery, layer
+\`packages/gree-vireo-xiao-rs485-passive-profile-scan.yaml\` on the normal
+Vireo package. It cycles 1200/2400/4800/9600/19200/38400 baud with both
+8N1 and 8E1 decode hypotheses. It cannot enable DE or any controller TX path.
+
+The scanner logs raw-byte counts for every profile but deliberately does not
+lock merely because a decoder produced several bytes. Wrong baud/parity often
+creates plausible-looking garbage. Automatic lock requires a complete
+checksum-valid legacy \`7E 7E\` frame; otherwise the scanner keeps cycling so
+unknown XE71/XE72 framing is not coerced into a legacy profile. Compare the
+per-profile byte counts with the independent GPIO edge-cadence evidence.
+
 ### Legacy experiment overlay
 
 For reproducibility, the historical GKH/XK76 bootstrap is kept in a separate

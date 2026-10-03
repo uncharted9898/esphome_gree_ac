@@ -1,0 +1,12 @@
+# Receive-only serial decoder sweep for XE71/XE72 discovery.
+#
+# Layer on top of packages/gree-vireo-xiao-rs485-listen-only.yaml.
+# This changes UART decode hypotheses only. It must never enable RS485 TX.
+gree_wired_rs485:
+  id: gree_com_manual
+  passive_scan: true
+  passive_scan_window: 5s
+  active_probe: false
+  legacy_gkh_xk76_probe: false
+  silent_bootstrap_probe: false
+  persistent_controller: false
