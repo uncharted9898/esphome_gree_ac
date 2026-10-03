@@ -16,8 +16,8 @@ legacy probe merely because the bus is quiet.
 | Family / source | Physical / framing evidence | Application-layer evidence | Status for Vireo |
 | --- | --- | --- | --- |
 | GREE Vireo R32 service material | AP3 wired controller is on \`COM-MANUAL\`; AP6 optional gas sensor also shares \`COM-MANUAL\` | No public initialization bytes in the service material reviewed | Target hardware evidence |
-| GREE XE71 owner material | CN1 is the 485 interface for the four-core indoor-unit cable; CN2/CN3 are for smart-zone control | XE71 can participate in an integrated system with up to 16 communication node addresses; no public CN1 frame dump or session bytes found | Target controller evidence |
-| GREE XE72 owner/service material | Same CN1 485 / four-core topology; same 4003800101 main harness family; multi-controller systems use node addressing and a 2-bit DIP setting on the final controller | Strong sibling-generation topology evidence, but still no public CN1 packet dump | Target sibling evidence |
+| GREE XE71 owner material | CN1 is the 485 interface for the four-core indoor-unit cable; CN2/CN3 are for smart-zone control | The separate smart-zone side supports up to 16 communication node addresses; no public CN1 frame dump or session bytes found | Target controller evidence |
+| GREE XE72 owner/service material | Same CN1 485 / four-core topology; same 4003800101 main harness family; smart-zone multi-controller wiring uses node addressing and a 2-bit DIP setting on the final controller | Target sibling topology evidence only; no public CN1 packet dump | Target sibling evidence |
 | GREE compatibility material | XE71 / MC20700970 is the supported wired controller for current Vireo; XE71 and XK19 use different harnesses when interchanged | Strong warning against assuming XK19 wire/session identity | Target compatibility evidence |
 | \`maxim-smirnov/gree-wired-proto\` XK19 capture | 1200 baud, 8N1, \`7E 7E\`, message type \`0x11\`, trailing XOR | XK19 \`FF->00 / 0x15\`, signature \`0C 30 83\`; \`00->FF / 0x0E\`; \`FF->40 / 0x16\` | Reference only |
 | \`bekmansurov/gree-hvac-protocol#8\` GKH/XK76 capture | Same broad 1200-8N1 \`7E 7E\` family | GKH/XK76 \`FF->00 / 0x22\`, signature \`09 30 83\`; accepted early at cold start; \`FF->40\` expands \`0x17 -> 0x29\` | Legacy experiment only |
@@ -52,9 +52,12 @@ recognizes the borrowed GKH/XK76 \`09 30 83 / FF->00 / 0x22\` bootstrap.
 The electrical target remains COM-MANUAL RS485, and the public XK19/GKH work
 remains useful for framing and comparison.  The unresolved boundary is the
 XE71 application-layer startup/session behavior.  XE71/XE72 documentation also
-shows that this controller generation was designed for addressed multi-node
-systems, so future captures must preserve controller address/topology state
-instead of assuming a single anonymous slave like the early XK19 notes.
+shows separate smart-zone CN2/CN3 node-address and termination settings, but
+XK19 documentation exposes the same smart-zone topology.  That topology is
+therefore capture metadata, not evidence that XE71 CN1 uses a different
+addressed/session protocol.  Future captures should still record controller
+model, CN1/CN2/CN3 usage, node-address settings and DIP state so topology can be
+ruled in or out without promoting it into CN1 semantics.
 
 Do **not** promote any of these reference facts into XE71 semantics without a
 real XE71/XE72 capture:
@@ -139,9 +142,12 @@ Capture requirements:
    different session layer rather than noise.
 4. Record which device was connected (XE71 or XE72), indoor model, and whether
    the local IR/display remains active.
-5. For labelled changes, alter only one field per run: power, setpoint, mode,
+5. Record controller-side topology metadata before the run: exact XE71/XE72
+   model, which communication connector is used, smart-zone node address if
+   configured, and DIP-switch state. These are controls, not assumed CN1 fields.
+6. For labelled changes, alter only one field per run: power, setpoint, mode,
    fan, then vane.
-6. Run the resulting text/CSV through \`analyze_gree_wired_trace.py\` before
+7. Run the resulting text/CSV through \`analyze_gree_wired_trace.py\` before
    assigning semantics.
 
 If no XE71/XE72 is attached, a silent COM-MANUAL bus is now a valid field
