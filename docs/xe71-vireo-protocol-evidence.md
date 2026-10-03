@@ -120,7 +120,7 @@ python3 tools/analyze_gree_wired_trace.py saleae-async-serial.csv --json
 
 A new XE71 capture that produces an unknown route/body length is intentionally
 reported as \`unknown\`; the analyzer must not coerce it into the nearest
-legacy layout. ESPHome\'s own transmitted legacy-probe frames remain visible as
+legacy layout. ESPHome's own transmitted legacy-probe frames remain visible as
 \`direction=tx\` for auditability but can be excluded with \`--exclude-tx\`;
 they must never be mistaken for received target evidence.
 
