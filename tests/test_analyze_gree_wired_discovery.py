@@ -21,6 +21,23 @@ class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
         self.assertEqual(analysis.max_bytes_total, 0)
         self.assertEqual(discovery.profile_summary(analysis)[0]["profile"], "1200-8N1")
 
+    def test_extended_zero_activity_journal_remains_electrically_silent(self):
+        lines = []
+        for second in range(0, 601, 10):
+            minute, sec = divmod(second, 60)
+            lines.append(
+                f"[02:{25 + minute:02d}:{sec:02d}.000][I][gree_wired_rs485]: "
+                "HEALTH mode=PASSIVE dir=MANUAL profile=1200-8N1 "
+                "bytes=0 uart_window=0 valid=0 rx_edges_window=0 "
+                "rx_edges_total=0 edge_cadence_samples=0 "
+                "edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0"
+            )
+        analysis = discovery.analyze_log("\n".join(lines))
+        self.assertGreater(len(analysis.health), 10)
+        self.assertEqual(discovery.conclusion(analysis), "electrically_silent")
+        self.assertEqual(discovery.summary_dict(analysis)["max_edges_total"], 0)
+        self.assertEqual(discovery.summary_dict(analysis)["max_bytes_total"], 0)
+
     def test_profile_bytes_are_not_promoted_without_valid_legacy_frame(self):
         text = """
 [I][gree_wired_rs485]: SCAN profile=9600-8N1 bytes=17 legacy_valid=0
