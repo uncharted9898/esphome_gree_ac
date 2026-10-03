@@ -149,16 +149,21 @@ The first deployment target is the Seeed XIAO ESP32-C3 RS485 expansion board
 and ships listen-only. See
 [`docs/gree-com-manual-rs485.md`](docs/gree-com-manual-rs485.md) and
 [`examples/gree-vireo-xiao-rs485-listen-only.yaml`](examples/gree-vireo-xiao-rs485-listen-only.yaml).
-It uses the previously recovered 1200-baud wired-controller framing without
-pretending that unverified R32/Vireo payload bytes already have climate meanings.
+The parser retains the previously recovered 1200-baud XK19/GKH framing as a
+legacy comparison profile, but the normal Vireo deployment is receive-only and
+does not assume XE71 uses that application-layer profile. A passive profile
+scanner and raw GPIO edge-cadence diagnostics are available for XE71/Vireo
+discovery without enabling controller traffic.
 
 On the current R32 Vireo target, connecting the Seeed RS485 data pair causes
 several transient `FE` indications at cold start in either A/B orientation;
 disconnecting the data pair prevents them. The working harness map under test is
 pin 1 = +12 V, pin 2 = GND, pin 3 = A, pin 4 = B, with 120-ohm termination OFF
-and the Seeed 5 V selector at IN. Before further cold-start qualification, hold
-D2/GPIO4 (DE + /RE) LOW through reset with a 4.7k-10k pull-down and keep the
-firmware receive-only. See
+and the Seeed 5 V selector at IN. Breaker-off qualification confirmed the
+firmware-owned GPIO4 manual-DE guard returns the transceiver to receive after
+each deliberate legacy test; no additional external DE-bias requirement is part
+of the current deployment contract. The normal package remains receive-only.
+See
 [`docs/gree-com-manual-rs485.md`](docs/gree-com-manual-rs485.md).
 
 ## Livo fan profile, telemetry discovery, and local API
