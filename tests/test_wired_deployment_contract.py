@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import stat
 import unittest
 
 
@@ -9,9 +10,17 @@ REGISTRATION = ROOT / "components/gree_wired_rs485/controller_registration.h"
 CONTROLLER = ROOT / "components/gree_wired_rs485/wired_controller_state.h"
 PACKAGE = ROOT / "packages/gree-vireo-xiao-rs485-listen-only.yaml"
 LEGACY_OVERLAY = ROOT / "packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml"
+VALIDATE_SCRIPT = ROOT / "scripts_validate.sh"
 
 
 class WiredDeploymentContractTests(unittest.TestCase):
+    def test_validation_entrypoint_remains_executable(self):
+        mode = VALIDATE_SCRIPT.stat().st_mode
+        self.assertTrue(
+            mode & stat.S_IXUSR,
+            "scripts_validate.sh must retain its executable bit for GitHub Actions",
+        )
+
     def test_active_probe_emulates_controller_registration(self):
         text = HEADER.read_text()
         registration = REGISTRATION.read_text()
