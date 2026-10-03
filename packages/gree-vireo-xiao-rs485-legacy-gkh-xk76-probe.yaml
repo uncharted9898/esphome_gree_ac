@@ -1,0 +1,14 @@
+# Historical GKH/XK76 registration experiment.
+#
+# Layer this on top of packages/gree-vireo-xiao-rs485-listen-only.yaml only
+# when intentionally reproducing the public GKH/XK76 09 30 83 / FF->00 / 0x22
+# experiment. October 2026 Vireo field qualification produced no target
+# response to this profile. This is not an XE71/Vireo protocol claim.
+gree_wired_rs485:
+  id: gree_com_manual
+  active_probe: true
+  legacy_gkh_xk76_probe: true
+  registration_attempts: 4
+  silent_bootstrap_probe: true
+  silent_bootstrap_delay: 5s
+  persistent_controller: false

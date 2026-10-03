@@ -1,0 +1,273 @@
+substitutions:
+  device_name: gree-vireo-wired-monitor
+  friendly_name: Gree Vireo Wired Monitor
+  wifi_ssid: ""
+  wifi_password: ""
+  ota_password: ""
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: seeed_xiao_esp32c3
+  framework:
+    type: esp-idf
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  baud_rate: 115200
+  level: DEBUG
+  logs:
+    gree_wired_rs485: INFO
+    uart: WARN
+    uart_debug: DEBUG
+
+wifi:
+  ssid: "${wifi_ssid}"
+  password: "${wifi_password}"
+  power_save_mode: none
+
+api:
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+  log: false
+  ota: false
+  include_internal: false
+
+ota:
+  - platform: esphome
+    password: "${ota_password}"
+
+# Seeed XIAO ESP32-C3 + RS485 expansion board
+#
+# D4 / GPIO6 = UART TX
+# D5 / GPIO7 = UART RX
+# D2 / GPIO4 = DE + /RE direction control
+#
+# Field-qualified target Vireo COM-MANUAL:
+#   pin 1 -> Seeed dedicated +12 V input
+#   pin 2 -> Seeed GND
+#   pin 3 -> Seeed A
+#   pin 4 -> Seeed B
+#   120R termination -> OFF
+#   5V selector -> IN
+#
+# R32 qualification note:
+# The indoor display flashes FE three to four times during a cold start whenever
+# the Seeed A/B pair is connected, regardless of which way A/B is oriented.
+# With A/B disconnected the startup FE flash is absent. Do not use FE as an A/B
+# polarity test.
+#
+# Deterministic manual RS485 direction:
+# GPIO4 drives the Seeed board's tied DE + /RE input directly. LOW is receive,
+# HIGH is transmit. The component owns GPIO4 explicitly so the receiver remains
+# enabled whenever no frame is actually being written.
+#
+uart:
+  id: gree_com_manual_uart
+  tx_pin: GPIO6
+  rx_pin: GPIO7
+  baud_rate: 1200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  rx_buffer_size: 512
+
+  # Raw RX capture sits underneath the frame parser. This is deliberately left
+  # enabled during protocol qualification so electrically received bytes remain
+  # visible even when they do not match the recovered legacy framing.
+  debug:
+    direction: RX
+    dummy_receiver: false
+    debug_prefix: "[COM-MANUAL] "
+    after:
+      timeout: 50ms
+      bytes: 128
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ' ', debug_prefix);
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/uncharted9898/esphome_gree_ac
+      ref: codex/add-compatibility-and-protocol-discovery-mode
+    refresh: 0s
+    components:
+      - gree_wired_rs485
+
+gree_wired_rs485:
+  id: gree_com_manual
+  uart_id: gree_com_manual_uart
+  frame_timeout: 75ms
+  bus_idle_timeout: 10s
+  log_frames: true
+  passive_scan: false
+  # October 2 Vireo qualification proved the borrowed GKH/XK76 bootstrap gets
+  # no post-release UART byte or GPIO edge from this target. Keep the normal
+  # deployment package genuinely receive-only until an XE71-specific session
+  # transaction is recovered.
+  active_probe: false
+  legacy_gkh_xk76_probe: false
+  active_probe_interval: 1200ms
+  registration_attempts: 4
+  silent_bootstrap_probe: false
+  silent_bootstrap_delay: 5s
+  hardware_half_duplex: false
+  # The Seeed TP8485E board ties DE and /RE together. With DE high the receiver
+  # output is high-impedance and the board's optional RX pull-up is not fitted,
+  # so keep the ESP32 UART input weakly idle-high during our TX interval.
+  rx_idle_pullup: true
+  # Runtime controller replies belong to the legacy GKH/XK76 codec and stay
+  # disabled in normal XE71/Vireo discovery. A future XE71 runtime path must be
+  # backed by XE71-specific capture evidence rather than legacy status expansion.
+  persistent_controller: false
+  rx_line_gpio: 7
+  direction_gpio: 4
+
+  bytes_received:
+    name: ${friendly_name} Bytes Received
+    entity_category: diagnostic
+  valid_frames:
+    name: ${friendly_name} Valid Frames
+    entity_category: diagnostic
+  checksum_failures:
+    name: ${friendly_name} XOR Failures
+    entity_category: diagnostic
+  frame_timeouts:
+    name: ${friendly_name} Partial Frame Timeouts
+    entity_category: diagnostic
+  invalid_lengths:
+    name: ${friendly_name} Invalid Lengths
+    entity_category: diagnostic
+  unexpected_type_frames:
+    name: ${friendly_name} Unexpected Type Frames
+    entity_category: diagnostic
+  reference_layout_frames:
+    name: ${friendly_name} Reference Layout Frames
+    entity_category: diagnostic
+  route_variant_frames:
+    name: ${friendly_name} Known Route Variants
+    entity_category: diagnostic
+  unknown_route_frames:
+    name: ${friendly_name} Unknown Route Frames
+    entity_category: diagnostic
+  route_00_ff_frames:
+    name: ${friendly_name} 00 to FF Frames
+    entity_category: diagnostic
+  route_ff_00_frames:
+    name: ${friendly_name} FF to 00 Frames
+    entity_category: diagnostic
+  route_ff_40_frames:
+    name: ${friendly_name} FF to 40 Frames
+    entity_category: diagnostic
+  # Historical code calls bytes 2/3 source/destination. No-controller captures
+  # prove that interpretation is not yet safe, so expose them as structural
+  # route bytes while retaining the YAML keys for compatibility.
+  last_source:
+    name: ${friendly_name} Route Byte 2
+    entity_category: diagnostic
+  last_destination:
+    name: ${friendly_name} Route Byte 3
+    entity_category: diagnostic
+  last_body_length:
+    name: ${friendly_name} Last Body Length
+    entity_category: diagnostic
+  rx_transitions:
+    name: ${friendly_name} RX Level Transitions
+    entity_category: diagnostic
+  rx_high_percent:
+    name: ${friendly_name} RX High Percent
+    entity_category: diagnostic
+  controller_polls_seen:
+    name: ${friendly_name} Legacy 00-FF Polls Seen
+    entity_category: diagnostic
+  controller_responses_sent:
+    name: ${friendly_name} Legacy Controller Responses Sent
+    entity_category: diagnostic
+  registered_status_frames:
+    name: ${friendly_name} Legacy Registered Status Frames
+    entity_category: diagnostic
+  registered_setpoint_candidate:
+    name: ${friendly_name} Legacy Registered Setpoint Candidate
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  last_frame:
+    name: ${friendly_name} Last Frame
+    entity_category: diagnostic
+  last_payload:
+    name: ${friendly_name} Last Payload
+    entity_category: diagnostic
+  last_route:
+    name: ${friendly_name} Last Route
+    entity_category: diagnostic
+  last_frame_class:
+    name: ${friendly_name} Last Frame Class
+    entity_category: diagnostic
+  last_changes:
+    name: ${friendly_name} Last Payload Changes
+    entity_category: diagnostic
+  last_invalid_frame:
+    name: ${friendly_name} Last Invalid Frame
+    entity_category: diagnostic
+    disabled_by_default: true
+  protocol:
+    name: ${friendly_name} Protocol
+    entity_category: diagnostic
+  serial_profile:
+    name: ${friendly_name} Serial Profile
+    entity_category: diagnostic
+  last_raw_rx:
+    name: ${friendly_name} Last Raw RX Burst
+    entity_category: diagnostic
+  ff40_appendix:
+    name: ${friendly_name} Legacy FF40 Registered Appendix
+    entity_category: diagnostic
+  controller_state:
+    name: ${friendly_name} Legacy Controller State Codec
+    entity_category: diagnostic
+  ff40_payload:
+    name: ${friendly_name} FF40 Status Payload
+    entity_category: diagnostic
+  ff40_changes:
+    name: ${friendly_name} FF40 Status Changes
+    entity_category: diagnostic
+  last_frame_role:
+    name: ${friendly_name} Last Frame Role
+    entity_category: diagnostic
+  poll_payload:
+    name: ${friendly_name} Legacy 00-FF Poll Payload
+    entity_category: diagnostic
+  poll_changes:
+    name: ${friendly_name} Legacy 00-FF Poll Changes
+    entity_category: diagnostic
+  ff40_indexed:
+    name: ${friendly_name} FF40 Indexed Payload
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  bus_active:
+    name: ${friendly_name} COM-MANUAL Bus Active
+    entity_category: diagnostic
+  listen_only:
+    name: ${friendly_name} Listen Only
+    entity_category: diagnostic
+  rx_line_high:
+    name: ${friendly_name} RS485 RX Line High
+    entity_category: diagnostic
+  direction_high:
+    name: ${friendly_name} RS485 DE High
+    entity_category: diagnostic
+  electrical_activity:
+    name: ${friendly_name} RS485 Electrical Activity
+    entity_category: diagnostic
+  direction_high_seen:
+    name: ${friendly_name} RS485 DE High Seen
+    entity_category: diagnostic
+  registered_status:
+    name: ${friendly_name} Legacy Registered FF40 Layout
+    entity_category: diagnostic

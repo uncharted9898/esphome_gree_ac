@@ -1,1 +1,7 @@
 components/sinclair_ac/.vscode/
+__pycache__/
+*.py[cod]
+.esphome/
+.pioenvs/
+.piolibdeps/
+examples/secrets.yaml
