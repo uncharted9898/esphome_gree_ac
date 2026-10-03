@@ -127,6 +127,40 @@ legacy layout. ESPHome's own transmitted legacy-probe frames remain visible as
 \`direction=tx\` for auditability but can be excluded with \`--exclude-tx\`;
 they must never be mistaken for received target evidence.
 
+## Passive discovery log summarizer
+
+`tools/analyze_gree_wired_discovery.py` summarizes the ESPHome evidence
+surface produced by the passive scanner and GPIO edge monitor.  It deliberately
+keeps three different evidence classes separate:
+
+- physical GPIO edge activity;
+- UART bytes decoded under each candidate serial profile;
+- checksum-valid legacy `7E 7E` frames.
+
+This matters because a wrong baud or parity can still decode plausible bytes.
+The tool will report a profile's byte count, but it will not call that profile
+valid unless the legacy parser actually produced a complete checksum-valid
+reference frame.  Likewise, raw edge cadence is emitted only as a timing hint,
+not as protocol identification.
+
+Examples:
+
+```bash
+python3 tools/analyze_gree_wired_discovery.py xe71-passive.log
+python3 tools/analyze_gree_wired_discovery.py xe71-passive.log --json
+```
+
+Possible top-level conclusions are intentionally descriptive:
+
+- `electrically_silent`
+- `edge_activity_without_uart_decode`
+- `uart_decode_candidates_without_legacy_validation`
+- `legacy_frame_evidence_present`
+- `capture_contains_tx_evidence`
+
+A capture containing the historical GKH/XK76 TX path is explicitly marked
+non-passive so it cannot be mixed into genuine XE71/XE72 evidence by accident.
+
 ## Next capture that can advance the protocol
 
 The highest-value evidence is a passive, cold-power-up capture with a genuine
