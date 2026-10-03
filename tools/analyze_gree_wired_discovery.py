@@ -24,6 +24,12 @@ SCAN_RE = re.compile(
 HEALTH_RE = re.compile(r"\bHEALTH\s+(?P<body>.+)$")
 KV_RE = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>\S+)")
 TX_RE = re.compile(r"\bTX\s+(?:legacy\s+GKH/XK76|controller registration)")
+BOOT_PROFILE_RE = re.compile(
+    r"Passive UART profile scan enabled;.*\bboot_profile=(?P<profile>\S+)"
+)
+BOOT_STAGED_RE = re.compile(
+    r"SCAN listening profile=(?P<profile>\S+) phase=boot-staged"
+)
 CLOCK_RE = re.compile(
     r"\[(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})\.(?P<f>\d{1,6})\]"
 )
@@ -57,6 +63,13 @@ class HealthObservation:
 
 
 @dataclass(frozen=True)
+class BootProfileObservation:
+    profile: str
+    source_line: int
+    source: str
+
+
+@dataclass(frozen=True)
 class CadenceHint:
     baud: int
     bit_period_us: float
@@ -69,6 +82,7 @@ class DiscoveryAnalysis:
     profiles: list[ProfileObservation]
     health: list[HealthObservation]
     transmit_lines: list[int]
+    boot_profiles: list[BootProfileObservation]
 
     @property
     def max_edges_total(self) -> int:
@@ -85,6 +99,26 @@ class DiscoveryAnalysis:
     @property
     def profile_bytes_total(self) -> int:
         return sum(item.byte_count for item in self.profiles)
+
+    @property
+    def capture_duration_s(self) -> Optional[float]:
+        timestamps = [
+            item.timestamp_s for item in self.health if item.timestamp_s is not None
+        ]
+        if len(timestamps) < 2:
+            return None
+        return max(timestamps) - min(timestamps)
+
+    @property
+    def declared_boot_profile(self) -> Optional[str]:
+        values = {item.profile for item in self.boot_profiles}
+        if len(values) == 1:
+            return next(iter(values))
+        return None
+
+    @property
+    def boot_profile_conflict(self) -> bool:
+        return len({item.profile for item in self.boot_profiles}) > 1
 
     @property
     def min_edge_gap_us(self) -> int:
@@ -121,8 +155,29 @@ def analyze_log(text: str) -> DiscoveryAnalysis:
     profiles: list[ProfileObservation] = []
     health: list[HealthObservation] = []
     transmit_lines: list[int] = []
+    boot_profiles: list[BootProfileObservation] = []
 
     for line_number, line in enumerate(text.splitlines(), start=1):
+        boot = BOOT_PROFILE_RE.search(line)
+        if boot:
+            boot_profiles.append(
+                BootProfileObservation(
+                    profile=boot.group("profile"),
+                    source_line=line_number,
+                    source="scan-enabled",
+                )
+            )
+
+        staged = BOOT_STAGED_RE.search(line)
+        if staged:
+            boot_profiles.append(
+                BootProfileObservation(
+                    profile=staged.group("profile"),
+                    source_line=line_number,
+                    source="boot-staged",
+                )
+            )
+
         scan = SCAN_RE.search(line)
         if scan:
             profiles.append(
@@ -165,6 +220,7 @@ def analyze_log(text: str) -> DiscoveryAnalysis:
         profiles=profiles,
         health=health,
         transmit_lines=transmit_lines,
+        boot_profiles=boot_profiles,
     )
 
 
@@ -239,6 +295,10 @@ def summary_dict(analysis: DiscoveryAnalysis) -> dict:
     return {
         "conclusion": conclusion(analysis),
         "transmit_lines": analysis.transmit_lines,
+        "boot_profiles": [asdict(item) for item in analysis.boot_profiles],
+        "declared_boot_profile": analysis.declared_boot_profile,
+        "boot_profile_conflict": analysis.boot_profile_conflict,
+        "capture_duration_s": analysis.capture_duration_s,
         "health_modes": dict(sorted(modes.items())),
         "max_edges_total": analysis.max_edges_total,
         "max_bytes_total": analysis.max_bytes_total,
@@ -253,6 +313,12 @@ def summary_dict(analysis: DiscoveryAnalysis) -> dict:
 def _print_human(analysis: DiscoveryAnalysis) -> None:
     summary = summary_dict(analysis)
     print(f"conclusion={summary['conclusion']}")
+    print(
+        "capture "
+        f"boot_profile={summary['declared_boot_profile'] or 'UNKNOWN'} "
+        f"boot_profile_conflict={summary['boot_profile_conflict']} "
+        f"duration_s={summary['capture_duration_s'] if summary['capture_duration_s'] is not None else '-'}"
+    )
     print(
         "evidence "
         f"max_edges_total={summary['max_edges_total']} "

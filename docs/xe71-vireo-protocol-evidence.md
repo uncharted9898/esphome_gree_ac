@@ -18,7 +18,7 @@ legacy probe merely because the bus is quiet.
 | GREE Vireo R32 service material | AP3 wired controller is on \`COM-MANUAL\`; AP6 optional gas sensor also shares \`COM-MANUAL\` | No public initialization bytes in the service material reviewed | Target hardware evidence |
 | GREE XE71 owner material | CN1 is the 485 interface for the four-core indoor-unit cable; CN2/CN3 are for smart-zone control | The separate smart-zone side supports up to 16 communication node addresses; no public CN1 frame dump or session bytes found | Target controller evidence |
 | GREE XE72 owner/service material | Same CN1 485 / four-core topology; same 4003800101 main harness family; smart-zone multi-controller wiring uses node addressing and a 2-bit DIP setting on the final controller | Target sibling topology evidence only; no public CN1 packet dump | Target sibling evidence |
-| GREE compatibility material | XE71 / MC20700970 is the supported wired controller for current Vireo; XE71 and XK19 use different harnesses when interchanged | Strong warning against assuming XK19 wire/session identity | Target compatibility evidence |
+| GREE compatibility material | XE71 / MC20700970 is the supported wired controller for current Vireo; XK41 is explicitly obsolete/replaced by XE71 and uses the same 4003800101 four-core harness; XE71 can replace XK19 only when the interconnecting cable is also replaced | XK41 is the closest documented hardware lineage, but no public XK41 packet capture was found; XK19 wire/session identity must not be assumed | Target compatibility evidence |
 | \`maxim-smirnov/gree-wired-proto\` XK19 capture | 1200 baud, 8N1, \`7E 7E\`, message type \`0x11\`, trailing XOR | XK19 \`FF->00 / 0x15\`, signature \`0C 30 83\`; \`00->FF / 0x0E\`; \`FF->40 / 0x16\` | Reference only |
 | \`bekmansurov/gree-hvac-protocol#8\` GKH/XK76 capture | Same broad 1200-8N1 \`7E 7E\` family | GKH/XK76 \`FF->00 / 0x22\`, signature \`09 30 83\`; accepted early at cold start; \`FF->40\` expands \`0x17 -> 0x29\` | Legacy experiment only |
 | October 2026 Vireo field qualification | XIAO GPIO6 TX / GPIO7 RX / GPIO4 DE, 1200-8N1; weak TTL RX pull-up removes floating receiver artifacts | Four exact GKH/XK76 registration attempts produced zero post-release bytes and zero post-release edges | Negative target evidence |
@@ -46,6 +46,24 @@ The final qualification run produced, on every one of four attempts:
 The health journal remained at zero UART bytes and zero GPIO edges after the
 experiment.  Therefore there is no remaining evidence that the Vireo R32
 recognizes the borrowed GKH/XK76 \`09 30 83 / FF->00 / 0x22\` bootstrap.
+
+## XK41 lineage finding
+
+The strongest public controller-lineage evidence found in this pass is XK41,
+not XK19. GREE's compatibility material marks XK41 as obsolete and replaced by
+XE71, and both list the same 4003800101 four-core harness. The XK41 owner
+material also describes a four-pin indoor-PCB controller connection and
+shielded twisted-pair communication wiring.
+
+That makes XK41 a high-value protocol-research ancestor for XE71-44/G, but it
+does **not** provide application bytes by itself. No public XK41 frame dump,
+baud declaration or session transcript was found in the material reviewed.
+Accordingly, this repository records the lineage but does not add an XK41
+decoder or transmitter profile without a real capture.
+
+The same compatibility guide says XE71 may replace an installed XK19 only when
+the interconnecting cable is replaced. That is useful negative evidence against
+treating the existing XK19 packet capture as an XE71 wire/session oracle.
 
 ## Current conclusion
 
@@ -226,17 +244,38 @@ BUS-priority setup then installs the driver with the staged profile. Later scan
 rotations reload the already-initialized UART normally.
 
 For a real XE71/XE72 cold-start qualification, use **one breaker-off run per
-profile** and set the boot profile explicitly:
+profile** and set the boot profile through the scan-overlay substitution:
 
 ```yaml
-gree_wired_rs485:
-  passive_scan: true
-  passive_scan_start_profile: 9600-8E1
+substitutions:
+  gree_wired_scan_start_profile: "9600-8E1"
+
+packages:
+  base: !include packages/gree-vireo-xiao-rs485-listen-only.yaml
+  scan: !include packages/gree-vireo-xiao-rs485-passive-profile-scan.yaml
 ```
+
+The firmware logs the selected boot profile twice—once when passive scanning is
+enabled and once when that decoder is staged before UART setup. The discovery
+analyzer now retains both declarations and flags disagreement, so a capture
+cannot quietly be filed under the wrong breaker-cycle profile.
 
 Repeat for all 12 current hypotheses:
 `1200/2400/4800/9600/19200/38400` with `8N1` and `8E1`. Keep each
 capture from before indoor-unit power-up through at least the first minute.
+
+After the runs, compare the complete set at once:
+
+```bash
+python3 tools/analyze_gree_wired_matrix.py captures/*.log
+python3 tools/analyze_gree_wired_matrix.py captures/*.log --json
+```
+
+The matrix tool requires one self-declared boot profile per capture, reports
+missing and duplicate hypotheses, flags any capture containing legacy TX
+evidence, records observation duration, and keeps edge/UART/legacy-valid
+evidence separate. A complete passive matrix means the acquisition procedure
+was covered correctly; it does **not** by itself identify XE71 protocol.
 The scanner may continue rotating after its initial window, but only the
 selected boot profile can be treated as having observed the complete startup
 interval.
@@ -270,6 +309,8 @@ XE71 discovery method and it does not enable persistent runtime control.
   https://www.greecomfort.com/assets/documents/controllers/xe71-wired-controller/xe71-owner-s-manual.pdf
 - GREE system documentation / controller compatibility:
   https://www.greecomfort.com/system-documentation/
+- GREE XK41 owner manual (documented predecessor/replacement lineage):
+  https://www.greecomfort.com/assets/documents/controllers/xk41-wired-controller/xk41-owner-s-manual.pdf
 - GREE Vireo R32 service manual:
   https://www.greecomfort.com/assets/our-products/vireo-r32/documents/vireo-r32-service-manual-a.pdf
 - XK19 reverse-engineering reference:

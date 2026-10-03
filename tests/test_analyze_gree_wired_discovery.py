@@ -17,6 +17,30 @@ class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
         unrelated = discovery.analyze_log("INFO WiFi connected\nINFO API ready\n")
         self.assertEqual(discovery.conclusion(unrelated), "insufficient_evidence")
 
+    def test_boot_profile_and_capture_duration_are_retained(self):
+        text = """
+[02:25:00.000][I][gree_wired_rs485]: Passive UART profile scan enabled; RS485 transmitter remains disabled; boot_profile=9600-8E1
+[02:25:00.001][I][gree_wired_rs485]: SCAN listening profile=9600-8E1 phase=boot-staged
+[02:25:01.000][I][gree_wired_rs485]: HEALTH mode=PASSIVE profile=9600-8E1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0
+[02:26:06.500][I][gree_wired_rs485]: HEALTH mode=PASSIVE profile=1200-8N1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0
+"""
+        analysis = discovery.analyze_log(text)
+        self.assertEqual(analysis.declared_boot_profile, "9600-8E1")
+        self.assertFalse(analysis.boot_profile_conflict)
+        self.assertAlmostEqual(analysis.capture_duration_s, 65.5)
+        summary = discovery.summary_dict(analysis)
+        self.assertEqual(summary["declared_boot_profile"], "9600-8E1")
+        self.assertEqual(len(summary["boot_profiles"]), 2)
+
+    def test_conflicting_boot_profile_evidence_is_flagged(self):
+        text = """
+[I][gree_wired_rs485]: Passive UART profile scan enabled; RS485 transmitter remains disabled; boot_profile=9600-8E1
+[I][gree_wired_rs485]: SCAN listening profile=1200-8N1 phase=boot-staged
+"""
+        analysis = discovery.analyze_log(text)
+        self.assertIsNone(analysis.declared_boot_profile)
+        self.assertTrue(analysis.boot_profile_conflict)
+
     def test_clean_vireo_capture_is_reported_as_electrically_silent(self):
         text = """
 [02:25:48.608][I][gree_wired_rs485:424]: HEALTH mode=PASSIVE dir=MANUAL profile=1200-8N1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0

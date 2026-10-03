@@ -1,3 +1,10 @@
+substitutions:
+  # Override these in the device YAML for each breaker-off qualification run.
+  # Keep the profile quoted because values such as 9600-8E1 are identifiers,
+  # not arithmetic expressions.
+  gree_wired_scan_start_profile: "1200-8N1"
+  gree_wired_scan_window: "5s"
+
 # Receive-only serial decoder sweep for XE71/XE72 discovery.
 #
 # Layer on top of packages/gree-vireo-xiao-rs485-listen-only.yaml.
@@ -7,8 +14,8 @@ gree_wired_rs485:
   passive_scan: true
   # For cold-start qualification, override this per breaker-off run so the
   # desired decoder is active before the first target byte can arrive.
-  passive_scan_start_profile: 1200-8N1
-  passive_scan_window: 5s
+  passive_scan_start_profile: ${gree_wired_scan_start_profile}
+  passive_scan_window: ${gree_wired_scan_window}
   active_probe: false
   legacy_gkh_xk76_probe: false
   silent_bootstrap_probe: false

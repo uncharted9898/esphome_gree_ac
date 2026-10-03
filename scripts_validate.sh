@@ -45,7 +45,8 @@ python3 -m py_compile \
   tools/firmware_research/audit_rtl8720cf_handshake.py \
   tools/gree_oem_frame_generator.py \
   tools/analyze_gree_wired_trace.py \
-  tools/analyze_gree_wired_discovery.py
+  tools/analyze_gree_wired_discovery.py \
+  tools/analyze_gree_wired_matrix.py
 
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 
@@ -143,12 +144,11 @@ wrappers = {
         '  legacy: !include ../packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml\n'
     ),
     '.validation-gree-vireo-passive-profile-9600-8e1.yaml': (
+        'substitutions:\n'
+        '  gree_wired_scan_start_profile: "9600-8E1"\n'
         'packages:\n'
         f'  base: !include {vireo_base}\n'
         '  scan: !include ../packages/gree-vireo-xiao-rs485-passive-profile-scan.yaml\n'
-        'gree_wired_rs485:\n'
-        '  id: gree_com_manual\n'
-        '  passive_scan_start_profile: 9600-8E1\n'
     ),
     '.validation-gree-vireo-invalid-active-without-legacy.yaml': (
         'packages:\n'
