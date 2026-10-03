@@ -103,6 +103,7 @@ gree_wired_rs485:
   log_frames: true
   passive_scan: false
   active_probe: false
+  legacy_gkh_xk76_probe: false
   active_probe_interval: 1200ms
   registration_attempts: 4
   silent_bootstrap_probe: false

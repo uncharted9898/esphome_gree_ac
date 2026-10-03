@@ -13,6 +13,7 @@ CONF_LOG_FRAMES = "log_frames"
 CONF_PASSIVE_SCAN = "passive_scan"
 CONF_PASSIVE_SCAN_WINDOW = "passive_scan_window"
 CONF_ACTIVE_PROBE = "active_probe"
+CONF_LEGACY_GKH_XK76_PROBE = "legacy_gkh_xk76_probe"
 CONF_ACTIVE_PROBE_INTERVAL = "active_probe_interval"
 CONF_REGISTRATION_ATTEMPTS = "registration_attempts"
 CONF_SILENT_BOOTSTRAP_PROBE = "silent_bootstrap_probe"
@@ -94,7 +95,32 @@ percentage_schema = sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1)
 text_schema = text_sensor.text_sensor_schema(text_sensor.TextSensor)
 binary_schema = binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor)
 
-CONFIG_SCHEMA = (
+
+def _validate_probe_configuration(config):
+    active = config[CONF_ACTIVE_PROBE]
+    legacy = config[CONF_LEGACY_GKH_XK76_PROBE]
+    silent = config[CONF_SILENT_BOOTSTRAP_PROBE]
+    persistent = config[CONF_PERSISTENT_CONTROLLER]
+
+    if active and not legacy:
+        raise cv.Invalid(
+            "active_probe transmits the legacy GKH/XK76 controller-state frame; "
+            "set legacy_gkh_xk76_probe: true to acknowledge that exact profile"
+        )
+    if legacy and not active:
+        raise cv.Invalid("legacy_gkh_xk76_probe requires active_probe: true")
+    if silent and not legacy:
+        raise cv.Invalid(
+            "silent_bootstrap_probe is only defined for the legacy GKH/XK76 probe"
+        )
+    if persistent and not legacy:
+        raise cv.Invalid(
+            "persistent_controller uses the legacy GKH/XK76 controller-state codec"
+        )
+    return config
+
+
+CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(GreeWiredRS485),
@@ -122,6 +148,7 @@ CONFIG_SCHEMA = (
                 ),
             ),
             cv.Optional(CONF_ACTIVE_PROBE, default=False): cv.boolean,
+            cv.Optional(CONF_LEGACY_GKH_XK76_PROBE, default=False): cv.boolean,
             cv.Optional(CONF_ACTIVE_PROBE_INTERVAL, default="1200ms"): cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(
@@ -196,7 +223,8 @@ CONFIG_SCHEMA = (
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
-    .extend(uart.UART_DEVICE_SCHEMA)
+    .extend(uart.UART_DEVICE_SCHEMA),
+    _validate_probe_configuration,
 )
 
 FINAL_VALIDATE_SCHEMA = uart.final_validate_device_schema(
@@ -220,6 +248,7 @@ async def to_code(config):
     cg.add(var.set_passive_scan(config[CONF_PASSIVE_SCAN]))
     cg.add(var.set_passive_scan_window(config[CONF_PASSIVE_SCAN_WINDOW]))
     cg.add(var.set_active_probe(config[CONF_ACTIVE_PROBE]))
+    cg.add(var.set_legacy_gkh_xk76_probe(config[CONF_LEGACY_GKH_XK76_PROBE]))
     cg.add(var.set_active_probe_interval(config[CONF_ACTIVE_PROBE_INTERVAL]))
     cg.add(var.set_registration_attempts(config[CONF_REGISTRATION_ATTEMPTS]))
     cg.add(var.set_silent_bootstrap_probe(config[CONF_SILENT_BOOTSTRAP_PROBE]))

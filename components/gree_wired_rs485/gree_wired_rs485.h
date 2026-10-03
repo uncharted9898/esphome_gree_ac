@@ -43,6 +43,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_direction_gpio(int gpio) { this->direction_gpio_ = gpio; }
   void set_rx_idle_pullup(bool enabled) { this->rx_idle_pullup_ = enabled; }
   void set_active_probe(bool active_probe) { this->active_probe_ = active_probe; }
+  void set_legacy_gkh_xk76_probe(bool enabled) {
+    this->legacy_gkh_xk76_probe_ = enabled;
+  }
   void set_active_probe_interval(uint32_t interval_ms) { this->active_probe_interval_ms_ = interval_ms; }
   void set_registration_attempts(uint8_t attempts) { this->registration_attempt_limit_ = attempts; }
   void set_silent_bootstrap_probe(bool enabled) { this->silent_bootstrap_probe_ = enabled; }
@@ -157,9 +160,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       this->force_receive_mode_();
     }
 
-    ESP_LOGI(TAG, "Starting Gree COM-MANUAL monitor direction=%s active_probe=%s",
+    ESP_LOGI(TAG,
+             "Starting Gree COM-MANUAL monitor direction=%s active_probe=%s "
+             "legacy_gkh_xk76=%s",
              this->hardware_half_duplex_ ? "UART_RS485_HALF_DUPLEX" : "MANUAL_GPIO",
-             YESNO(this->active_probe_));
+             YESNO(this->active_probe_),
+             YESNO(this->legacy_gkh_xk76_probe_enabled_()));
     ESP_LOGI(TAG, "Protocol profile: 1200 baud 8N1, 7E 7E framing, type 0x11, XOR checksum");
     if (this->passive_scan_) {
       ESP_LOGI(TAG, "Passive UART profile scan enabled; RS485 transmitter remains disabled");
@@ -170,7 +176,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       this->publish_serial_profile_();
     }
 
-    if (this->listen_only_sensor_ != nullptr) this->listen_only_sensor_->publish_state(!this->active_probe_);
+    if (this->listen_only_sensor_ != nullptr) {
+      this->listen_only_sensor_->publish_state(!this->legacy_gkh_xk76_probe_enabled_());
+    }
     if (this->bus_active_sensor_ != nullptr) this->bus_active_sensor_->publish_state(false);
     if (this->electrical_activity_sensor_ != nullptr) this->electrical_activity_sensor_->publish_state(false);
     if (this->direction_high_seen_sensor_ != nullptr) this->direction_high_seen_sensor_->publish_state(false);
@@ -202,12 +210,17 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   void dump_config() override {
     ESP_LOGCONFIG(TAG, "Gree wired-controller RS485 monitor:");
-    ESP_LOGCONFIG(TAG, "  Mode: %s", this->active_probe_ ? "active controller registration" : "listen-only");
+    ESP_LOGCONFIG(TAG, "  Mode: %s",
+                  this->legacy_gkh_xk76_probe_enabled_()
+                      ? "legacy GKH/XK76 active registration experiment"
+                      : "listen-only");
+    ESP_LOGCONFIG(TAG, "  Legacy GKH/XK76 TX profile acknowledged: %s",
+                  YESNO(this->legacy_gkh_xk76_probe_));
     ESP_LOGCONFIG(TAG, "  Direction control: %s",
                   this->hardware_half_duplex_ ? "ESP-IDF UART_MODE_RS485_HALF_DUPLEX"
                                               : "manual GPIO");
-    if (this->active_probe_) {
-      ESP_LOGCONFIG(TAG, "  Registration interval: %lu ms",
+    if (this->legacy_gkh_xk76_probe_enabled_()) {
+      ESP_LOGCONFIG(TAG, "  Legacy registration interval: %lu ms",
                     static_cast<unsigned long>(this->active_probe_interval_ms_));
       ESP_LOGCONFIG(TAG, "  Registration attempts: %u",
                     static_cast<unsigned>(this->registration_attempt_limit_));
@@ -294,7 +307,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     const uint32_t setup_elapsed =
         static_cast<uint32_t>(after_rx - this->setup_started_at_);
     if (registration::silent_bootstrap_ready(
-            this->silent_bootstrap_probe_, this->active_probe_,
+            this->silent_bootstrap_probe_,
+            this->legacy_gkh_xk76_probe_enabled_(),
             this->registration_armed_, this->registration_established_,
             this->registration_attempts_sent_, setup_elapsed,
             this->silent_bootstrap_delay_ms_, this->bytes_received_,
@@ -314,12 +328,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                this->registration_unit_signature_[2]);
     }
 
-    if (this->active_probe_ && this->should_send_registration_(after_rx) &&
-        this->available() == 0) {
+    if (this->legacy_gkh_xk76_probe_enabled_() &&
+        this->should_send_registration_(after_rx) && this->available() == 0) {
       this->send_registration_();
     }
 
-    if (this->persistent_controller_ && this->registration_established_ &&
+    if (this->legacy_gkh_xk76_probe_enabled_() &&
+        this->persistent_controller_ && this->registration_established_ &&
         this->runtime_response_pending_ && !this->registration_waiting_for_response_ &&
         this->available() == 0) {
       this->send_runtime_controller_response_();
@@ -433,7 +448,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "tx_residue_total=%lu rx_sampled_edges_window=%lu "
                "rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
                "startup_rx=%u:%s",
-               this->active_probe_ ? "ACTIVE" : "PASSIVE",
+               this->legacy_gkh_xk76_probe_enabled_()
+                   ? "LEGACY_GKH_XK76"
+                   : "PASSIVE",
                this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
                static_cast<unsigned>(this->registration_attempts_sent_),
                static_cast<unsigned>(this->registration_attempt_limit_),
@@ -639,9 +656,15 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 #endif
   }
 
+  bool legacy_gkh_xk76_probe_enabled_() const {
+    return this->active_probe_ && this->legacy_gkh_xk76_probe_;
+  }
+
   bool should_send_registration_(uint32_t now) const {
     (void) now;
-    if (!this->active_probe_ || !this->registration_armed_) return false;
+    if (!this->legacy_gkh_xk76_probe_enabled_() || !this->registration_armed_) {
+      return false;
+    }
     if (!this->registration_unit_signature_learned_ && !this->silent_bootstrap_armed_) return false;
     if (this->registration_waiting_for_response_) return false;
     if (this->registration_established_) return false;
@@ -675,7 +698,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // packets are runtime polls, not a reason to restart the bootstrap state
     // machine. Persistent runtime responses are deliberately opt-in until the
     // target Vireo has field-proven the captured controller frame family.
-    if (this->active_probe_ && this->registration_established_) {
+    if (this->legacy_gkh_xk76_probe_enabled_() &&
+        this->registration_established_) {
       if (this->persistent_controller_) {
         this->runtime_response_pending_ = true;
         ESP_LOGD(TAG, "CTRL runtime poll queued response poll=%lu",
@@ -691,7 +715,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
             this->startup_poll_rearm_gap_ms_;
     this->last_startup_poll_at_ = now;
 
-    if (!this->active_probe_ || !new_startup_sequence) return;
+    if (!this->legacy_gkh_xk76_probe_enabled_() || !new_startup_sequence) return;
 
     this->registration_armed_ = true;
     this->registration_established_ = false;
@@ -826,8 +850,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   void send_registration_() {
-    // The packet layout was recovered from Gree wired-controller captures.
-    // Normal registration is target-gated by observed startup traffic and a
+    // This is specifically the legacy GKH/XK76 packet family recovered from
+    // public wired-controller captures. It is not an XE71/Vireo registration
+    // claim. Transmission requires the explicit legacy_gkh_xk76_probe gate.
+    // Registration is target-gated by observed startup traffic and a
     // learned FF->40 signature. A separately configured silent-bus bootstrap
     // may use the captured reference signature only after a quiet electrical
     // interval proves that no UART bytes or RX transitions are present.
@@ -851,7 +877,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       return;
     }
 
-    ESP_LOGI(TAG, "TX controller registration %u/%u counter=0x%02X direction=%s: %s",
+    ESP_LOGI(TAG,
+             "TX legacy GKH/XK76 registration %u/%u counter=0x%02X direction=%s: %s",
              static_cast<unsigned>(this->registration_attempts_sent_),
              static_cast<unsigned>(this->registration_attempt_limit_),
              frame[26],
@@ -1535,6 +1562,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
   bool log_frames_{true};
   bool active_probe_{false};
+  bool legacy_gkh_xk76_probe_{false};
   bool silent_bootstrap_probe_{false};
   bool silent_bootstrap_armed_{false};
   bool hardware_half_duplex_{false};

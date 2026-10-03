@@ -43,7 +43,8 @@ python3 -m py_compile \
   tools/firmware_research/seed_rtl8720cf_functions.py \
   tools/firmware_research/audit_rtl8720cf_protocol.py \
   tools/firmware_research/audit_rtl8720cf_handshake.py \
-  tools/gree_oem_frame_generator.py
+  tools/gree_oem_frame_generator.py \
+  tools/analyze_gree_wired_trace.py
 
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 

@@ -50,6 +50,7 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("flow_control_pin:", uart_block)
         self.assertIn("passive_scan: false", text)
         self.assertIn("active_probe: false", text)
+        self.assertIn("legacy_gkh_xk76_probe: false", text)
         self.assertIn("active_probe_interval: 1200ms", text)
         self.assertIn("registration_attempts: 4", text)
         self.assertIn("silent_bootstrap_probe: false", text)
@@ -71,9 +72,21 @@ class WiredDeploymentContractTests(unittest.TestCase):
     def test_vireo_deployment_is_receive_only_after_failed_legacy_probe(self):
         text = PACKAGE.read_text()
         self.assertIn("active_probe: false", text)
+        self.assertIn("legacy_gkh_xk76_probe: false", text)
         self.assertIn("silent_bootstrap_probe: false", text)
         self.assertIn("persistent_controller: false", text)
         self.assertIn("rx_idle_pullup: true", text)
+
+    def test_legacy_gkh_xk76_probe_is_an_explicit_second_gate(self):
+        text = HEADER.read_text()
+        config = (ROOT / "components/gree_wired_rs485/__init__.py").read_text()
+        self.assertIn('CONF_LEGACY_GKH_XK76_PROBE = "legacy_gkh_xk76_probe"', config)
+        self.assertIn("active_probe transmits the legacy GKH/XK76", config)
+        self.assertIn("legacy_gkh_xk76_probe requires active_probe: true", config)
+        self.assertIn("persistent_controller uses the legacy GKH/XK76", config)
+        self.assertIn("legacy_gkh_xk76_probe_enabled_()", text)
+        self.assertIn("active_probe_ && this->legacy_gkh_xk76_probe_", text)
+        self.assertIn("TX legacy GKH/XK76 registration", text)
 
     def test_silent_bootstrap_requires_complete_electrical_silence(self):
         text = HEADER.read_text()

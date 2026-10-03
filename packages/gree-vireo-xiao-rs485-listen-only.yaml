@@ -111,6 +111,7 @@ gree_wired_rs485:
   # deployment package genuinely receive-only until an XE71-specific session
   # transaction is recovered.
   active_probe: false
+  legacy_gkh_xk76_probe: false
   active_probe_interval: 1200ms
   registration_attempts: 4
   silent_bootstrap_probe: false
