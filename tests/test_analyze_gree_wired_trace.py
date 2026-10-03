@@ -72,6 +72,49 @@ class GreeWiredTraceAnalyzerTests(unittest.TestCase):
         )
         self.assertTrue(all(frame.xor_valid for frame in analysis.frames))
 
+    def test_session_summary_detects_indoor_first_registration_sequence(self):
+        text = (
+            GKH_PRE_STATUS
+            + "\n7E 7E 00 FF 11 0E 00 00 02 00 3C 3C 00 F6 00 00 00 00 00 14"
+            + "\n"
+            + GKH_XK76_CONTROLLER
+            + "\n"
+            + GKH_REGISTERED_STATUS
+        )
+        analysis = trace.analyze_text(text)
+        session = trace.session_summary(analysis)
+        self.assertEqual(
+            session["pattern"],
+            "legacy_indoor_first_then_controller_registration",
+        )
+        self.assertEqual(session["legacy_polls"], 1)
+        self.assertEqual(session["pre_registration_status_frames"], 1)
+        self.assertEqual(session["controller_state_frames"], 1)
+        self.assertEqual(session["expanded_status_frames"], 1)
+        self.assertEqual(session["polls_before_first_controller"], 1)
+        self.assertEqual(session["statuses_before_first_controller"], 1)
+        self.assertTrue(session["expanded_status_after_controller"])
+
+    def test_session_summary_detects_indoor_first_without_controller(self):
+        text = (
+            GKH_PRE_STATUS
+            + "\n7E 7E 00 FF 11 0E 00 00 02 00 3C 3C 00 F6 00 00 00 00 00 14"
+        )
+        session = trace.session_summary(trace.analyze_text(text))
+        self.assertEqual(
+            session["pattern"],
+            "legacy_indoor_first_no_controller_reply",
+        )
+        self.assertEqual(session["controller_state_frames"], 0)
+        self.assertFalse(session["expanded_status_after_controller"])
+
+    def test_session_summary_does_not_promote_controller_only_capture(self):
+        session = trace.session_summary(trace.analyze_text(GKH_XK76_CONTROLLER))
+        self.assertEqual(
+            session["pattern"],
+            "controller_frame_without_observed_indoor_startup",
+        )
+
     def test_esphome_log_tx_direction_and_timestamp_are_preserved(self):
         line = (
             "[02:25:43.543][I][gree_wired_rs485:854]: TX legacy: "

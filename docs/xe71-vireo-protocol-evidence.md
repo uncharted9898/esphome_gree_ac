@@ -65,6 +65,52 @@ The same compatibility guide says XE71 may replace an installed XK19 only when
 the interconnecting cable is replaced. That is useful negative evidence against
 treating the existing XK19 packet capture as an XE71 wire/session oracle.
 
+## Legacy startup direction evidence
+
+The public wired-controller captures now establish a stronger comparison
+baseline than packet shape alone:
+
+- `maxim-smirnov/gree-wired-proto` identifies the legacy XK19-family roles as
+  indoor unit `FF` and wired controller `00`, at 1200-8N1.
+- In its issue #1, an XK76 controller remains idle without an indoor unit.
+  Feeding the controller a known `FF->40` indoor-status frame clears its E6
+  state, and a subsequent `00->FF` poll causes the controller to answer with
+  its `FF->00` state frame.
+- A separate no-controller indoor-unit capture in the same issue shows startup
+  `FF->40` status broadcasts interleaved with exactly seven `00->FF` polls
+  before those polls stop.
+- The GKH/XK76 capture in `bekmansurov/gree-hvac-protocol#8` similarly shows
+  indoor status/poll traffic first; after roughly 2-3 seconds the controller
+  sends its `FF->00 / 0x22` state and the indoor `FF->40` status expands
+  from the pre-registration layout to the registered layout.
+
+Those sources describe an **indoor-unit-first** legacy session family. They do
+not prove XE71 behavior. The target Vireo R32 is materially different in the
+current field state: its receive line remained at zero physical edges for the
+entire passive cold-start observation. Therefore there is no evidence that the
+Vireo is emitting the legacy indoor-first announcement/poll sequence at all.
+
+GREE patent CN110762604B, filed in the XE71 era, documents an explicit
+indoor-unit/wired-controller pairing phase in a multi-split CAN architecture:
+after unit address allocation the indoor unit sends a pairing request to its
+wired controller. This is **conceptual evidence only** for an explicit pairing
+state machine; it is not evidence that Vireo CN1 uses CAN, the same packet
+format, or those exact startup bytes.
+
+The working hypotheses should therefore remain separate:
+
+1. XE71/Vireo CN1 has a controller-presence or pairing phase not represented by
+   the XK19/GKH packet captures.
+2. Vireo may keep CN1 electrically silent until an XE71-compatible controller
+   initiates or satisfies that phase.
+3. A genuine XE71 capture can still prove that the broader 1200-8N1/7E7E family
+   survives on this product generation, but the current silent bus does not.
+
+The trace analyzer now emits a descriptive `session.pattern` field. It can
+recognize the known legacy indoor-first ordering and status expansion without
+calling that ordering XE71 protocol. This is intended for comparing a future
+XE71 capture structurally before assigning field semantics.
+
 ## Current conclusion
 
 The electrical target remains COM-MANUAL RS485, and the public XK19/GKH work
@@ -137,6 +183,7 @@ Example:
 python3 tools/analyze_gree_wired_trace.py xe71-cold-start.txt
 python3 tools/analyze_gree_wired_trace.py xe71-cold-start.txt --exclude-tx
 python3 tools/analyze_gree_wired_trace.py saleae-async-serial.csv --json
+# JSON output includes a descriptive session.pattern comparison field.
 \`\`\`
 
 A new XE71 capture that produces an unknown route/body length is intentionally
