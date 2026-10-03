@@ -166,7 +166,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              this->hardware_half_duplex_ ? "UART_RS485_HALF_DUPLEX" : "MANUAL_GPIO",
              YESNO(this->active_probe_),
              YESNO(this->legacy_gkh_xk76_probe_enabled_()));
-    ESP_LOGI(TAG, "Protocol profile: 1200 baud 8N1, 7E 7E framing, type 0x11, XOR checksum");
+    ESP_LOGI(TAG,
+             "Legacy reference decode profile: 1200 baud 8N1, 7E 7E framing, "
+             "type 0x11, XOR checksum; XE71/Vireo application protocol is unproven");
     if (this->passive_scan_) {
       ESP_LOGI(TAG, "Passive UART profile scan enabled; RS485 transmitter remains disabled");
       this->scan_profile_started_at_ = millis();
@@ -183,7 +185,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->electrical_activity_sensor_ != nullptr) this->electrical_activity_sensor_->publish_state(false);
     if (this->direction_high_seen_sensor_ != nullptr) this->direction_high_seen_sensor_->publish_state(false);
     if (this->protocol_sensor_ != nullptr) {
-      this->protocol_sensor_->publish_state("1200-8N1; 7E7E; src,dst,11,len,body; xor=0");
+      this->protocol_sensor_->publish_state(
+          "candidate legacy wired profile: 1200-8N1; 7E7E; type11; xor=0; "
+          "XE71/Vireo unproven");
     }
     if (this->registered_status_sensor_ != nullptr) this->registered_status_sensor_->publish_state(false);
     this->publish_controller_state_();
@@ -237,6 +241,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     ESP_LOGCONFIG(TAG, "  Log valid frames: %s", YESNO(this->log_frames_));
     ESP_LOGCONFIG(TAG, "  Passive serial scan: %s", YESNO(this->passive_scan_));
     if (this->passive_scan_) {
+      ESP_LOGCONFIG(TAG,
+                    "  Passive scan profiles are decoder hypotheses only; "
+                    "they never enable RS485 TX");
       ESP_LOGCONFIG(TAG, "  Passive scan window: %lu ms",
                     static_cast<unsigned long>(this->passive_scan_window_ms_));
     }

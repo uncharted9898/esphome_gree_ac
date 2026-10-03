@@ -8,6 +8,7 @@ HEADER = ROOT / "components/gree_wired_rs485/gree_wired_rs485.h"
 REGISTRATION = ROOT / "components/gree_wired_rs485/controller_registration.h"
 CONTROLLER = ROOT / "components/gree_wired_rs485/wired_controller_state.h"
 PACKAGE = ROOT / "packages/gree-vireo-xiao-rs485-listen-only.yaml"
+LEGACY_OVERLAY = ROOT / "packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml"
 
 
 class WiredDeploymentContractTests(unittest.TestCase):
@@ -69,6 +70,13 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("#   5V selector -> IN", text)
         self.assertIn("Deterministic manual RS485 direction", text)
 
+    def test_vireo_protocol_surface_labels_legacy_profile_as_unproven(self):
+        text = HEADER.read_text()
+        self.assertIn("Legacy reference decode profile", text)
+        self.assertIn("XE71/Vireo application protocol is unproven", text)
+        self.assertIn("candidate legacy wired profile", text)
+        self.assertIn("XE71/Vireo unproven", text)
+
     def test_vireo_deployment_is_receive_only_after_failed_legacy_probe(self):
         text = PACKAGE.read_text()
         self.assertIn("active_probe: false", text)
@@ -87,6 +95,16 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("legacy_gkh_xk76_probe_enabled_()", text)
         self.assertIn("active_probe_ && this->legacy_gkh_xk76_probe_", text)
         self.assertIn("TX legacy GKH/XK76 registration", text)
+
+    def test_legacy_probe_overlay_requires_explicit_acknowledgement(self):
+        text = LEGACY_OVERLAY.read_text()
+        self.assertIn("id: gree_com_manual", text)
+        self.assertIn("active_probe: true", text)
+        self.assertIn("legacy_gkh_xk76_probe: true", text)
+        self.assertIn("silent_bootstrap_probe: true", text)
+        self.assertIn("persistent_controller: false", text)
+        self.assertIn("GKH/XK76", text)
+        self.assertIn("not an XE71/Vireo protocol claim", text)
 
     def test_silent_bootstrap_requires_complete_electrical_silence(self):
         text = HEADER.read_text()
