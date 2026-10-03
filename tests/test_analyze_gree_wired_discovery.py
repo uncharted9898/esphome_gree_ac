@@ -45,6 +45,19 @@ class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
         self.assertEqual(discovery.summary_dict(analysis)["max_edges_total"], 0)
         self.assertEqual(discovery.summary_dict(analysis)["max_bytes_total"], 0)
 
+    def test_scan_only_byte_evidence_is_not_called_silent(self):
+        text = """
+[I][gree_wired_rs485]: SCAN profile=9600-8N1 bytes=7 legacy_valid=0
+[I][gree_wired_rs485]: SCAN profile=1200-8N1 bytes=0 legacy_valid=0
+"""
+        analysis = discovery.analyze_log(text)
+        self.assertEqual(
+            discovery.conclusion(analysis),
+            "uart_decode_candidates_without_legacy_validation",
+        )
+        self.assertEqual(analysis.profile_bytes_total, 7)
+        self.assertEqual(discovery.summary_dict(analysis)["profile_bytes_total"], 7)
+
     def test_profile_bytes_are_not_promoted_without_valid_legacy_frame(self):
         text = """
 [I][gree_wired_rs485]: SCAN profile=9600-8N1 bytes=17 legacy_valid=0

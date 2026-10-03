@@ -83,6 +83,10 @@ class DiscoveryAnalysis:
         return max((item.valid_frames for item in self.health), default=0)
 
     @property
+    def profile_bytes_total(self) -> int:
+        return sum(item.byte_count for item in self.profiles)
+
+    @property
     def min_edge_gap_us(self) -> int:
         values = [
             item.edge_min_gap_us
@@ -196,11 +200,12 @@ def conclusion(analysis: DiscoveryAnalysis) -> str:
         return "insufficient_evidence"
     if any(item.legacy_valid_frames > 0 for item in analysis.profiles) or analysis.max_valid_frames > 0:
         return "legacy_frame_evidence_present"
-    if analysis.max_edges_total == 0 and analysis.max_bytes_total == 0:
+    uart_evidence = analysis.max_bytes_total > 0 or analysis.profile_bytes_total > 0
+    if analysis.max_edges_total == 0 and not uart_evidence:
         return "electrically_silent"
-    if analysis.max_edges_total > 0 and analysis.max_bytes_total == 0:
+    if analysis.max_edges_total > 0 and not uart_evidence:
         return "edge_activity_without_uart_decode"
-    if analysis.max_bytes_total > 0:
+    if uart_evidence:
         return "uart_decode_candidates_without_legacy_validation"
     return "insufficient_evidence"
 
@@ -238,6 +243,7 @@ def summary_dict(analysis: DiscoveryAnalysis) -> dict:
         "max_edges_total": analysis.max_edges_total,
         "max_bytes_total": analysis.max_bytes_total,
         "max_valid_frames": analysis.max_valid_frames,
+        "profile_bytes_total": analysis.profile_bytes_total,
         "min_edge_gap_us": analysis.min_edge_gap_us,
         "cadence_hints": [asdict(item) for item in cadence_hints(analysis.min_edge_gap_us)],
         "profiles": profile_summary(analysis),
@@ -252,6 +258,7 @@ def _print_human(analysis: DiscoveryAnalysis) -> None:
         f"max_edges_total={summary['max_edges_total']} "
         f"max_bytes_total={summary['max_bytes_total']} "
         f"max_valid_frames={summary['max_valid_frames']} "
+        f"profile_bytes_total={summary['profile_bytes_total']} "
         f"min_edge_gap_us={summary['min_edge_gap_us']}"
     )
 
