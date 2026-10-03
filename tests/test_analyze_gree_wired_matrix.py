@@ -49,6 +49,43 @@ class GreeWiredMatrixTests(unittest.TestCase):
             self.assertEqual(cov["missing_profiles"], [])
             self.assertEqual(cov["duplicate_profiles"], [])
             self.assertEqual(cov["captures_with_tx"], [])
+            self.assertEqual(cov["captures_with_unknown_duration"], [])
+            self.assertEqual(cov["captures_under_60s"], [])
+
+    def test_short_capture_prevents_complete_matrix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [
+                self.write(root, f"{profile}.log", capture(profile))
+                for profile in matrix.EXPECTED_PROFILES
+            ]
+            short_profile = matrix.EXPECTED_PROFILES[-1]
+            paths[-1].write_text(capture(short_profile, seconds=20))
+            cov = matrix.coverage(matrix.analyze_paths(paths))
+            self.assertFalse(cov["complete_passive_matrix"])
+            self.assertEqual(cov["captures_under_60s"], [str(paths[-1])])
+
+    def test_unknown_duration_prevents_complete_matrix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = []
+            for profile in matrix.EXPECTED_PROFILES:
+                if profile == "38400-8E1":
+                    text = (
+                        f"[I][gree_wired_rs485]: Passive UART profile scan enabled; "
+                        f"RS485 transmitter remains disabled; boot_profile={profile}\n"
+                        f"[I][gree_wired_rs485]: SCAN listening profile={profile} "
+                        "phase=boot-staged\n"
+                    )
+                else:
+                    text = capture(profile)
+                paths.append(self.write(root, f"{profile}.log", text))
+            cov = matrix.coverage(matrix.analyze_paths(paths))
+            self.assertFalse(cov["complete_passive_matrix"])
+            self.assertEqual(
+                cov["captures_with_unknown_duration"],
+                [str(paths[-1])],
+            )
 
     def test_duplicate_missing_unknown_and_tx_are_reported(self):
         with tempfile.TemporaryDirectory() as tmp:

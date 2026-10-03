@@ -273,9 +273,11 @@ python3 tools/analyze_gree_wired_matrix.py captures/*.log --json
 
 The matrix tool requires one self-declared boot profile per capture, reports
 missing and duplicate hypotheses, flags any capture containing legacy TX
-evidence, records observation duration, and keeps edge/UART/legacy-valid
-evidence separate. A complete passive matrix means the acquisition procedure
-was covered correctly; it does **not** by itself identify XE71 protocol.
+evidence, and requires a measurable observation span of at least 60 seconds
+for every profile. Unknown or sub-60-second durations make the matrix
+incomplete. Edge/UART/legacy-valid evidence remains separate. A complete
+passive matrix means the acquisition procedure was covered correctly; it does
+**not** by itself identify XE71 protocol.
 The scanner may continue rotating after its initial window, but only the
 selected boot profile can be treated as having observed the complete startup
 interval.

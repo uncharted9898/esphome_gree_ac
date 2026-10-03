@@ -82,6 +82,9 @@ def coverage(rows: list[CaptureRow]) -> dict:
     unknown = [row.path for row in rows if row.boot_profile is None]
     conflicts = [row.path for row in rows if row.boot_profile_conflict]
     tx = [row.path for row in rows if row.transmit_lines]
+    unknown_duration = [
+        row.path for row in rows if row.duration_s is None
+    ]
     short = [
         row.path
         for row in rows
@@ -95,8 +98,12 @@ def coverage(rows: list[CaptureRow]) -> dict:
         "unknown_profile_captures": unknown,
         "conflicting_profile_captures": conflicts,
         "captures_with_tx": tx,
+        "captures_with_unknown_duration": unknown_duration,
         "captures_under_60s": short,
-        "complete_passive_matrix": not (missing or duplicates or unknown or conflicts or tx),
+        "complete_passive_matrix": not (
+            missing or duplicates or unknown or conflicts or tx or
+            unknown_duration or short
+        ),
     }
 
 
@@ -135,6 +142,11 @@ def print_human(rows: list[CaptureRow]) -> None:
         print("profile-conflict:", ", ".join(cov["conflicting_profile_captures"]))
     if cov["captures_with_tx"]:
         print("TX-EVIDENCE:", ", ".join(cov["captures_with_tx"]))
+    if cov["captures_with_unknown_duration"]:
+        print(
+            "unknown-duration:",
+            ", ".join(cov["captures_with_unknown_duration"]),
+        )
     if cov["captures_under_60s"]:
         print("under-60s:", ", ".join(cov["captures_under_60s"]))
 
