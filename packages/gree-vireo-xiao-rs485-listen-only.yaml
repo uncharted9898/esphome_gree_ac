@@ -164,11 +164,14 @@ gree_wired_rs485:
   route_ff_40_frames:
     name: ${friendly_name} FF to 40 Frames
     entity_category: diagnostic
+  # Historical code calls bytes 2/3 source/destination. No-controller captures
+  # prove that interpretation is not yet safe, so expose them as structural
+  # route bytes while retaining the YAML keys for compatibility.
   last_source:
-    name: ${friendly_name} Last Source
+    name: ${friendly_name} Route Byte 2
     entity_category: diagnostic
   last_destination:
-    name: ${friendly_name} Last Destination
+    name: ${friendly_name} Route Byte 3
     entity_category: diagnostic
   last_body_length:
     name: ${friendly_name} Last Body Length

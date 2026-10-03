@@ -90,6 +90,11 @@ def _signature_for(source: int, destination: int, payload: list[int]) -> Optiona
     return " ".join(f"{value:02X}" for value in payload[:3])
 
 
+# Byte positions 2 and 3 are retained as source/destination for compatibility
+# with the original public reverse-engineering terminology. Field captures show
+# that the 00/FF pair cannot yet be trusted as literal physical node addresses:
+# an indoor unit with no wired controller attached emits both FF 40 and 00 FF
+# frames. Treat route strings such as 00->FF as structural byte-pair labels.
 def decode_frame(
     raw: Iterable[int],
     *,
@@ -330,6 +335,11 @@ def session_summary(analysis: TraceAnalysis) -> dict:
         and expansion_after_controller
     ):
         pattern = "legacy_indoor_first_then_controller_registration"
+    elif (
+        first_controller_index is not None
+        and (polls_before_controller > 0 or statuses_before_controller > 0)
+    ):
+        pattern = "legacy_indoor_first_then_controller_reply"
     elif (
         first_controller_index is None
         and (poll_indices or pre_status_indices)

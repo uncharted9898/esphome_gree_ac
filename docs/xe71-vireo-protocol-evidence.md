@@ -67,6 +67,45 @@ treating the existing XK19 packet capture as an XE71 wire/session oracle.
 
 ## Legacy startup direction evidence
 
+The October 3 logic-analyzer screenshots recover the previously missing XK19
+wake/poll sequence explicitly. All three transcribed frames satisfy the public
+length rule and XOR to zero:
+
+```text
+FF 40 status (28 bytes, body 0x16)
+7E 7E FF 40 11 16 0C 30 83 80 77 00 04 00 00 04 00 A8 00 80 00 00 00 00 00 00 23 FB
+
+~800 ms idle pause annotated in the capture
+
+00 FF poll-shaped frame (20 bytes, body 0x0E)
+7E 7E 00 FF 11 0E 00 00 02 01 82 86 6E 52 00 80 00 00 20 7B
+
+controller reply (27 bytes, body 0x15)
+7E 7E FF 00 11 15 0C 30 83 01 13 7D 03 10 E0 E0 08 00 0A 00 00 00 00 00 00 00 3A
+```
+
+This is the concrete meaning of the earlier report that the controller would
+not answer the ordinary poll unless another packet was sent first: the first
+packet shown is the legacy `FF 40 / 0x16` status layout. The composite capture
+then shows the `00 FF / 0x0E` frame after the annotated pause and the
+`FF 00 / 0x15` controller answer immediately afterward.
+
+The README examples in `maxim-smirnov/gree-wired-proto` use the same three
+route/body-length layouts but different payload bytes. That is useful evidence
+that these are state-bearing frames, not three immutable magic byte strings.
+The stable evidence is their framing/order; individual payload bytes must not
+be promoted to constants without a field-specific reason.
+
+There is also an address-semantics correction. The original README labels bytes
+2 and 3 as `Src` and `Dst` and tentatively maps `FF` to the indoor unit
+and `00` to the wired controller. However, issue #1 includes an indoor-unit
+cold start with **no wired controller attached** that still emits both
+`FF 40` and `00 FF` frames. Therefore the two bytes cannot safely be treated
+as literal physical source/destination addresses yet. This repository retains
+the historical parser field names for compatibility, but user-facing
+diagnostics and analysis treat `00->FF`, `FF->00`, and `FF->40` as
+structural route-byte pairs.
+
 The public wired-controller captures now establish a stronger comparison
 baseline than packet shape alone:
 
@@ -108,8 +147,11 @@ The working hypotheses should therefore remain separate:
 
 The trace analyzer now emits a descriptive `session.pattern` field. It can
 recognize the known legacy indoor-first ordering and status expansion without
-calling that ordering XE71 protocol. This is intended for comparing a future
-XE71 capture structurally before assigning field semantics.
+calling that ordering XE71 protocol. The exact XK19 screenshot sequence is
+classified as `legacy_indoor_first_then_controller_reply`; a later expanded
+status frame upgrades the structural classification to
+`legacy_indoor_first_then_controller_registration`. This is intended for
+comparing a future XE71 capture structurally before assigning field semantics.
 
 Passive firmware diagnostics follow the same provenance rule. The legacy
 controller codec still needs a reference state internally, but passive health

@@ -16,6 +16,25 @@ XK19_CONTROLLER = (
     "0C 30 83 01 14 7E 22 10 E0 E0 08 00 02 00 00 00 00 00 00 00 17"
 )
 
+# Exact checksum-valid frames transcribed from the October 3, 2026
+# logic-analyzer screenshots supplied alongside maxim-smirnov/gree-wired-proto.
+# The composite capture explicitly annotates an approximately 800 ms idle pause
+# after the FF 40 frame before the 00 FF frame is sent.
+XK19_SCREENSHOT_STATUS = (
+    "7E 7E FF 40 11 16 "
+    "0C 30 83 80 77 00 04 00 00 04 00 A8 00 80 00 00 00 00 00 00 23 FB"
+)
+
+XK19_SCREENSHOT_POLL = (
+    "7E 7E 00 FF 11 0E "
+    "00 00 02 01 82 86 6E 52 00 80 00 00 20 7B"
+)
+
+XK19_SCREENSHOT_CONTROLLER = (
+    "7E 7E FF 00 11 15 "
+    "0C 30 83 01 13 7D 03 10 E0 E0 08 00 0A 00 00 00 00 00 00 00 3A"
+)
+
 GKH_XK76_CONTROLLER = (
     "7E 7E FF 00 11 22 "
     "09 30 83 11 1B 00 00 10 E0 E0 08 00 28 00 00 00 00 00 00 00 "
@@ -45,6 +64,41 @@ class GreeWiredTraceAnalyzerTests(unittest.TestCase):
         self.assertEqual(frame.body_length, 0x15)
         self.assertEqual(frame.reference_layout, "xk19_controller_state_ff00_15")
         self.assertEqual(frame.signature, "0C 30 83")
+
+    def test_xk19_screenshot_wakeup_sequence_is_retained_exactly(self):
+        analysis = trace.analyze_text(
+            XK19_SCREENSHOT_STATUS
+            + "\n"
+            + XK19_SCREENSHOT_POLL
+            + "\n"
+            + XK19_SCREENSHOT_CONTROLLER
+        )
+        self.assertEqual(len(analysis.frames), 3)
+        self.assertTrue(all(frame.xor_valid for frame in analysis.frames))
+        self.assertEqual(
+            [frame.total_length for frame in analysis.frames],
+            [28, 20, 27],
+        )
+        self.assertEqual(
+            [frame.reference_layout for frame in analysis.frames],
+            [
+                "xk19_status_ff40_16",
+                "legacy_poll_00_ff_0e",
+                "xk19_controller_state_ff00_15",
+            ],
+        )
+        self.assertEqual(
+            [frame.signature for frame in analysis.frames],
+            ["0C 30 83", None, "0C 30 83"],
+        )
+        session = trace.session_summary(analysis)
+        self.assertEqual(
+            session["pattern"],
+            "legacy_indoor_first_then_controller_reply",
+        )
+        self.assertEqual(session["statuses_before_first_controller"], 1)
+        self.assertEqual(session["polls_before_first_controller"], 1)
+        self.assertFalse(session["expanded_status_after_controller"])
 
     def test_gkh_xk76_registration_frame_is_labeled_by_provenance(self):
         analysis = trace.analyze_text(GKH_XK76_CONTROLLER)

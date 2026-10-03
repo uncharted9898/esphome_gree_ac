@@ -1,0 +1,11 @@
+# Legacy XK19-family wake/poll sequence transcribed from user-supplied
+# logic-analyzer screenshots on 2026-10-03, associated with
+# https://github.com/maxim-smirnov/gree-wired-proto
+#
+# The composite screenshot annotates approximately 800 ms of idle time between
+# the end of the first FF 40 frame and the start of the 00 FF frame. Exact
+# absolute timestamps were not available, so this fixture preserves byte order
+# only and deliberately does not invent timing.
+7E 7E FF 40 11 16 0C 30 83 80 77 00 04 00 00 04 00 A8 00 80 00 00 00 00 00 00 23 FB
+7E 7E 00 FF 11 0E 00 00 02 01 82 86 6E 52 00 80 00 00 20 7B
+7E 7E FF 00 11 15 0C 30 83 01 13 7D 03 10 E0 E0 08 00 0A 00 00 00 00 00 00 00 3A

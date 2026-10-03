@@ -156,10 +156,10 @@ gree_wired_rs485:
     name: ${friendly_name} FF to 40 Frames
     entity_category: diagnostic
   last_source:
-    name: ${friendly_name} Last Source
+    name: ${friendly_name} Route Byte 2
     entity_category: diagnostic
   last_destination:
-    name: ${friendly_name} Last Destination
+    name: ${friendly_name} Route Byte 3
     entity_category: diagnostic
   last_body_length:
     name: ${friendly_name} Last Body Length
