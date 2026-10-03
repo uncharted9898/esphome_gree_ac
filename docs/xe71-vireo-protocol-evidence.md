@@ -102,6 +102,8 @@ Saleae-style async-serial CSV byte exports.  It:
 - verifies the XOR checksum;
 - reports source/destination, type and body length;
 - preserves timestamps when available;
+- preserves explicit ESPHome TX/RX direction and leaves generic sniffer frames
+  labeled \`observed\`;
 - reports inter-frame timing;
 - extracts the first three payload bytes as a comparison signature on
   \`FF->00\` / \`FF->40\`;
@@ -112,12 +114,15 @@ Example:
 
 \`\`\`bash
 python3 tools/analyze_gree_wired_trace.py xe71-cold-start.txt
+python3 tools/analyze_gree_wired_trace.py xe71-cold-start.txt --exclude-tx
 python3 tools/analyze_gree_wired_trace.py saleae-async-serial.csv --json
 \`\`\`
 
 A new XE71 capture that produces an unknown route/body length is intentionally
 reported as \`unknown\`; the analyzer must not coerce it into the nearest
-legacy layout.
+legacy layout. ESPHome\'s own transmitted legacy-probe frames remain visible as
+\`direction=tx\` for auditability but can be excluded with \`--exclude-tx\`;
+they must never be mistaken for received target evidence.
 
 ## Next capture that can advance the protocol
 
