@@ -142,6 +142,32 @@ Capture requirements:
 If no XE71/XE72 is attached, a silent COM-MANUAL bus is now a valid field
 observation, not a reason to transmit more guessed legacy packets.
 
+### Raw edge-cadence evidence
+
+The ESP32 GPIO7 any-edge ISR now keeps a cumulative short-gap cadence journal
+independently of UART decoding. It records the number of inter-edge samples,
+minimum gap, maximum gap, and most recent gap for gaps up to 20 ms. Longer gaps
+are treated as inter-burst idle for cadence purposes, while still counting in
+the raw edge total.
+
+This is intentionally physical evidence, not automatic baud detection. If a
+real XE71/XE72 produces traffic while the configured UART profile is wrong,
+the health line can still expose approximate UART-scale timing. Useful
+reference bit periods are approximately:
+
+| Candidate baud | One bit |
+| ---: | ---: |
+| 1200 | 833 us |
+| 2400 | 417 us |
+| 4800 | 208 us |
+| 9600 | 104 us |
+| 19200 | 52 us |
+| 38400 | 26 us |
+
+Repeated multiples are normal because a UART waveform only changes level when
+adjacent bits differ. A single anomalously tiny gap is not enough to select a
+baud; correlate cadence with repeated bursts or a logic-analyzer capture.
+
 ### Legacy experiment overlay
 
 For reproducibility, the historical GKH/XK76 bootstrap is kept in a separate

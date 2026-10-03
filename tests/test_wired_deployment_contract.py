@@ -272,6 +272,19 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("expected_wire=~333ms", send)
         self.assertIn("tx_ms=%lu tx_flush=%s tx_de=%d>%d", text)
 
+    def test_passive_edge_cadence_survives_wrong_uart_profile(self):
+        text = HEADER.read_text()
+        self.assertIn("rx_isr_previous_edge_us_", text)
+        self.assertIn("rx_isr_cadence_samples_total_", text)
+        self.assertIn("rx_isr_cadence_min_gap_us_", text)
+        self.assertIn("rx_isr_cadence_max_gap_us_", text)
+        self.assertIn("rx_isr_cadence_last_gap_us_", text)
+        self.assertIn("cadence_gap_us <= 20000U", text)
+        self.assertIn("edge_cadence_samples=%lu", text)
+        self.assertIn("edge_min_gap_us=%lu", text)
+        self.assertIn("edge_max_gap_us=%lu", text)
+        self.assertIn("edge_last_gap_us=%lu", text)
+
     def test_registration_rx_window_records_turnaround_evidence(self):
         text = HEADER.read_text()
         self.assertIn('#include "registration_rx_window.h"', text)

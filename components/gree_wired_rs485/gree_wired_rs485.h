@@ -453,6 +453,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "tx_rx_edges_window=%lu turnaround_edges_window=%lu "
                "rx_edges_total=%lu tx_residue_window=%lu "
                "tx_residue_total=%lu rx_sampled_edges_window=%lu "
+               "edge_cadence_samples=%lu edge_min_gap_us=%lu "
+               "edge_max_gap_us=%lu edge_last_gap_us=%lu "
                "rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
                "startup_rx=%u:%s",
                this->legacy_gkh_xk76_probe_enabled_()
@@ -494,6 +496,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                static_cast<unsigned long>(tx_residue_window),
                static_cast<unsigned long>(this->tx_residue_bytes_total_),
                static_cast<unsigned long>(rx_activity.transitions),
+               static_cast<unsigned long>(this->rx_isr_cadence_samples_total_),
+               static_cast<unsigned long>(this->rx_isr_cadence_min_gap_us_),
+               static_cast<unsigned long>(this->rx_isr_cadence_max_gap_us_),
+               static_cast<unsigned long>(this->rx_isr_cadence_last_gap_us_),
                rx_activity.high_percent(),
                static_cast<unsigned long>(rx_activity.samples),
                static_cast<unsigned>(this->last_raw_rx_size_),
@@ -1125,6 +1131,29 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     auto *self = static_cast<GreeWiredRS485 *>(arg);
     const uint32_t now_us = static_cast<uint32_t>(esp_timer_get_time());
     ++self->rx_isr_edges_total_;
+
+    // Preserve short inter-edge timing even when the UART profile is wrong.
+    // Gaps above 20 ms are treated as inter-burst idle and excluded from the
+    // cadence range; the raw edge total still includes them. On UART-like
+    // signaling, the minimum observed gap is a useful bit-period clue without
+    // asserting that any particular baud/profile is correct for XE71.
+    if (self->rx_isr_previous_edge_us_ != 0) {
+      const uint32_t cadence_gap_us =
+          static_cast<uint32_t>(now_us - self->rx_isr_previous_edge_us_);
+      if (cadence_gap_us <= 20000U) {
+        ++self->rx_isr_cadence_samples_total_;
+        self->rx_isr_cadence_last_gap_us_ = cadence_gap_us;
+        if (self->rx_isr_cadence_min_gap_us_ == 0 ||
+            cadence_gap_us < self->rx_isr_cadence_min_gap_us_) {
+          self->rx_isr_cadence_min_gap_us_ = cadence_gap_us;
+        }
+        if (cadence_gap_us > self->rx_isr_cadence_max_gap_us_) {
+          self->rx_isr_cadence_max_gap_us_ = cadence_gap_us;
+        }
+      }
+    }
+    self->rx_isr_previous_edge_us_ = now_us;
+
     if (self->rx_edge_window_active_) {
       if (self->rx_edge_window_count_ == 0) {
         self->rx_edge_window_first_us_ = now_us;
@@ -1601,6 +1630,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool rx_edge_monitor_installed_{false};
 #ifdef USE_ESP32
   volatile uint32_t rx_isr_edges_total_{0};
+  volatile uint32_t rx_isr_previous_edge_us_{0};
+  volatile uint32_t rx_isr_cadence_samples_total_{0};
+  volatile uint32_t rx_isr_cadence_min_gap_us_{0};
+  volatile uint32_t rx_isr_cadence_max_gap_us_{0};
+  volatile uint32_t rx_isr_cadence_last_gap_us_{0};
   volatile bool rx_edge_window_active_{false};
   volatile uint32_t rx_edge_window_count_{0};
   volatile uint32_t rx_edge_window_first_us_{0};
@@ -1617,6 +1651,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   volatile uint32_t rx_edge_response_max_gap_us_{0};
 #else
   uint32_t rx_isr_edges_total_{0};
+  uint32_t rx_isr_previous_edge_us_{0};
+  uint32_t rx_isr_cadence_samples_total_{0};
+  uint32_t rx_isr_cadence_min_gap_us_{0};
+  uint32_t rx_isr_cadence_max_gap_us_{0};
+  uint32_t rx_isr_cadence_last_gap_us_{0};
   bool rx_edge_window_active_{false};
   uint32_t rx_edge_window_count_{0};
   uint32_t rx_edge_window_first_us_{0};
