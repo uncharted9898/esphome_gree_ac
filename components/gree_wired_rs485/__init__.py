@@ -12,6 +12,7 @@ CONF_BUS_IDLE_TIMEOUT = "bus_idle_timeout"
 CONF_LOG_FRAMES = "log_frames"
 CONF_PASSIVE_SCAN = "passive_scan"
 CONF_PASSIVE_SCAN_WINDOW = "passive_scan_window"
+CONF_PASSIVE_SCAN_START_PROFILE = "passive_scan_start_profile"
 CONF_ACTIVE_PROBE = "active_probe"
 CONF_LEGACY_GKH_XK76_PROBE = "legacy_gkh_xk76_probe"
 CONF_ACTIVE_PROBE_INTERVAL = "active_probe_interval"
@@ -95,6 +96,21 @@ percentage_schema = sensor.sensor_schema(sensor.Sensor, accuracy_decimals=1)
 text_schema = text_sensor.text_sensor_schema(text_sensor.TextSensor)
 binary_schema = binary_sensor.binary_sensor_schema(binary_sensor.BinarySensor)
 
+PASSIVE_SCAN_PROFILES = {
+    "1200-8N1": 0,
+    "1200-8E1": 1,
+    "2400-8N1": 2,
+    "2400-8E1": 3,
+    "4800-8N1": 4,
+    "4800-8E1": 5,
+    "9600-8N1": 6,
+    "9600-8E1": 7,
+    "19200-8N1": 8,
+    "19200-8E1": 9,
+    "38400-8N1": 10,
+    "38400-8E1": 11,
+}
+
 
 def _validate_probe_configuration(config):
     active = config[CONF_ACTIVE_PROBE]
@@ -147,6 +163,9 @@ CONFIG_SCHEMA = cv.All(
                     max=cv.TimePeriod(seconds=10),
                 ),
             ),
+            cv.Optional(
+                CONF_PASSIVE_SCAN_START_PROFILE, default="1200-8N1"
+            ): cv.one_of(*PASSIVE_SCAN_PROFILES, upper=True),
             cv.Optional(CONF_ACTIVE_PROBE, default=False): cv.boolean,
             cv.Optional(CONF_LEGACY_GKH_XK76_PROBE, default=False): cv.boolean,
             cv.Optional(CONF_ACTIVE_PROBE_INTERVAL, default="1200ms"): cv.All(
@@ -247,6 +266,11 @@ async def to_code(config):
     cg.add(var.set_log_frames(config[CONF_LOG_FRAMES]))
     cg.add(var.set_passive_scan(config[CONF_PASSIVE_SCAN]))
     cg.add(var.set_passive_scan_window(config[CONF_PASSIVE_SCAN_WINDOW]))
+    cg.add(
+        var.set_passive_scan_start_profile(
+            PASSIVE_SCAN_PROFILES[config[CONF_PASSIVE_SCAN_START_PROFILE]]
+        )
+    )
     cg.add(var.set_active_probe(config[CONF_ACTIVE_PROBE]))
     cg.add(var.set_legacy_gkh_xk76_probe(config[CONF_LEGACY_GKH_XK76_PROBE]))
     cg.add(var.set_active_probe_interval(config[CONF_ACTIVE_PROBE_INTERVAL]))

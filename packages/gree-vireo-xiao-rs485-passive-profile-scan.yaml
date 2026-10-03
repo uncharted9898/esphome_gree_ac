@@ -5,6 +5,9 @@
 gree_wired_rs485:
   id: gree_com_manual
   passive_scan: true
+  # For cold-start qualification, override this per breaker-off run so the
+  # desired decoder is active before the first target byte can arrive.
+  passive_scan_start_profile: 1200-8N1
   passive_scan_window: 5s
   active_probe: false
   legacy_gkh_xk76_probe: false

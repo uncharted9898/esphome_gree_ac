@@ -39,6 +39,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_log_frames(bool log_frames) { this->log_frames_ = log_frames; }
   void set_passive_scan(bool passive_scan) { this->passive_scan_ = passive_scan; }
   void set_passive_scan_window(uint32_t window_ms) { this->passive_scan_window_ms_ = window_ms; }
+  void set_passive_scan_start_profile(uint8_t index) {
+    this->scan_profile_index_ =
+        static_cast<size_t>(index) % PASSIVE_SCAN_PROFILE_COUNT;
+  }
   void set_rx_line_gpio(int gpio) { this->rx_line_gpio_ = gpio; }
   void set_direction_gpio(int gpio) { this->direction_gpio_ = gpio; }
   void set_rx_idle_pullup(bool enabled) { this->rx_idle_pullup_ = enabled; }
@@ -170,11 +174,17 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              "Legacy reference decode profile: 1200 baud 8N1, 7E 7E framing, "
              "type 0x11, XOR checksum; XE71/Vireo application protocol is unproven");
     if (this->passive_scan_) {
-      ESP_LOGI(TAG, "Passive UART profile scan enabled; RS485 transmitter remains disabled");
+      ESP_LOGI(TAG,
+               "Passive UART profile scan enabled; RS485 transmitter remains disabled; "
+               "boot_profile=%s",
+               this->scan_profile_(this->scan_profile_index_).name);
+      // Apply the selected decoder immediately during component setup. This is
+      // critical for cold-start-only traffic: rotating to the right profile
+      // several seconds later can miss the only useful burst entirely.
+      this->apply_scan_profile_(this->scan_profile_index_);
       this->scan_profile_started_at_ = millis();
       this->scan_profile_byte_start_ = this->bytes_received_;
       this->scan_profile_valid_start_ = this->valid_frames_;
-      this->publish_serial_profile_();
     } else {
       this->publish_serial_profile_();
     }
@@ -245,6 +255,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       ESP_LOGCONFIG(TAG,
                     "  Passive scan profiles are decoder hypotheses only; "
                     "they never enable RS485 TX");
+      ESP_LOGCONFIG(TAG, "  Passive scan boot profile: %s",
+                    this->scan_profile_(this->scan_profile_index_).name);
       ESP_LOGCONFIG(TAG, "  Passive scan window: %lu ms",
                     static_cast<unsigned long>(this->passive_scan_window_ms_));
     }

@@ -142,6 +142,14 @@ wrappers = {
         f'  base: !include {vireo_base}\n'
         '  legacy: !include ../packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml\n'
     ),
+    '.validation-gree-vireo-passive-profile-9600-8e1.yaml': (
+        'packages:\n'
+        f'  base: !include {vireo_base}\n'
+        '  scan: !include ../packages/gree-vireo-xiao-rs485-passive-profile-scan.yaml\n'
+        'gree_wired_rs485:\n'
+        '  id: gree_com_manual\n'
+        '  passive_scan_start_profile: 9600-8E1\n'
+    ),
     '.validation-gree-vireo-invalid-active-without-legacy.yaml': (
         'packages:\n'
         f'  base: !include {vireo_base}\n'
@@ -165,6 +173,7 @@ for example in \
   examples/.validation-gree-livo-oem-boot-probe.yaml \
   examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml \
   examples/.validation-gree-vireo-passive-profile-scan.yaml \
+  examples/.validation-gree-vireo-passive-profile-9600-8e1.yaml \
   examples/.validation-gree-vireo-legacy-gkh-xk76-probe.yaml; do
   esphome config "$example"
 done

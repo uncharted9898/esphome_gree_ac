@@ -215,6 +215,27 @@ baud; correlate cadence with repeated bursts or a logic-analyzer capture.
 
 ### Passive serial-profile scan overlay
 
+A rotating scan alone is insufficient for a protocol that may speak only at
+cold power-up. The scanner therefore has a configurable
+`passive_scan_start_profile`. That decoder is applied immediately when the
+component starts, before the first scan window begins.
+
+For a real XE71/XE72 cold-start qualification, use **one breaker-off run per
+profile** and set the boot profile explicitly:
+
+```yaml
+gree_wired_rs485:
+  passive_scan: true
+  passive_scan_start_profile: 9600-8E1
+```
+
+Repeat for all 12 current hypotheses:
+`1200/2400/4800/9600/19200/38400` with `8N1` and `8E1`. Keep each
+capture from before indoor-unit power-up through at least the first minute.
+The scanner may continue rotating after its initial window, but only the
+selected boot profile can be treated as having observed the complete startup
+interval.
+
 For receive-only serial discovery, layer
 \`packages/gree-vireo-xiao-rs485-passive-profile-scan.yaml\` on the normal
 Vireo package. It cycles 1200/2400/4800/9600/19200/38400 baud with both

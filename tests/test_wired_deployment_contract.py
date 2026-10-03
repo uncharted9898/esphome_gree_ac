@@ -109,6 +109,9 @@ class WiredDeploymentContractTests(unittest.TestCase):
     def test_passive_profile_scan_does_not_lock_on_raw_garbage(self):
         text = HEADER.read_text()
         self.assertIn("PASSIVE_SCAN_PROFILE_COUNT = 12", text)
+        self.assertIn("set_passive_scan_start_profile", text)
+        self.assertIn("boot_profile=%s", text)
+        self.assertIn("apply_scan_profile_(this->scan_profile_index_)", text)
         self.assertIn("scan_profile_valid_start_", text)
         self.assertIn("profile_valid_frames", text)
         self.assertIn("if (profile_valid_frames > 0)", text)
@@ -120,10 +123,24 @@ class WiredDeploymentContractTests(unittest.TestCase):
         ):
             self.assertIn(profile, text)
 
+    def test_passive_scan_boot_profile_is_configurable(self):
+        config = (ROOT / "components/gree_wired_rs485/__init__.py").read_text()
+        self.assertIn(
+            'CONF_PASSIVE_SCAN_START_PROFILE = "passive_scan_start_profile"',
+            config,
+        )
+        for profile in (
+            "1200-8N1", "1200-8E1", "2400-8N1", "2400-8E1",
+            "4800-8N1", "4800-8E1", "9600-8N1", "9600-8E1",
+            "19200-8N1", "19200-8E1", "38400-8N1", "38400-8E1",
+        ):
+            self.assertIn(f'"{profile}"', config)
+
     def test_passive_profile_scan_overlay_cannot_transmit(self):
         text = PASSIVE_SCAN_OVERLAY.read_text()
         self.assertIn("id: gree_com_manual", text)
         self.assertIn("passive_scan: true", text)
+        self.assertIn("passive_scan_start_profile: 1200-8N1", text)
         self.assertIn("active_probe: false", text)
         self.assertIn("legacy_gkh_xk76_probe: false", text)
         self.assertIn("silent_bootstrap_probe: false", text)
