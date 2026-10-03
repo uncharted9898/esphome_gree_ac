@@ -128,6 +128,31 @@ for source in sources:
         raise SystemExit(f'{source}: expected one repository source, found {count}')
     target.write_text(localized)
     print(target)
+
+vireo_base = '.validation-gree-vireo-xiao-rs485-listen-only.yaml'
+wrappers = {
+    '.validation-gree-vireo-passive-profile-scan.yaml': (
+        'packages:\n'
+        f'  base: !include {vireo_base}\n'
+        '  scan: !include ../packages/gree-vireo-xiao-rs485-passive-profile-scan.yaml\n'
+    ),
+    '.validation-gree-vireo-legacy-gkh-xk76-probe.yaml': (
+        'packages:\n'
+        f'  base: !include {vireo_base}\n'
+        '  legacy: !include ../packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml\n'
+    ),
+    '.validation-gree-vireo-invalid-active-without-legacy.yaml': (
+        'packages:\n'
+        f'  base: !include {vireo_base}\n'
+        'gree_wired_rs485:\n'
+        '  id: gree_com_manual\n'
+        '  active_probe: true\n'
+    ),
+}
+for name, content in wrappers.items():
+    target = Path('examples') / name
+    target.write_text(content)
+    print(target)
 PY
 
 for example in \
@@ -137,9 +162,24 @@ for example in \
   examples/.validation-gree-livo-gen3-refined-discovery.yaml \
   examples/.validation-gree-livo-gen3-full-power-discovery.yaml \
   examples/.validation-gree-livo-oem-boot-probe.yaml \
-  examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml; do
+  examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml \
+  examples/.validation-gree-vireo-passive-profile-scan.yaml \
+  examples/.validation-gree-vireo-legacy-gkh-xk76-probe.yaml; do
   esphome config "$example"
 done
+
+invalid_probe_log="/tmp/gree-vireo-invalid-active-probe.log"
+if esphome config examples/.validation-gree-vireo-invalid-active-without-legacy.yaml \
+    >"$invalid_probe_log" 2>&1; then
+  echo 'active_probe without legacy_gkh_xk76_probe unexpectedly validated' >&2
+  cat "$invalid_probe_log" >&2
+  exit 1
+fi
+if ! grep -F 'legacy_gkh_xk76_probe' "$invalid_probe_log" >/dev/null; then
+  echo 'invalid active probe failed for an unexpected reason' >&2
+  cat "$invalid_probe_log" >&2
+  exit 1
+fi
 
 # Compile the localized OEM boot-probe path as well. This is the ESP-IDF/C3
 # configuration that exercises the recovered telemetry query components and
