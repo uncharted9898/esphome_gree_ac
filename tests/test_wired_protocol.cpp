@@ -146,6 +146,19 @@ int main() {
   assert(!parsed.reference_body_length);
   assert(parsed.role == FrameRole::KNOWN_ROUTE_VARIANT);
 
+  auto unexpected_type = a;
+  unexpected_type[4] = 0x12;
+  unexpected_type.back() = 0;
+  checksum = 0;
+  for (const auto value : unexpected_type) checksum ^= value;
+  unexpected_type.back() = checksum;
+  assert(xor_bytes(unexpected_type) == 0);
+  assert(parse_frame(unexpected_type, parsed));
+  assert(parsed.route == RouteKind::ROUTE_00_FF);
+  assert(parsed.frame_class == FrameClass::UNEXPECTED_MESSAGE_TYPE);
+  assert(parsed.role == FrameRole::UNEXPECTED_MESSAGE_TYPE);
+  assert(!parsed.reference_body_length);
+
   auto bad_checksum = a;
   bad_checksum.back() ^= 0x01;
   assert(!parse_frame(bad_checksum, parsed));
