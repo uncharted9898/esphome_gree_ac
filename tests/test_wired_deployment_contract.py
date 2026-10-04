@@ -211,7 +211,15 @@ class WiredDeploymentContractTests(unittest.TestCase):
         process = text[process_start:process_end]
         self.assertIn("learn_registration_signature_(frame)", process)
         self.assertIn("observe_startup_poll_", process)
-        self.assertIn("ROUTE_00_FF", process)
+        self.assertIn(
+            "frame.role == protocol::FrameRole::CONTROLLER_POLL_0E",
+            process,
+        )
+        self.assertNotIn(
+            "if (frame.route == protocol::RouteKind::ROUTE_00_FF) {\n"
+            "      this->observe_startup_poll_",
+            process,
+        )
 
         send_start = text.index("  void send_registration_() {")
         send_end = text.index("\n  int read_gpio_level_", send_start)
@@ -224,6 +232,9 @@ class WiredDeploymentContractTests(unittest.TestCase):
         learn_end = text.index("\n  void observe_startup_poll_", learn_start)
         learn = text[learn_start:learn_end]
         self.assertIn("legacy_gkh_xk76_probe_enabled_()", learn)
+        self.assertIn("protocol::FrameRole::INDOOR_STATUS_16", learn)
+        self.assertIn("protocol::FrameRole::INDOOR_STATUS_17", learn)
+        self.assertNotIn("protocol::FrameRole::INDOOR_STATUS_REGISTERED_29", learn)
         self.assertIn("controller::set_unit_signature", learn)
         self.assertNotIn("REGISTRATION_TEMPLATE", send)
         self.assertIn("armed=%s", text)
