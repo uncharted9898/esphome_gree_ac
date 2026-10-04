@@ -169,6 +169,30 @@ class GreeWiredTraceAnalyzerTests(unittest.TestCase):
             "controller_frame_without_observed_indoor_startup",
         )
 
+    def test_unexpected_message_type_cannot_impersonate_legacy_controller(self):
+        values = [int(token, 16) for token in GKH_XK76_CONTROLLER.split()]
+        values[4] = 0x12
+        values[-1] = 0
+        checksum = 0
+        for value in values:
+            checksum ^= value
+        values[-1] = checksum
+        decoy = " ".join(f"{value:02X}" for value in values)
+
+        analysis = trace.analyze_text(GKH_PRE_STATUS + "\n" + decoy)
+        self.assertEqual(len(analysis.frames), 2)
+        self.assertTrue(analysis.frames[1].xor_valid)
+        self.assertEqual(analysis.frames[1].route, "FF->00")
+        self.assertEqual(analysis.frames[1].reference_layout, "unknown")
+        self.assertIsNone(analysis.frames[1].signature)
+
+        session = trace.session_summary(analysis)
+        self.assertEqual(
+            session["pattern"],
+            "legacy_indoor_first_no_controller_reply",
+        )
+        self.assertEqual(session["controller_state_frames"], 0)
+
     def test_esphome_log_tx_direction_and_timestamp_are_preserved(self):
         line = (
             "[02:25:43.543][I][gree_wired_rs485:854]: TX legacy: "
