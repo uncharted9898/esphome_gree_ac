@@ -23,17 +23,24 @@ from typing import Iterable, Optional
 HEX_BYTE_RE = re.compile(r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{2})(?![0-9A-Fa-f])")
 FRAME_MARKER_RE = re.compile(r"(?i)(?<![0-9A-Fa-f])7E\s+7E(?![0-9A-Fa-f])")
 CLOCK_RE = re.compile(
-    r"\[(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})\.(?P<f>\d{1,6})\]"
+    r"\[(?P<h>\d+):(?P<m>\d{2}):(?P<s>\d{2})\.(?P<f>\d{1,6})\]"
 )
 
 REFERENCE_LAYOUTS = {
-    (0x00, 0xFF, 0x0E): "legacy_poll_00_ff_0e",
-    (0xFF, 0x00, 0x15): "xk19_controller_state_ff00_15",
-    (0xFF, 0x00, 0x22): "gkh_xk76_controller_state_ff00_22",
-    (0xFF, 0x40, 0x16): "xk19_status_ff40_16",
-    (0xFF, 0x40, 0x17): "gkh_pre_registration_status_ff40_17",
-    (0xFF, 0x40, 0x29): "gkh_registered_status_ff40_29",
+    (0x00, 0xFF, 0x11, 0x0E): "legacy_poll_00_ff_0e",
+    (0xFF, 0x00, 0x11, 0x15): "xk19_controller_state_ff00_15",
+    (0xFF, 0x00, 0x11, 0x22): "gkh_xk76_controller_state_ff00_22",
+    (0xFF, 0x40, 0x11, 0x16): "xk19_status_ff40_16",
+    (0xFF, 0x40, 0x11, 0x17): "gkh_pre_registration_status_ff40_17",
+    (0xFF, 0x40, 0x11, 0x29): "gkh_registered_status_ff40_29",
 }
+
+CONTROLLER_REFERENCE_LAYOUTS = frozenset(
+    {
+        "xk19_controller_state_ff00_15",
+        "gkh_xk76_controller_state_ff00_22",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -84,8 +91,18 @@ def _clock_to_seconds(line: str) -> Optional[float]:
     )
 
 
-def _signature_for(source: int, destination: int, payload: list[int]) -> Optional[str]:
-    if source != 0xFF or destination not in (0x00, 0x40) or len(payload) < 3:
+def _signature_for(
+    source: int,
+    destination: int,
+    reference_layout: str,
+    payload: list[int],
+) -> Optional[str]:
+    if (
+        reference_layout == "unknown"
+        or source != 0xFF
+        or destination not in (0x00, 0x40)
+        or len(payload) < 3
+    ):
         return None
     return " ".join(f"{value:02X}" for value in payload[:3])
 
@@ -125,7 +142,7 @@ def decode_frame(
     message_type = data[4]
     payload = data[6:-1]
     reference_layout = REFERENCE_LAYOUTS.get(
-        (source, destination, body_length),
+        (source, destination, message_type, body_length),
         "unknown",
     )
     return FrameRecord(
@@ -141,7 +158,12 @@ def decode_frame(
         xor_valid=checksum == 0,
         route=f"{source:02X}->{destination:02X}",
         reference_layout=reference_layout,
-        signature=_signature_for(source, destination, payload),
+        signature=_signature_for(
+            source,
+            destination,
+            reference_layout,
+            payload,
+        ),
     )
 
 
@@ -288,7 +310,7 @@ def session_summary(analysis: TraceAnalysis) -> dict:
     controller_indices = [
         index
         for index, frame in enumerate(frames)
-        if frame.route == "FF->00"
+        if frame.reference_layout in CONTROLLER_REFERENCE_LAYOUTS
     ]
     first_controller_index = (
         controller_indices[0] if controller_indices else None
