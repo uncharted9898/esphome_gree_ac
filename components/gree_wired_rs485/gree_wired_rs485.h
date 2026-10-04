@@ -728,7 +728,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // XE71/Vireo discovery must preserve those bytes as evidence without
     // promoting them into controller-session semantics.
     if (!this->legacy_gkh_xk76_probe_enabled_()) return;
-    if (frame.route != protocol::RouteKind::ROUTE_FF_40 || frame.payload.size() < 3) return;
+    const bool legacy_pre_registration_status =
+        frame.role == protocol::FrameRole::INDOOR_STATUS_16 ||
+        frame.role == protocol::FrameRole::INDOOR_STATUS_17;
+    if (!legacy_pre_registration_status || frame.payload.size() < 3) return;
 
     const registration::UnitSignature learned = {
         frame.payload[0], frame.payload[1], frame.payload[2]};
@@ -1467,7 +1470,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     // target's startup traffic. Passive XE71/Vireo discovery never promotes
     // FF->40 payload bytes into registration semantics.
     this->learn_registration_signature_(frame);
-    if (frame.route == protocol::RouteKind::ROUTE_00_FF) {
+    if (frame.role == protocol::FrameRole::CONTROLLER_POLL_0E) {
       this->observe_startup_poll_(this->last_valid_frame_at_);
     }
     if (frame.route == protocol::RouteKind::ROUTE_FF_40) {
