@@ -179,7 +179,9 @@ inline bool parse_frame(const std::vector<uint8_t> &raw, ParsedFrame &out) {
   out.body_length = body_length;
   out.checksum = raw.back();
   out.route = classify_route(out.source, out.destination);
-  out.reference_body_length = is_reference_body_length(out.route, body_length);
+  out.reference_body_length =
+      out.message_type == MESSAGE_TYPE &&
+      is_reference_body_length(out.route, body_length);
   out.role = classify_role(out.route, out.message_type, body_length);
   out.payload.assign(raw.begin() + HEADER_SIZE, raw.end() - 1);
 
