@@ -186,6 +186,22 @@ enabled but not-yet-learned legacy experiment is labeled
 `legacy_reference_probe`; only a learned compatible legacy bus is labeled
 `learned_legacy_bus`.
 
+### Fail-closed legacy session gating
+
+A checksum-valid route shape is not enough to drive the legacy transmitter.
+The active GKH/XK76 experiment now arms only from the exact proven
+`0x11 / 00->FF / body 0x0E` poll role, and it learns a three-byte unit
+signature only from the proven pre-registration `0x11 / FF->40 / body
+0x16|0x17` status roles. A route-compatible frame with another message type
+or body layout remains capture evidence, but cannot arm registration or teach
+the transmit template.
+
+The offline trace analyzer uses the same rule. Legacy layout labels include the
+message type as part of their identity, and a checksum-valid `FF->00` frame
+with an unproven type/layout is no longer counted as a legacy controller reply.
+This keeps a future XE71 capture from being made to look legacy merely because
+two structural route bytes happen to match.
+
 ## Current conclusion
 
 The electrical target remains COM-MANUAL RS485, and the public XK19/GKH work
