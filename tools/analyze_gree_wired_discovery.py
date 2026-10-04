@@ -23,7 +23,13 @@ SCAN_RE = re.compile(
 )
 HEALTH_RE = re.compile(r"\bHEALTH\s+(?P<body>.+)$")
 KV_RE = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>\S+)")
-TX_RE = re.compile(r"\bTX\s+(?:legacy\s+GKH/XK76|controller registration)")
+TX_RE = re.compile(
+    r"\b(?:"
+    r"TX\s+(?:legacy\s+GKH/XK76\s+registration|complete\s+registration|"
+    r"controller\s+runtime\s+response)|"
+    r"Controller\s+(?:registration|runtime\s+response)\s+TX\s+flush"
+    r")"
+)
 BOOT_PROFILE_RE = re.compile(
     r"Passive UART profile scan enabled;.*\bboot_profile=(?P<profile>\S+)"
 )
@@ -31,7 +37,7 @@ BOOT_STAGED_RE = re.compile(
     r"SCAN listening profile=(?P<profile>\S+) phase=boot-staged"
 )
 CLOCK_RE = re.compile(
-    r"\[(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})\.(?P<f>\d{1,6})\]"
+    r"\[(?P<h>\d+):(?P<m>\d{2}):(?P<s>\d{2})\.(?P<f>\d{1,6})\]"
 )
 
 REFERENCE_BAUDS = (1200, 2400, 4800, 9600, 19200, 38400)
@@ -107,7 +113,19 @@ class DiscoveryAnalysis:
         ]
         if len(timestamps) < 2:
             return None
-        return max(timestamps) - min(timestamps)
+
+        # ESPHome's bracket clock is monotonic within one boot, but pasted
+        # journals can contain more than one boot. Never let a clock reset turn
+        # two short silent windows into one apparently long qualification run.
+        longest = 0.0
+        segment_start = timestamps[0]
+        previous = timestamps[0]
+        for current in timestamps[1:]:
+            if current < previous:
+                longest = max(longest, previous - segment_start)
+                segment_start = current
+            previous = current
+        return max(longest, previous - segment_start)
 
     @property
     def declared_boot_profile(self) -> Optional[str]:
