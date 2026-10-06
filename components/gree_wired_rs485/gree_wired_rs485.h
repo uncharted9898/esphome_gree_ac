@@ -177,7 +177,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              YESNO(this->legacy_gkh_xk76_probe_enabled_()));
     ESP_LOGI(TAG,
              "Current Vireo R32 provenance: GREE GMS GW supports this family on "
-             "Gree split RS485 Line 1/2; SetupUtility labels both HVAC lines DCBAS");
+             "local split-system RS485; public GMS docs label Line 1/2 DCBAS, while "
+             "ToolBox 2.1.23 contains DCABAS/DCAB and distinct Gree CG4/CG5/AG4 line types");
     ESP_LOGI(TAG,
              "Legacy comparison decoder only: 1200 baud 8N1, 7E 7E framing, "
              "type 0x11, XOR checksum; do not promote this into DCBAS/XE71 semantics");
@@ -205,8 +206,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->direction_high_seen_sensor_ != nullptr) this->direction_high_seen_sensor_->publish_state(false);
     if (this->protocol_sensor_ != nullptr) {
       this->protocol_sensor_->publish_state(
-          "target=current Gree split RS485 (VIREO R32 / GMS GW DCBAS); "
-          "wire format=UNLEARNED; legacy 1200-8N1/7E7E decoder=REFERENCE_ONLY");
+          "target=current GMS GW / VIREO R32 local RS485; driver=UNRESOLVED "
+          "(docs:DCBAS; ToolBox:DCABAS/DCAB vs Gree CG4/CG5/AG4); "
+          "legacy 1200-8N1/7E7E decoder=REFERENCE_ONLY");
     }
     if (this->registered_status_sensor_ != nullptr) this->registered_status_sensor_->publish_state(false);
     this->publish_controller_state_();
