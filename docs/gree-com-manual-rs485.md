@@ -117,6 +117,21 @@ this test a known electrical baseline; a result change when COM-MANUAL is
 reconnected proves the HVAC side is materially loading/biasing the pair even
 when no UART transitions are observed.
 
+## Current GMS GW / DCBAS lead
+
+GREE's current GMS GW integration path lists VIREO R32 as a supported split
+family and connects supported indoor units through the gateway's Gree split
+RS485 HVAC lines. SetupUtility identifies those line drivers as
+`DCBAS (DCBAS)`.
+
+This is stronger target provenance than the historical XK19/GKH captures:
+there is a current shipping gateway that can locally run/stop the unit, change
+setpoint/mode/fan/louver, and read alarms/room temperature on this generation.
+The exact DCBAS byte protocol is still unpublished, so the repository does not
+invent framing or transmit bytes from the label alone. From this point, the
+legacy 1200-8N1/7E7E path is reference-only for Vireo and the primary reverse-
+engineering target is DCBAS/current Gree split RS485.
+
 ## R32 startup FE finding and safety gate
 
 The target Vireo has a repeatable startup observation: attaching the Seeed
