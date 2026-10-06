@@ -56,6 +56,11 @@ ota:
 #   120R termination -> OFF
 #   5V selector -> IN
 #
+# Note: 120R OFF does not make the Seeed V1.1 front-end electrically neutral.
+# Its populated RS485 network still biases B toward 3.3V through R10=10k and A
+# toward GND through R11=10k, with 10-ohm series R13/R14. This matters because
+# the Vireo gas-sensor and wired-controller functions share COM-MANUAL.
+#
 # R32 qualification note:
 # The indoor display flashes FE three to four times during a cold start whenever
 # the Seeed A/B pair is connected, regardless of which way A/B is oriented.
