@@ -107,10 +107,10 @@ class WiredDeploymentContractTests(unittest.TestCase):
 
     def test_vireo_protocol_surface_labels_legacy_profile_as_unproven(self):
         text = HEADER.read_text()
-        self.assertIn("Legacy reference decode profile", text)
-        self.assertIn("XE71/Vireo application protocol is unproven", text)
-        self.assertIn("candidate legacy wired profile", text)
-        self.assertIn("XE71/Vireo unproven", text)
+        self.assertIn("Current Vireo R32 provenance", text)
+        self.assertIn("Gree split RS485 Line 1/2", text)
+        self.assertIn("DCBAS", text)
+        self.assertIn("legacy 1200-8N1/7E7E decoder=REFERENCE_ONLY", text)
         self.assertIn("unit=UNLEARNED", text)
         self.assertIn("provenance=legacy_codec_reference", text)
         self.assertIn(
