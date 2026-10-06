@@ -80,6 +80,43 @@ For first connection:
    the component for deliberate experiments but is no longer emitted merely by
    booting the Vireo field package.
 
+## Seeed V1.1 receive-path and bus-bias qualification
+
+The October 6 field build added a receive-only TP8485E RO-path self-test. With
+DE held LOW throughout, the ESP32 briefly applies opposite weak pulls only to
+GPIO7/RO. The target returned an actively driven HIGH in both cases. This proves
+the XIAO GPIO7 path, TP8485E RO output, and receiver-enable path are alive; the
+earlier 100%-HIGH reading was not merely the ESP32 weak pull-up holding a
+disconnected GPIO.
+
+That result is deliberately **not** treated as proof that COM-MANUAL is being
+actively driven. TP8485E is a full-fail-safe RS485 receiver and specifies RO
+HIGH for floating inputs, shorted inputs, and a terminated but undriven bus.
+The diagnostic therefore reports
+`RO_ACTIVE_HIGH_FAILSAFE_OR_BUS_HIGH`, not "bus high" or "bus active".
+
+The official Seeed XIAO RS485 V1.1 schematic also shows that "120R OFF" does
+not make the board electrically transparent. The populated RS485-side network
+includes 10 kOhm bias resistors from the B-side node to 3.3 V (R10) and from
+the A-side node to GND (R11), plus 10 ohm series resistors R13/R14. R7 is the
+separately switchable 120 ohm termination. The 4.7 kOhm parts R4/R5 are marked
+not-populated on the TTL/RO side and must not be described as A/B bias.
+
+That matters on this target because the Vireo R32 service wiring explicitly
+places both optional AP3 wired controller and AP6 gas sensor on COM-MANUAL.
+The field unit also flashes FE only when the Seeed A/B pair is attached. The
+current priority is therefore to qualify whether the Seeed front-end is
+changing the shared COM-MANUAL idle/loading state before assigning the
+zero-edge observation to XE71 session behavior.
+
+One decisive baseline is sufficient: with HVAC power removed before changing
+wiring, leave the factory gas-sensor harness untouched and disconnect only the
+Seeed A/B pair. On the next safe power-up, compare the receiver-path result to
+the connected result. The Seeed V1.1 schematic's own 10 kOhm bias network gives
+this test a known electrical baseline; a result change when COM-MANUAL is
+reconnected proves the HVAC side is materially loading/biasing the pair even
+when no UART transitions are observed.
+
 ## R32 startup FE finding and safety gate
 
 The target Vireo has a repeatable startup observation: attaching the Seeed
@@ -184,8 +221,11 @@ The follow-up pull-up run did exactly that: all four attempts completed with
 `phase_gap_edges=0`, `rx_edges=0`, `pending_after_release=0` and no
 decoded bytes. The health log remained at `rx_edges_total=0`,
 `bytes=0`, `valid=0`, `polls=0`, and `status29=0` for the rest of
-the capture. This closes the floating-RO/self-echo question and leaves the
-XE71/Vireo session layer as the next unresolved boundary.
+the capture. The October 6 RO-path self-test further proves the MCU-side
+receiver path is alive. It does **not** yet prove that the A/B pair is correctly
+loaded or electrically transparent, because TP8485E full fail-safe also drives
+RO HIGH for an open/shorted/terminated-undriven bus. XE71 session work resumes
+only after that A/B electrical boundary is qualified.
 
 Because this evidence is negative but clean, the normal
 `gree-vireo-xiao-rs485-listen-only.yaml` package no longer enables the
