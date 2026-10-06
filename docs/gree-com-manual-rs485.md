@@ -120,17 +120,22 @@ when no UART transitions are observed.
 ## Current GMS GW / DCBAS lead
 
 GREE's current GMS GW integration path lists VIREO R32 as a supported split
-family and connects supported indoor units through the gateway's Gree split
-RS485 HVAC lines. SetupUtility identifies those line drivers as
-`DCBAS (DCBAS)`.
+family. Its public manual shows HVAC Lines 1 and 2 as `DCBAS (DCBAS)`, while
+the directly extracted ToolBox 2.1.23 `setuputility.exe` contains a line type
+named `DCABAS` with internal token `DCAB`.
 
-This is stronger target provenance than the historical XK19/GKH captures:
-there is a current shipping gateway that can locally run/stop the unit, change
-setpoint/mode/fan/louver, and read alarms/room temperature on this generation.
-The exact DCBAS byte protocol is still unpublished, so the repository does not
-invent framing or transmit bytes from the label alone. From this point, the
-legacy 1200-8N1/7E7E path is reference-only for Vireo and the primary reverse-
-engineering target is DCBAS/current Gree split RS485.
+The same binary also exposes a **separate** Gree line family with identifiers
+`CG4`, `CG5`, and `AG4`. That distinction is important: neither the manual
+label nor the ToolBox string alone proves which line driver speaks to VIREO R32
+or what bytes appear on COM-MANUAL. The DCBAS/DCABAS naming difference may be
+version-specific or may identify a gateway-side module rather than the indoor
+wire protocol.
+
+What is proven is that a current shipping gateway can locally run/stop VIREO
+R32, change setpoint/mode/fan/louver, and read alarms/room temperature over a
+supported local integration. The exact Vireo line driver and byte protocol
+remain the primary reverse-engineering target. Legacy 1200-8N1/7E7E stays
+reference-only.
 
 ## R32 startup FE finding and safety gate
 
