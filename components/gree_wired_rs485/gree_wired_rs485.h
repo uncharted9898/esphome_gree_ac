@@ -755,9 +755,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     const char *result = "INDETERMINATE_ACTIVITY";
     if (weak_down > 0 && weak_up > 0) {
-      result = "RO_DRIVEN_HIGH";
+      // TP8485E has full fail-safe receive behavior: an actively driven RO=HIGH
+      // proves the RO//RE path is alive, but does NOT prove A/B is being driven.
+      // Floating, shorted, or terminated-but-undriven inputs also produce HIGH.
+      result = "RO_ACTIVE_HIGH_FAILSAFE_OR_BUS_HIGH";
     } else if (weak_down == 0 && weak_up == 0) {
-      result = "RO_DRIVEN_LOW";
+      result = "RO_ACTIVE_LOW";
     } else if (weak_down == 0 && weak_up > 0) {
       result = "RO_HIGH_Z_OR_DISCONNECTED";
     }
@@ -773,6 +776,14 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "(no_pull=%d weak_down=%d weak_up=%d DE=%d); TP8485E RO is "
                "high-Z/disconnected or receiver-enable path is wrong",
                this->rx_line_gpio_, no_pull, weak_down, weak_up,
+               this->read_gpio_level_(this->direction_gpio_));
+    } else if (std::string(result) == "RO_ACTIVE_HIGH_FAILSAFE_OR_BUS_HIGH") {
+      ESP_LOGI(TAG,
+               "RX receiver-path self-test result=%s GPIO%d no_pull=%d "
+               "weak_down=%d weak_up=%d DE=%d; RO//RE path is alive, but "
+               "TP8485E full fail-safe also outputs HIGH for floating, shorted, "
+               "or terminated-undriven A/B; this does not prove bus traffic",
+               result, this->rx_line_gpio_, no_pull, weak_down, weak_up,
                this->read_gpio_level_(this->direction_gpio_));
     } else {
       ESP_LOGI(TAG,
