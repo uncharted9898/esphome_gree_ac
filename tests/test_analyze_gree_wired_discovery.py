@@ -72,7 +72,7 @@ class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
         self.assertTrue(summary["sustained_physical_silence"])
         self.assertEqual(
             summary["recommended_next_step"],
-            "change_topology_or_attach_supported_controller_before_profile_sweep",
+            "target_current_vireo_dcbas_or_supported_gateway_before_profile_sweep",
         )
 
     def test_short_zero_activity_capture_requires_more_time(self):
