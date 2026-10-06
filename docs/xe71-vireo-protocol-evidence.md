@@ -205,25 +205,33 @@ two structural route bytes happen to match.
 ## Current-generation Vireo R32 control provenance
 
 GREE's current GMS GW integration documentation explicitly lists VIREO R32
-among supported split systems. The gateway exposes two Gree split-system
-RS485 HVAC lines and SetupUtility identifies those line drivers as
+among supported split systems and shows its first two HVAC lines configured as
 `DCBAS (DCBAS)`. The same integration surface provides direct run/stop,
 setpoint, mode, fan, louver, alarm and room-temperature control/monitoring for
 the supported indoor units.
 
-That establishes a current, shipping local-RS485 control path for the exact
-Vireo R32 generation. It does **not** publish DCBAS wire framing, baud,
-addressing bytes or XE71 startup packets, so those remain unlearned. However,
-it materially changes protocol priority: DCBAS/current Gree split RS485 is now
-the primary target. XK19/GKH/XK76 framing remains a comparison/reference family
-only and must not be used as the default interpretation of a Vireo capture.
+The October 6 ToolBox 2.1.23 installer was extracted directly. Its
+`setuputility.exe` retains symbols/source paths and contains a line type named
+`DCABAS` with internal token `DCAB`. Crucially, that binary also contains a
+separate Gree line family with `CG4`, `CG5`, and `AG4` identifiers.
+Therefore the public manual's `DCBAS` label must not yet be equated with the
+actual Vireo wire protocol or with the ToolBox's `DCABAS/DCAB` implementation.
+It may be a version/name difference, gateway-side module identity, or a
+different line driver.
+
+What is proven is narrower but still valuable: there is a current shipping
+local-RS485 control path for VIREO R32. The exact driver identity, wire
+framing, baud, addressing bytes and XE71 startup/session behavior remain
+unlearned. XK19/GKH/XK76 framing stays comparison/reference-only.
 
 ## Current conclusion
 
 The electrical target remains COM-MANUAL RS485. Current GMS GW documentation
-proves VIREO R32 is supported by the Gree split RS485/DBCAS integration family,
-so the unresolved boundary is now the DCBAS/XE71 wire format and session
-behavior. Public XK19/GKH work remains useful only for framing comparison.  XE71/XE72 documentation also
+proves VIREO R32 has a supported local-RS485 integration path, but ToolBox
+2.1.23 shows that DCABAS/DCAB and Gree CG4/CG5/AG4 are distinct line types.
+The unresolved boundary is therefore the exact GMS GW line-driver identity for
+Vireo R32 plus its XE71-side wire format/session behavior. Public XK19/GKH work
+remains useful only for framing comparison.  XE71/XE72 documentation also
 shows separate smart-zone CN2/CN3 node-address and termination settings, but
 XK19 documentation exposes the same smart-zone topology.  That topology is
 therefore capture metadata, not evidence that XE71 CN1 uses a different
