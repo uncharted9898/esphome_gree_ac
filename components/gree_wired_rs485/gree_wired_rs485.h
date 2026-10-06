@@ -176,8 +176,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
              YESNO(this->active_probe_),
              YESNO(this->legacy_gkh_xk76_probe_enabled_()));
     ESP_LOGI(TAG,
-             "Legacy reference decode profile: 1200 baud 8N1, 7E 7E framing, "
-             "type 0x11, XOR checksum; XE71/Vireo application protocol is unproven");
+             "Current Vireo R32 provenance: GREE GMS GW supports this family on "
+             "Gree split RS485 Line 1/2; SetupUtility labels both HVAC lines DCBAS");
+    ESP_LOGI(TAG,
+             "Legacy comparison decoder only: 1200 baud 8N1, 7E 7E framing, "
+             "type 0x11, XOR checksum; do not promote this into DCBAS/XE71 semantics");
     if (this->passive_scan_) {
       ESP_LOGI(TAG,
                "Passive UART profile scan enabled; RS485 transmitter remains disabled; "
@@ -202,8 +205,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (this->direction_high_seen_sensor_ != nullptr) this->direction_high_seen_sensor_->publish_state(false);
     if (this->protocol_sensor_ != nullptr) {
       this->protocol_sensor_->publish_state(
-          "candidate legacy wired profile: 1200-8N1; 7E7E; type11; xor=0; "
-          "XE71/Vireo unproven");
+          "target=current Gree split RS485 (VIREO R32 / GMS GW DCBAS); "
+          "wire format=UNLEARNED; legacy 1200-8N1/7E7E decoder=REFERENCE_ONLY");
     }
     if (this->registered_status_sensor_ != nullptr) this->registered_status_sensor_->publish_state(false);
     this->publish_controller_state_();
