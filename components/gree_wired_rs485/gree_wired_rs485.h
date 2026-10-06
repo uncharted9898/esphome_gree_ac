@@ -25,6 +25,7 @@
 #ifdef USE_ESP32
 #include "driver/gpio.h"
 #include "esp_timer.h"
+#include "esp_rom_sys.h"
 #endif
 
 namespace esphome {
@@ -134,6 +135,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_protocol_sensor(text_sensor::TextSensor *s) { this->protocol_sensor_ = s; }
   void set_serial_profile_sensor(text_sensor::TextSensor *s) { this->serial_profile_sensor_ = s; }
   void set_last_raw_rx_sensor(text_sensor::TextSensor *s) { this->last_raw_rx_sensor_ = s; }
+  void set_rx_receiver_path_sensor(text_sensor::TextSensor *s) {
+    this->rx_receiver_path_sensor_ = s;
+  }
   void set_ff40_appendix_sensor(text_sensor::TextSensor *s) { this->ff40_appendix_sensor_ = s; }
   void set_controller_state_sensor(text_sensor::TextSensor *s) { this->controller_state_sensor_ = s; }
   void set_ff40_payload_sensor(text_sensor::TextSensor *s) { this->ff40_payload_sensor_ = s; }
@@ -162,6 +166,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->setup_started_at_ = millis();
     if (!this->hardware_half_duplex_) {
       this->force_receive_mode_();
+      this->probe_rx_receiver_path_();
     }
 
     ESP_LOGI(TAG,
@@ -685,6 +690,101 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     ESP_LOGI(TAG, "RS485 direction guard active: GPIO%d forced LOW; UART is RX-only",
              this->direction_gpio_);
+#endif
+  }
+
+  void probe_rx_receiver_path_() {
+#ifdef USE_ESP32
+    if (this->rx_line_gpio_ < 0) {
+      if (this->rx_receiver_path_sensor_ != nullptr) {
+        this->rx_receiver_path_sensor_->publish_state("UNAVAILABLE_NO_RX_GPIO");
+      }
+      return;
+    }
+
+    // This is an MCU-side receiver-output test only. DE remains LOW throughout,
+    // so the TP8485E driver never drives the HVAC A/B pair. The weak ESP32
+    // pulls are applied only to RO/GPIO7. A healthy enabled TP8485E receiver
+    // should override them; a disconnected/high-Z RO follows the pulls.
+    if (this->direction_gpio_ >= 0 &&
+        this->read_gpio_level_(this->direction_gpio_) != 0) {
+      ESP_LOGE(TAG,
+               "RX receiver-path self-test skipped because RS485 DE GPIO%d is not LOW",
+               this->direction_gpio_);
+      if (this->rx_receiver_path_sensor_ != nullptr) {
+        this->rx_receiver_path_sensor_->publish_state("SKIPPED_DE_NOT_LOW");
+      }
+      return;
+    }
+
+    const auto gpio = static_cast<gpio_num_t>(this->rx_line_gpio_);
+    esp_err_t err = gpio_set_direction(gpio, GPIO_MODE_INPUT);
+    if (err != ESP_OK) {
+      ESP_LOGW(TAG, "RX receiver-path self-test could not set GPIO%d input: %s",
+               this->rx_line_gpio_, esp_err_to_name(err));
+      if (this->rx_receiver_path_sensor_ != nullptr) {
+        this->rx_receiver_path_sensor_->publish_state("GPIO_SETUP_FAILED");
+      }
+      return;
+    }
+
+    gpio_pullup_dis(gpio);
+    gpio_pulldown_dis(gpio);
+    esp_rom_delay_us(250);
+    const int no_pull = gpio_get_level(gpio);
+
+    gpio_pullup_dis(gpio);
+    gpio_pulldown_en(gpio);
+    esp_rom_delay_us(1000);
+    const int weak_down = gpio_get_level(gpio);
+
+    gpio_pulldown_dis(gpio);
+    gpio_pullup_en(gpio);
+    esp_rom_delay_us(1000);
+    const int weak_up = gpio_get_level(gpio);
+
+    // Restore the configured idle policy before UART setup takes ownership.
+    gpio_pulldown_dis(gpio);
+    if (this->rx_idle_pullup_) {
+      gpio_pullup_en(gpio);
+      this->rx_idle_pullup_active_ = true;
+    } else {
+      gpio_pullup_dis(gpio);
+      this->rx_idle_pullup_active_ = false;
+    }
+
+    const char *result = "INDETERMINATE_ACTIVITY";
+    if (weak_down > 0 && weak_up > 0) {
+      result = "RO_DRIVEN_HIGH";
+    } else if (weak_down == 0 && weak_up == 0) {
+      result = "RO_DRIVEN_LOW";
+    } else if (weak_down == 0 && weak_up > 0) {
+      result = "RO_HIGH_Z_OR_DISCONNECTED";
+    }
+
+    this->rx_receiver_path_state_ = result;
+    if (this->rx_receiver_path_sensor_ != nullptr) {
+      this->rx_receiver_path_sensor_->publish_state(result);
+    }
+
+    if (std::string(result) == "RO_HIGH_Z_OR_DISCONNECTED") {
+      ESP_LOGE(TAG,
+               "RX receiver-path self-test FAILED: GPIO%d follows weak bias "
+               "(no_pull=%d weak_down=%d weak_up=%d DE=%d); TP8485E RO is "
+               "high-Z/disconnected or receiver-enable path is wrong",
+               this->rx_line_gpio_, no_pull, weak_down, weak_up,
+               this->read_gpio_level_(this->direction_gpio_));
+    } else {
+      ESP_LOGI(TAG,
+               "RX receiver-path self-test result=%s GPIO%d no_pull=%d "
+               "weak_down=%d weak_up=%d DE=%d; test never enabled RS485 TX",
+               result, this->rx_line_gpio_, no_pull, weak_down, weak_up,
+               this->read_gpio_level_(this->direction_gpio_));
+    }
+#else
+    if (this->rx_receiver_path_sensor_ != nullptr) {
+      this->rx_receiver_path_sensor_->publish_state("UNAVAILABLE_NON_ESP32");
+    }
 #endif
   }
 
@@ -1638,6 +1738,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   std::vector<std::string> startup_frame_trace_;
   std::vector<std::string> registration_attempt_trace_;
   std::string last_raw_rx_hex_;
+  std::string rx_receiver_path_state_{"UNTESTED"};
   size_t last_raw_rx_size_{0};
 
   uint32_t frame_timeout_ms_{75};
@@ -1802,6 +1903,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *protocol_sensor_{nullptr};
   text_sensor::TextSensor *serial_profile_sensor_{nullptr};
   text_sensor::TextSensor *last_raw_rx_sensor_{nullptr};
+  text_sensor::TextSensor *rx_receiver_path_sensor_{nullptr};
   text_sensor::TextSensor *ff40_appendix_sensor_{nullptr};
   text_sensor::TextSensor *controller_state_sensor_{nullptr};
   text_sensor::TextSensor *ff40_payload_sensor_{nullptr};
