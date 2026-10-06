@@ -199,6 +199,9 @@ gree_wired_rs485:
   last_raw_rx:
     name: ${friendly_name} Last Raw RX Burst
     entity_category: diagnostic
+  rx_receiver_path:
+    name: ${friendly_name} RS485 Receiver Path
+    entity_category: diagnostic
 
   bus_active:
     name: ${friendly_name} COM-MANUAL Bus Active
