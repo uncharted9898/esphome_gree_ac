@@ -93,9 +93,11 @@ class WiredDeploymentContractTests(unittest.TestCase):
         package = PACKAGE.read_text()
 
         self.assertIn("probe_rx_receiver_path_();", text)
-        self.assertIn("RO_DRIVEN_HIGH", text)
-        self.assertIn("RO_DRIVEN_LOW", text)
+        self.assertIn("RO_ACTIVE_HIGH_FAILSAFE_OR_BUS_HIGH", text)
+        self.assertIn("RO_ACTIVE_LOW", text)
         self.assertIn("RO_HIGH_Z_OR_DISCONNECTED", text)
+        self.assertIn("full fail-safe", text)
+        self.assertIn("does not prove bus traffic", text)
         self.assertIn("gpio_pulldown_en(gpio)", text)
         self.assertIn("gpio_pullup_en(gpio)", text)
         self.assertIn("test never enabled RS485 TX", text)
