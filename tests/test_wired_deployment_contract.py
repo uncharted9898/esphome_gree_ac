@@ -87,6 +87,22 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("#   5V selector -> IN", text)
         self.assertIn("Deterministic manual RS485 direction", text)
 
+    def test_vireo_receiver_path_self_test_is_receive_only(self):
+        text = HEADER.read_text()
+        config = (ROOT / "components/gree_wired_rs485/__init__.py").read_text()
+        package = PACKAGE.read_text()
+
+        self.assertIn("probe_rx_receiver_path_();", text)
+        self.assertIn("RO_DRIVEN_HIGH", text)
+        self.assertIn("RO_DRIVEN_LOW", text)
+        self.assertIn("RO_HIGH_Z_OR_DISCONNECTED", text)
+        self.assertIn("gpio_pulldown_en(gpio)", text)
+        self.assertIn("gpio_pullup_en(gpio)", text)
+        self.assertIn("test never enabled RS485 TX", text)
+        self.assertNotIn("this->write_array", text[text.index("  void probe_rx_receiver_path_()"):text.index("\n  bool set_direction_level_", text.index("  void probe_rx_receiver_path_()"))])
+        self.assertIn('CONF_RX_RECEIVER_PATH = "rx_receiver_path"', config)
+        self.assertIn("RS485 Receiver Path", package)
+
     def test_vireo_protocol_surface_labels_legacy_profile_as_unproven(self):
         text = HEADER.read_text()
         self.assertIn("Legacy reference decode profile", text)
