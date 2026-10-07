@@ -10,6 +10,7 @@ REGISTRATION = ROOT / "components/gree_wired_rs485/controller_registration.h"
 CONTROLLER = ROOT / "components/gree_wired_rs485/wired_controller_state.h"
 PACKAGE = ROOT / "packages/gree-vireo-xiao-rs485-listen-only.yaml"
 LEGACY_OVERLAY = ROOT / "packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml"
+OEM_OVERLAY = ROOT / "packages/gree-vireo-xiao-rs485-oem-rtl-probe.yaml"
 PASSIVE_SCAN_OVERLAY = ROOT / "packages/gree-vireo-xiao-rs485-passive-profile-scan.yaml"
 VALIDATE_SCRIPT = ROOT / "scripts_validate.sh"
 
@@ -62,6 +63,8 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("passive_scan: false", text)
         self.assertIn("active_probe: false", text)
         self.assertIn("legacy_gkh_xk76_probe: false", text)
+        self.assertIn("oem_rtl_probe: false", text)
+        self.assertIn("oem_rtl_probe_delay: 5s", text)
         self.assertIn("active_probe_interval: 1200ms", text)
         self.assertIn("registration_attempts: 4", text)
         self.assertIn("silent_bootstrap_probe: false", text)
@@ -142,6 +145,40 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("legacy_gkh_xk76_probe_enabled_()", text)
         self.assertIn("active_probe_ && this->legacy_gkh_xk76_probe_", text)
         self.assertIn("TX legacy GKH/XK76 registration", text)
+
+    def test_oem_rtl_probe_is_bounded_and_separate_from_legacy_tx(self):
+        text = HEADER.read_text()
+        config = (ROOT / "components/gree_wired_rs485/__init__.py").read_text()
+        overlay = OEM_OVERLAY.read_text()
+        codec = (ROOT / "components/gree_wired_rs485/oem_probe_protocol.h").read_text()
+
+        self.assertIn('CONF_OEM_RTL_PROBE = "oem_rtl_probe"', config)
+        self.assertIn("disable all legacy GKH/XK76 transmit options", config)
+        self.assertIn("oem_rtl_probe: true", overlay)
+        self.assertIn("active_probe: false", overlay)
+        self.assertIn("legacy_gkh_xk76_probe: false", overlay)
+        self.assertIn("silent_bootstrap_probe: false", overlay)
+        self.assertIn("persistent_controller: false", overlay)
+        self.assertIn("4800-8E1", text)
+        self.assertIn("identity-0x02", text)
+        self.assertIn("mac-solicit-0x04", text)
+        self.assertIn("startup-sync-0x03", text)
+        self.assertIn("this->oem_mac_attempts_ < 6", text)
+        self.assertIn("this->oem_startup_sync_sent_ < 4", text)
+        self.assertIn("accepted_information_44", text)
+        self.assertIn("OEM RX valid cmd=0x%02X", text)
+        self.assertIn("BOOT_IDENTITY", codec)
+        self.assertIn("build_mac_report", codec)
+        self.assertIn("build_startup_sync", codec)
+        self.assertIn("build_nochange_poll", codec)
+
+        # The bounded startup path must not use the legacy controller codec or
+        # the climate-state no-change poll yet.
+        start = text.index("  void maybe_run_oem_rtl_probe_")
+        end = text.index("\n  void probe_rx_receiver_path_", start)
+        probe = text[start:end]
+        self.assertNotIn("controller::encode", probe)
+        self.assertNotIn("build_nochange_poll", probe)
 
     def test_passive_profile_scan_does_not_lock_on_raw_garbage(self):
         text = HEADER.read_text()
