@@ -72,7 +72,7 @@ class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
         self.assertTrue(summary["sustained_physical_silence"])
         self.assertEqual(
             summary["recommended_next_step"],
-            "capture_or_emulate_xk76ca_indoor_side_before_profile_sweep",
+            "run_bounded_4800_8e1_oem_controller_first_probe",
         )
 
     def test_short_zero_activity_capture_requires_more_time(self):
