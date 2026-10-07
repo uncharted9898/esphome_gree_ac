@@ -4,6 +4,10 @@ substitutions:
   wifi_ssid: ""
   wifi_password: ""
   ota_password: ""
+  # Field-test opt-in. Normal deployments remain passive unless the device YAML
+  # overrides this substitution to "true".
+  gree_oem_rtl_probe: "false"
+  gree_oem_rtl_probe_delay: "5s"
 
 esphome:
   name: ${device_name}
@@ -119,8 +123,8 @@ gree_wired_rs485:
   legacy_gkh_xk76_probe: false
   # Separate controller-first experiment recovered from two current GREE
   # RTL8720CF appliance-UART firmware generations. Kept off in the passive base.
-  oem_rtl_probe: false
-  oem_rtl_probe_delay: 5s
+  oem_rtl_probe: ${gree_oem_rtl_probe}
+  oem_rtl_probe_delay: ${gree_oem_rtl_probe_delay}
   active_probe_interval: 1200ms
   registration_attempts: 4
   silent_bootstrap_probe: false
