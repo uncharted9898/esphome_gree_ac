@@ -108,9 +108,10 @@ class WiredDeploymentContractTests(unittest.TestCase):
     def test_vireo_protocol_surface_labels_legacy_profile_as_unproven(self):
         text = HEADER.read_text()
         self.assertIn("Current Vireo R32 provenance", text)
-        self.assertIn("ToolBox 2.1.23 contains DCABAS/DCAB", text)
-        self.assertIn("distinct Gree CG4/CG5/AG4 line types", text)
-        self.assertIn("driver=UNRESOLVED", text)
+        self.assertIn("GMS GW supports this family through", text)
+        self.assertIn("XK76CA", text)
+        self.assertIn("2-core centralized-controller RS485", text)
+        self.assertIn("target=VIREO R32 indoor-side XK76/XE71 COM-MANUAL", text)
         self.assertIn("legacy 1200-8N1/7E7E decoder=REFERENCE_ONLY", text)
         self.assertIn("unit=UNLEARNED", text)
         self.assertIn("provenance=legacy_codec_reference", text)
