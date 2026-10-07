@@ -117,6 +117,10 @@ gree_wired_rs485:
   # transaction is recovered.
   active_probe: false
   legacy_gkh_xk76_probe: false
+  # Separate controller-first experiment recovered from two current GREE
+  # RTL8720CF appliance-UART firmware generations. Kept off in the passive base.
+  oem_rtl_probe: false
+  oem_rtl_probe_delay: 5s
   active_probe_interval: 1200ms
   registration_attempts: 4
   silent_bootstrap_probe: false
@@ -200,6 +204,12 @@ gree_wired_rs485:
     name: ${friendly_name} Legacy Registered Setpoint Candidate
     entity_category: diagnostic
     disabled_by_default: true
+  oem_valid_frames:
+    name: ${friendly_name} OEM Probe Valid Frames
+    entity_category: diagnostic
+  oem_last_command:
+    name: ${friendly_name} OEM Probe Last Command
+    entity_category: diagnostic
 
   last_frame:
     name: ${friendly_name} Last Frame
@@ -257,6 +267,12 @@ gree_wired_rs485:
     name: ${friendly_name} FF40 Indexed Payload
     entity_category: diagnostic
     disabled_by_default: true
+  oem_probe_state:
+    name: ${friendly_name} OEM Probe State
+    entity_category: diagnostic
+  oem_last_frame:
+    name: ${friendly_name} OEM Probe Last Frame
+    entity_category: diagnostic
 
   bus_active:
     name: ${friendly_name} COM-MANUAL Bus Active
