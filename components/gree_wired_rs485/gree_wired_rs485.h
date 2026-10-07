@@ -189,10 +189,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     ESP_LOGI(TAG,
              "Starting Gree COM-MANUAL monitor direction=%s active_probe=%s "
-             "legacy_gkh_xk76=%s",
+             "legacy_gkh_xk76=%s oem_rtl_probe=%s",
              this->hardware_half_duplex_ ? "UART_RS485_HALF_DUPLEX" : "MANUAL_GPIO",
              YESNO(this->active_probe_),
-             YESNO(this->legacy_gkh_xk76_probe_enabled_()));
+             YESNO(this->legacy_gkh_xk76_probe_enabled_()),
+             YESNO(this->oem_rtl_probe_));
     ESP_LOGI(TAG,
              "Current Vireo R32 provenance: GMS GW supports this family through "
              "XK76CA; published wiring connects GMS L1/L2 to the XK76 2-core "
@@ -217,11 +218,22 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     }
 
     if (this->listen_only_sensor_ != nullptr) {
-      this->listen_only_sensor_->publish_state(!this->legacy_gkh_xk76_probe_enabled_());
+      this->listen_only_sensor_->publish_state(
+          !this->legacy_gkh_xk76_probe_enabled_() && !this->oem_rtl_probe_);
     }
     if (this->bus_active_sensor_ != nullptr) this->bus_active_sensor_->publish_state(false);
     if (this->electrical_activity_sensor_ != nullptr) this->electrical_activity_sensor_->publish_state(false);
     if (this->direction_high_seen_sensor_ != nullptr) this->direction_high_seen_sensor_->publish_state(false);
+    if (this->oem_probe_state_sensor_ != nullptr) {
+      this->oem_probe_state_sensor_->publish_state(
+          this->oem_rtl_probe_ ? "armed-waiting-delay" : "disabled");
+    }
+    if (this->oem_valid_frames_sensor_ != nullptr) {
+      this->oem_valid_frames_sensor_->publish_state(0);
+    }
+    if (this->oem_last_command_sensor_ != nullptr) {
+      this->oem_last_command_sensor_->publish_state(0);
+    }
     if (this->protocol_sensor_ != nullptr) {
       this->protocol_sensor_->publish_state(
           "target=VIREO R32 indoor-side XK76/XE71 COM-MANUAL; startup=UNLEARNED; "
@@ -1972,6 +1984,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   }
 
   protocol::FrameAssembler assembler_;
+  oem::FrameAssembler oem_assembler_;
   diagnostics::LineActivityTracker rx_line_activity_;
   diagnostics::RegistrationRxWindow registration_rx_window_;
   std::map<uint16_t, std::vector<uint8_t>> previous_payloads_;
@@ -1983,11 +1996,16 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   std::vector<std::string> registration_attempt_trace_;
   std::string last_raw_rx_hex_;
   std::string rx_receiver_path_state_{"UNTESTED"};
+  std::string oem_probe_state_{"disabled"};
+  std::string oem_last_frame_hex_;
+  std::vector<uint8_t> oem_last_status_payload_;
   size_t last_raw_rx_size_{0};
 
   uint32_t frame_timeout_ms_{75};
   uint32_t active_probe_interval_ms_{1200};
   uint32_t silent_bootstrap_delay_ms_{5000};
+  uint32_t oem_rtl_probe_delay_ms_{5000};
+  uint32_t oem_probe_last_action_at_{0};
   uint32_t setup_started_at_{0};
   uint32_t registration_response_quiet_ms_{100};
   uint32_t startup_poll_rearm_gap_ms_{5000};
@@ -2034,6 +2052,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   uint32_t controller_polls_seen_{0};
   uint32_t controller_responses_sent_{0};
   uint32_t registered_status_frames_{0};
+  uint32_t oem_valid_frames_{0};
   uint32_t last_registration_tx_rx_edges_{0};
   uint32_t last_registration_turnaround_rx_edges_{0};
   uint32_t tx_rx_edges_total_{0};
@@ -2043,6 +2062,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   bool log_frames_{true};
   bool active_probe_{false};
   bool legacy_gkh_xk76_probe_{false};
+  bool oem_rtl_probe_{false};
   bool silent_bootstrap_probe_{false};
   bool silent_bootstrap_armed_{false};
   bool hardware_half_duplex_{false};
@@ -2060,6 +2080,13 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   controller::ControllerState controller_state_{controller::reference_state()};
   bool registration_accept_evidence_{false};
   bool runtime_response_pending_{false};
+  bool oem_uart_configured_{false};
+  bool oem_information_44_accepted_{false};
+  bool oem_status_31_seen_{false};
+  uint8_t oem_mac_attempts_{0};
+  uint8_t oem_startup_sync_sent_{0};
+  uint8_t oem_last_command_{0};
+  OemProbeStage oem_probe_stage_{OemProbeStage::IDLE};
   bool last_registration_tx_seen_{false};
   bool last_registration_tx_flush_ok_{false};
   bool tx_in_progress_{false};
@@ -2137,6 +2164,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   sensor::Sensor *controller_responses_sent_sensor_{nullptr};
   sensor::Sensor *registered_status_frames_sensor_{nullptr};
   sensor::Sensor *registered_setpoint_candidate_sensor_{nullptr};
+  sensor::Sensor *oem_valid_frames_sensor_{nullptr};
+  sensor::Sensor *oem_last_command_sensor_{nullptr};
 
   text_sensor::TextSensor *last_frame_sensor_{nullptr};
   text_sensor::TextSensor *last_payload_sensor_{nullptr};
@@ -2156,6 +2185,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *poll_payload_sensor_{nullptr};
   text_sensor::TextSensor *poll_changes_sensor_{nullptr};
   text_sensor::TextSensor *ff40_indexed_sensor_{nullptr};
+  text_sensor::TextSensor *oem_probe_state_sensor_{nullptr};
+  text_sensor::TextSensor *oem_last_frame_sensor_{nullptr};
 
   binary_sensor::BinarySensor *bus_active_sensor_{nullptr};
   binary_sensor::BinarySensor *listen_only_sensor_{nullptr};
