@@ -17,6 +17,7 @@
 #include "esphome/core/helpers.h"
 #include "controller_registration.h"
 #include "line_activity.h"
+#include "oem_probe_protocol.h"
 #include "registration_rx_window.h"
 #include "wired_controller_state.h"
 #include "wired_protocol.h"
@@ -24,6 +25,7 @@
 
 #ifdef USE_ESP32
 #include "driver/gpio.h"
+#include "esp_mac.h"
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
 #endif
@@ -50,6 +52,10 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_active_probe(bool active_probe) { this->active_probe_ = active_probe; }
   void set_legacy_gkh_xk76_probe(bool enabled) {
     this->legacy_gkh_xk76_probe_ = enabled;
+  }
+  void set_oem_rtl_probe(bool enabled) { this->oem_rtl_probe_ = enabled; }
+  void set_oem_rtl_probe_delay(uint32_t delay_ms) {
+    this->oem_rtl_probe_delay_ms_ = delay_ms;
   }
   void set_active_probe_interval(uint32_t interval_ms) { this->active_probe_interval_ms_ = interval_ms; }
   void set_registration_attempts(uint8_t attempts) { this->registration_attempt_limit_ = attempts; }
@@ -121,6 +127,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_registered_setpoint_candidate_sensor(sensor::Sensor *s) {
     this->registered_setpoint_candidate_sensor_ = s;
   }
+  void set_oem_valid_frames_sensor(sensor::Sensor *s) {
+    this->oem_valid_frames_sensor_ = s;
+  }
+  void set_oem_last_command_sensor(sensor::Sensor *s) {
+    this->oem_last_command_sensor_ = s;
+  }
 
   void set_last_frame_sensor(text_sensor::TextSensor *s) { this->last_frame_sensor_ = s; }
   void set_last_payload_sensor(text_sensor::TextSensor *s) { this->last_payload_sensor_ = s; }
@@ -146,6 +158,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_poll_payload_sensor(text_sensor::TextSensor *s) { this->poll_payload_sensor_ = s; }
   void set_poll_changes_sensor(text_sensor::TextSensor *s) { this->poll_changes_sensor_ = s; }
   void set_ff40_indexed_sensor(text_sensor::TextSensor *s) { this->ff40_indexed_sensor_ = s; }
+  void set_oem_probe_state_sensor(text_sensor::TextSensor *s) {
+    this->oem_probe_state_sensor_ = s;
+  }
+  void set_oem_last_frame_sensor(text_sensor::TextSensor *s) {
+    this->oem_last_frame_sensor_ = s;
+  }
 
   void set_bus_active_sensor(binary_sensor::BinarySensor *s) { this->bus_active_sensor_ = s; }
   void set_listen_only_sensor(binary_sensor::BinarySensor *s) { this->listen_only_sensor_ = s; }
