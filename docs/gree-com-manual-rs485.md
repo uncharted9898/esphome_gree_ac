@@ -184,6 +184,62 @@ sequence above, accepts any additive-checksum-valid reply, retains the complete
 frame and command byte, and then stops. It does not emit a climate-state
 command. The normal passive package keeps this probe disabled.
 
+## October 7 OEM probe result and direct-COM-MANUAL pivot
+
+The bounded 4800-8E1 OEM controller-first experiment has now been run on the
+field Vireo. It emitted the exact recovered identity frame, six command-`0x04`
+MAC solicitations, and four command-`0x03` startup-sync frames. The probe then
+completed with `valid=0 last_cmd=0x00 info44=NO status31=NO`.
+
+More importantly, the GPIO-level evidence stayed at **zero receive transitions**
+for the complete experiment and afterward:
+
+- `profile=4800-8E1`
+- `bytes=0`
+- `uart_window=0`
+- `rx_edges_total=0`
+- `rx_level=1`
+- `de_level=0` after every transmit window
+
+This is a clean negative for the current GREE Wi-Fi-module application-layer
+startup on this COM-MANUAL target. It is not a parser failure and does not
+justify more passive 4800-8E1 captures.
+
+A stronger direct-COM-MANUAL implementation has now been identified:
+ONOKOM's GR-3 family is specifically the wired Gree gateway family, while
+GR-1 is the Wi-Fi-port family. ONOKOM's published hardware presentation shows
+the GR-3 main controller connected to its GR-A3 physical adapter over
+`DE / GND / RX / TX`, which strongly indicates the protocol engine runs in
+the main controller and GR-A3 is the physical bus front end.
+
+The public ONOKOM Zigbee OTA archive contains both Gree variants:
+
+- `GR-1-ZB-S` firmware 0.6.1 / OTA20
+- `GR-3-ZB-S` firmware 0.6.2 / OTA21
+
+Both are Silicon Labs GBL images with the encryption-init tag present, so their
+application payloads are not directly recoverable without the device OTA key.
+
+The Modbus GR-3 firmware path is more promising. ONOKOM's own support material
+uses Wiren Board `.wbfw` packages, and the public release metadata identifies:
+
+- `ok_gr3b` -> current release `26.08.01`
+- `ok_gr3c` -> current release `26.08.01`
+
+The Wiren Board updater constructs firmware paths as:
+
+`fw/by-signature/<signature>/main/<version>.wbfw`
+
+Therefore the exact public targets to acquire are:
+
+- `https://fw-releases.wirenboard.com/fw/by-signature/ok_gr3b/main/26.08.01.wbfw`
+- `https://fw-releases.wirenboard.com/fw/by-signature/ok_gr3c/main/26.08.01.wbfw`
+
+The `.wbfw` format is not an opaque vendor archive to the updater: the open
+Wiren Board flasher writes a 32-byte info block followed by raw 136-byte data
+blocks. That makes either GR-3 image a substantially better reverse-engineering
+target than the encrypted Zigbee GBL.
+
 ## R32 startup FE finding and safety gate
 
 The target Vireo has a repeatable startup observation: attaching the Seeed
