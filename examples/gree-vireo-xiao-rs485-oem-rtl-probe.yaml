@@ -1,0 +1,8 @@
+substitutions:
+  device_name: gree-vireo-wired-monitor
+  friendly_name: Gree Vireo Wired Monitor
+  gree_oem_rtl_probe: "true"
+  gree_oem_rtl_probe_delay: "5s"
+
+packages:
+  base: !include ../packages/gree-vireo-xiao-rs485-listen-only.yaml
