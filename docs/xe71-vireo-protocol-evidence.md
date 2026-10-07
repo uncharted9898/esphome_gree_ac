@@ -257,6 +257,35 @@ real XE71/XE72 capture:
 - the GKH/XK76 accept-counter location
 - the XK19 attention/session packet timing
 
+## Current controller-first hypothesis
+
+The Vireo field evidence now supports a second, independent protocol
+hypothesis that does not require any additional GREE hardware. Two audited
+RTL8720CF GREE Wi-Fi-module firmware generations use a controller-first
+appliance-UART startup at 4800-8E1 with additive `7E 7E LEN CMD ... SUM`
+framing. Both emit the same command-`0x02` identity frame, retry a
+MAC-bearing command-`0x04` up to six times while waiting for command
+`0x44`, then emit the same 29-byte neutral command-`0x03` startup frame four
+times before normal status/control polling begins.
+
+This family is separate from the legacy wired `1200-8N1 / type 0x11 / XOR`
+codec. There is not yet evidence that the Vireo's four-wire COM-MANUAL bus
+uses the RTL application layer, so the implementation is intentionally a
+bounded probe rather than a promoted protocol decoder.
+
+The dedicated `oem_rtl_probe` path:
+
+- owns the live UART at 4800-8E1 only for the bounded experiment;
+- cannot be enabled together with any legacy GKH/XK76 transmit option;
+- sends no climate-state command;
+- retains and logs every additive-checksum-valid response independently of the
+  legacy XOR parser;
+- stops after six maximum `0x04` attempts and four startup-sync frames.
+
+A single valid response would immediately distinguish this controller-first
+family from the long passive-zero state and give an authentic Vireo command/
+payload to continue from.
+
 ## Explicit legacy-probe gate
 
 The component retains the GKH/XK76 encoder because it is valid research
