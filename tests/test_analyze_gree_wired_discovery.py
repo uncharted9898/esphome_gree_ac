@@ -72,7 +72,7 @@ class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
         self.assertTrue(summary["sustained_physical_silence"])
         self.assertEqual(
             summary["recommended_next_step"],
-            "target_current_gms_gw_vireo_rs485_driver_before_profile_sweep",
+            "capture_or_emulate_xk76ca_indoor_side_before_profile_sweep",
         )
 
     def test_short_zero_activity_capture_requires_more_time(self):
