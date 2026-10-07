@@ -295,7 +295,7 @@ def recommended_next_step(analysis: DiscoveryAnalysis) -> str:
     if analysis.transmit_lines:
         return "repeat_as_receive_only_capture"
     if sustained_physical_silence(analysis):
-        return "target_current_gms_gw_vireo_rs485_driver_before_profile_sweep"
+        return "capture_or_emulate_xk76ca_indoor_side_before_profile_sweep"
     if state == "edge_activity_without_uart_decode":
         return "run_cold_start_serial_profile_matrix"
     if state == "uart_decode_candidates_without_legacy_validation":
