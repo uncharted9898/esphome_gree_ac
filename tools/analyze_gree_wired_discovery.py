@@ -295,7 +295,7 @@ def recommended_next_step(analysis: DiscoveryAnalysis) -> str:
     if analysis.transmit_lines:
         return "repeat_as_receive_only_capture"
     if sustained_physical_silence(analysis):
-        return "capture_or_emulate_xk76ca_indoor_side_before_profile_sweep"
+        return "run_bounded_4800_8e1_oem_controller_first_probe"
     if state == "edge_activity_without_uart_decode":
         return "run_cold_start_serial_profile_matrix"
     if state == "uart_decode_candidates_without_legacy_validation":
