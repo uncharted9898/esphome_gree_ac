@@ -548,9 +548,11 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
                "edge_max_gap_us=%lu edge_last_gap_us=%lu "
                "rx_high=%.1f%% rx_samples=%lu last_raw=%u:%s "
                "startup_rx=%u:%s",
-               this->legacy_gkh_xk76_probe_enabled_()
-                   ? "LEGACY_GKH_XK76"
-                   : "PASSIVE",
+               this->oem_rtl_probe_
+                   ? "OEM_RTL"
+                   : (this->legacy_gkh_xk76_probe_enabled_()
+                          ? "LEGACY_GKH_XK76"
+                          : "PASSIVE"),
                this->hardware_half_duplex_ ? "UART_RS485" : "MANUAL",
                static_cast<unsigned>(this->registration_attempts_sent_),
                static_cast<unsigned>(this->registration_attempt_limit_),
