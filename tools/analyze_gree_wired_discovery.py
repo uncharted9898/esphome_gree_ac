@@ -30,6 +30,14 @@ TX_RE = re.compile(
     r"Controller\s+(?:registration|runtime\s+response)\s+TX\s+flush"
     r")"
 )
+OEM_TX_RE = re.compile(
+    r"\bOEM\s+TX\s+(?P<label>\S+)\s+profile=(?P<profile>\S+)"
+)
+OEM_COMPLETE_RE = re.compile(
+    r"\bOEM probe complete:\s+complete\s+valid=(?P<valid>\d+)\s+"
+    r"last_cmd=0x(?P<last_cmd>[0-9A-Fa-f]{2})\s+"
+    r"info44=(?P<info44>YES|NO)\s+status31=(?P<status31>YES|NO)"
+)
 BOOT_PROFILE_RE = re.compile(
     r"Passive UART profile scan enabled;.*\bboot_profile=(?P<profile>\S+)"
 )
@@ -83,12 +91,23 @@ class CadenceHint:
     relative_error: float
 
 
+@dataclass(frozen=True)
+class OemProbeCompletion:
+    source_line: int
+    valid_frames: int
+    last_command: int
+    info44: bool
+    status31: bool
+
+
 @dataclass
 class DiscoveryAnalysis:
     profiles: list[ProfileObservation]
     health: list[HealthObservation]
     transmit_lines: list[int]
     boot_profiles: list[BootProfileObservation]
+    oem_transmit_lines: list[int]
+    oem_probe_completion: Optional[OemProbeCompletion]
 
     @property
     def max_edges_total(self) -> int:
@@ -174,6 +193,8 @@ def analyze_log(text: str) -> DiscoveryAnalysis:
     health: list[HealthObservation] = []
     transmit_lines: list[int] = []
     boot_profiles: list[BootProfileObservation] = []
+    oem_transmit_lines: list[int] = []
+    oem_probe_completion: Optional[OemProbeCompletion] = None
 
     for line_number, line in enumerate(text.splitlines(), start=1):
         boot = BOOT_PROFILE_RE.search(line)
@@ -234,11 +255,28 @@ def analyze_log(text: str) -> DiscoveryAnalysis:
         if TX_RE.search(line):
             transmit_lines.append(line_number)
 
+        oem_tx = OEM_TX_RE.search(line)
+        if oem_tx:
+            transmit_lines.append(line_number)
+            oem_transmit_lines.append(line_number)
+
+        oem_complete = OEM_COMPLETE_RE.search(line)
+        if oem_complete:
+            oem_probe_completion = OemProbeCompletion(
+                source_line=line_number,
+                valid_frames=int(oem_complete.group("valid")),
+                last_command=int(oem_complete.group("last_cmd"), 16),
+                info44=oem_complete.group("info44") == "YES",
+                status31=oem_complete.group("status31") == "YES",
+            )
+
     return DiscoveryAnalysis(
         profiles=profiles,
         health=health,
         transmit_lines=transmit_lines,
         boot_profiles=boot_profiles,
+        oem_transmit_lines=oem_transmit_lines,
+        oem_probe_completion=oem_probe_completion,
     )
 
 
@@ -292,10 +330,18 @@ def sustained_physical_silence(
 
 def recommended_next_step(analysis: DiscoveryAnalysis) -> str:
     state = conclusion(analysis)
+    if state == "oem_rtl_probe_no_response":
+        return "recover_direct_com_manual_protocol_from_onokom_gr3_firmware"
+    if state == "oem_rtl_probe_response_present":
+        return "analyze_oem_response_frames_and_promote_verified_transport"
+    if state == "oem_rtl_probe_electrical_response_without_valid_frame":
+        return "preserve_raw_response_and_test_only_evidence_backed_uart_variants"
+    if state == "oem_rtl_probe_incomplete":
+        return "capture_complete_bounded_oem_probe_run"
     if analysis.transmit_lines:
         return "repeat_as_receive_only_capture"
     if sustained_physical_silence(analysis):
-        return "run_bounded_4800_8e1_oem_controller_first_probe"
+        return "recover_direct_com_manual_protocol_from_onokom_gr3_firmware"
     if state == "edge_activity_without_uart_decode":
         return "run_cold_start_serial_profile_matrix"
     if state == "uart_decode_candidates_without_legacy_validation":
@@ -308,6 +354,15 @@ def recommended_next_step(analysis: DiscoveryAnalysis) -> str:
 
 
 def conclusion(analysis: DiscoveryAnalysis) -> str:
+    if analysis.oem_probe_completion is not None:
+        completion = analysis.oem_probe_completion
+        if completion.valid_frames > 0:
+            return "oem_rtl_probe_response_present"
+        if analysis.max_edges_total == 0 and analysis.max_bytes_total == 0:
+            return "oem_rtl_probe_no_response"
+        return "oem_rtl_probe_electrical_response_without_valid_frame"
+    if analysis.oem_transmit_lines:
+        return "oem_rtl_probe_incomplete"
     if analysis.transmit_lines:
         return "capture_contains_tx_evidence"
     if not analysis.health and not analysis.profiles:
@@ -353,6 +408,12 @@ def summary_dict(analysis: DiscoveryAnalysis) -> dict:
     return {
         "conclusion": conclusion(analysis),
         "transmit_lines": analysis.transmit_lines,
+        "oem_transmit_lines": analysis.oem_transmit_lines,
+        "oem_probe_completion": (
+            asdict(analysis.oem_probe_completion)
+            if analysis.oem_probe_completion is not None
+            else None
+        ),
         "boot_profiles": [asdict(item) for item in analysis.boot_profiles],
         "declared_boot_profile": analysis.declared_boot_profile,
         "boot_profile_conflict": analysis.boot_profile_conflict,
