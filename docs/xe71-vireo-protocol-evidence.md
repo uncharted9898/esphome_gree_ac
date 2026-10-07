@@ -211,27 +211,34 @@ setpoint, mode, fan, louver, alarm and room-temperature control/monitoring for
 the supported indoor units.
 
 The October 6 ToolBox 2.1.23 installer was extracted directly. Its
-`setuputility.exe` retains symbols/source paths and contains a line type named
-`DCABAS` with internal token `DCAB`. Crucially, that binary also contains a
-separate Gree line family with `CG4`, `CG5`, and `AG4` identifiers.
-Therefore the public manual's `DCBAS` label must not yet be equated with the
-actual Vireo wire protocol or with the ToolBox's `DCABAS/DCAB` implementation.
-It may be a version/name difference, gateway-side module identity, or a
-different line driver.
+`setuputility.exe` retains symbols/source paths and its static `line_types`
+table identifies the actual Gree HVAC line entry as `Gree` / internal code
+`GR`. `CG4`, `CG5`, and `DCABAS/DCAB` are separate line types and must
+not be described as Gree indoor protocols.
 
-What is proven is narrower but still valuable: there is a current shipping
-local-RS485 control path for VIREO R32. The exact driver identity, wire
-framing, baud, addressing bytes and XE71 startup/session behavior remain
-unlearned. XK19/GKH/XK76 framing stays comparison/reference-only.
+More importantly, GREE's current GMS-GW installation manual exposes the bus
+boundary. The normal mini-split topology is GMS-GW -> XK76CA -> indoor unit.
+XK76CA contains an XK76 and two harnesses. The XK76 owner manual independently
+states that its 4-core terminal connects to the air conditioner while its
+2-core terminal connects to a centralized controller. The GMS-GW wiring
+diagram connects L1/L2 A/B to the XK76 controller-side A/B network. Therefore
+GMS-GW firmware primarily gives us the supervisory/centralized-controller side
+of XK76; it is not evidence for bytes on the 4-core COM-MANUAL indoor link.
+
+The primary target remains the Vireo R32 indoor-side XK76/XE71 COM-MANUAL
+session. An authentic XK76CA indoor-side capture is now the highest-value
+reference. XK19/GKH/XK76 framing remains comparison evidence until that newer
+Vireo-side transaction is observed.
 
 ## Current conclusion
 
-The electrical target remains COM-MANUAL RS485. Current GMS GW documentation
-proves VIREO R32 has a supported local-RS485 integration path, but ToolBox
-2.1.23 shows that DCABAS/DCAB and Gree CG4/CG5/AG4 are distinct line types.
-The unresolved boundary is therefore the exact GMS GW line-driver identity for
-Vireo R32 plus its XE71-side wire format/session behavior. Public XK19/GKH work
-remains useful only for framing comparison.  XE71/XE72 documentation also
+The electrical target remains the 4-core COM-MANUAL indoor link. Current
+GMS-GW documentation proves VIREO R32 has a supported local integration path,
+but the published path interposes XK76CA: GMS-GW talks to the XK76 2-core
+centralized-controller side while XK76 talks to the indoor unit on its 4-core
+terminal. The unresolved boundary is therefore the Vireo R32 indoor-side
+XK76/XE71 startup/session behavior, not the GMS gateway line label. Public
+XK19/GKH work remains useful only for framing comparison.  XE71/XE72 documentation also
 shows separate smart-zone CN2/CN3 node-address and termination settings, but
 XK19 documentation exposes the same smart-zone topology.  That topology is
 therefore capture metadata, not evidence that XE71 CN1 uses a different
