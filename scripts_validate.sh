@@ -71,6 +71,10 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/test_wired_protocol
 
 c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  tests/test_oem_wired_probe.cpp -o /tmp/test_oem_wired_probe
+/tmp/test_oem_wired_probe
+
+c++ -std=c++17 -Wall -Wextra -Werror -pedantic \
   tests/test_line_activity.cpp -o /tmp/test_line_activity
 /tmp/test_line_activity
 
@@ -143,6 +147,11 @@ wrappers = {
         f'  base: !include {vireo_base}\n'
         '  legacy: !include ../packages/gree-vireo-xiao-rs485-legacy-gkh-xk76-probe.yaml\n'
     ),
+    '.validation-gree-vireo-oem-rtl-probe.yaml': (
+        'packages:\n'
+        f'  base: !include {vireo_base}\n'
+        '  oem: !include ../packages/gree-vireo-xiao-rs485-oem-rtl-probe.yaml\n'
+    ),
     '.validation-gree-vireo-passive-profile-9600-8e1.yaml': (
         'substitutions:\n'
         '  gree_wired_scan_start_profile: "9600-8E1"\n'
@@ -174,7 +183,8 @@ for example in \
   examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml \
   examples/.validation-gree-vireo-passive-profile-scan.yaml \
   examples/.validation-gree-vireo-passive-profile-9600-8e1.yaml \
-  examples/.validation-gree-vireo-legacy-gkh-xk76-probe.yaml; do
+  examples/.validation-gree-vireo-legacy-gkh-xk76-probe.yaml \
+  examples/.validation-gree-vireo-oem-rtl-probe.yaml; do
   esphome config "$example"
 done
 
@@ -197,6 +207,10 @@ fi
 esphome compile examples/.validation-gree-livo-oem-boot-probe.yaml
 
 # Compile the deployment target for the pre-soldered Seeed XIAO ESP32-C3 +
-# RS485 expansion board. This verifies 1200-8N1 UART, firmware-owned GPIO4
-# manual DE direction, and the wired-controller registration path.
+# RS485 expansion board. This verifies the passive 1200-8N1 baseline.
 esphome compile examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml
+
+# Compile the bounded controller-first OEM experiment as well. The YAML starts
+# from the same passive image and changes the live UART to 4800-8E1 only at
+# runtime after the configured delay.
+esphome compile examples/.validation-gree-vireo-oem-rtl-probe.yaml
