@@ -75,6 +75,30 @@ class GreeWiredDiscoveryAnalyzerTests(unittest.TestCase):
             "run_bounded_4800_8e1_oem_controller_first_probe",
         )
 
+    def test_completed_oem_probe_with_zero_edges_is_clean_negative(self):
+        text = """
+[06:56:17.759][I][gree_wired_rs485]: SCAN listening profile=4800-8E1 phase=runtime-reload
+[06:56:17.807][I][gree_wired_rs485]: OEM TX identity-0x02 profile=4800-8E1 bytes=19: 7E 7E 10 02 00 00 00 00 00 00 03 00 28 1E 19 23 23 00 BA
+[06:56:18.060][I][gree_wired_rs485]: OEM TX mac-solicit-0x04 profile=4800-8E1 bytes=16: 7E 7E 0D 04 07 00 00 00 AC 27 6E 7E 15 04 00 F0
+[06:56:25.342][I][gree_wired_rs485]: OEM TX startup-sync-0x03 profile=4800-8E1 bytes=29: 7E 7E 1A 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 00 1E
+[06:56:28.098][I][gree_wired_rs485]: OEM probe complete: complete valid=0 last_cmd=0x00 info44=NO status31=NO
+[06:56:32.806][I][gree_wired_rs485]: HEALTH mode=OEM_RTL dir=MANUAL profile=4800-8E1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0
+"""
+        analysis = discovery.analyze_log(text)
+        self.assertEqual(
+            discovery.conclusion(analysis),
+            "oem_rtl_probe_no_response",
+        )
+        self.assertEqual(
+            discovery.recommended_next_step(analysis),
+            "recover_direct_com_manual_protocol_from_onokom_gr3_firmware",
+        )
+        self.assertEqual(len(analysis.oem_transmit_lines), 3)
+        self.assertIsNotNone(analysis.oem_probe_completion)
+        self.assertEqual(analysis.oem_probe_completion.valid_frames, 0)
+        self.assertEqual(analysis.max_edges_total, 0)
+        self.assertEqual(analysis.max_bytes_total, 0)
+
     def test_short_zero_activity_capture_requires_more_time(self):
         text = """
 [02:25:00.000][I][gree_wired_rs485]: HEALTH mode=PASSIVE profile=1200-8N1 bytes=0 uart_window=0 valid=0 rx_edges_window=0 rx_edges_total=0 edge_cadence_samples=0 edge_min_gap_us=0 edge_max_gap_us=0 edge_last_gap_us=0
