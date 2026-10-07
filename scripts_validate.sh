@@ -214,3 +214,7 @@ esphome compile examples/.validation-gree-vireo-xiao-rs485-listen-only.yaml
 # from the same passive image and changes the live UART to 4800-8E1 only at
 # runtime after the configured delay.
 esphome compile examples/.validation-gree-vireo-oem-rtl-probe.yaml
+
+# Compile the user-facing field-test example as well so package inheritance
+# cannot silently fall back to the passive profile.
+esphome compile examples/gree-vireo-xiao-rs485-oem-rtl-probe.yaml
