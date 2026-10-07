@@ -15,6 +15,8 @@ CONF_PASSIVE_SCAN_WINDOW = "passive_scan_window"
 CONF_PASSIVE_SCAN_START_PROFILE = "passive_scan_start_profile"
 CONF_ACTIVE_PROBE = "active_probe"
 CONF_LEGACY_GKH_XK76_PROBE = "legacy_gkh_xk76_probe"
+CONF_OEM_RTL_PROBE = "oem_rtl_probe"
+CONF_OEM_RTL_PROBE_DELAY = "oem_rtl_probe_delay"
 CONF_ACTIVE_PROBE_INTERVAL = "active_probe_interval"
 CONF_REGISTRATION_ATTEMPTS = "registration_attempts"
 CONF_SILENT_BOOTSTRAP_PROBE = "silent_bootstrap_probe"
@@ -44,6 +46,8 @@ CONF_CONTROLLER_POLLS_SEEN = "controller_polls_seen"
 CONF_CONTROLLER_RESPONSES_SENT = "controller_responses_sent"
 CONF_REGISTERED_STATUS_FRAMES = "registered_status_frames"
 CONF_REGISTERED_SETPOINT_CANDIDATE = "registered_setpoint_candidate"
+CONF_OEM_VALID_FRAMES = "oem_valid_frames"
+CONF_OEM_LAST_COMMAND = "oem_last_command"
 
 CONF_LAST_FRAME = "last_frame"
 CONF_LAST_PAYLOAD = "last_payload"
@@ -63,6 +67,8 @@ CONF_LAST_FRAME_ROLE = "last_frame_role"
 CONF_POLL_PAYLOAD = "poll_payload"
 CONF_POLL_CHANGES = "poll_changes"
 CONF_FF40_INDEXED = "ff40_indexed"
+CONF_OEM_PROBE_STATE = "oem_probe_state"
+CONF_OEM_LAST_FRAME = "oem_last_frame"
 
 CONF_BUS_ACTIVE = "bus_active"
 CONF_LISTEN_ONLY = "listen_only"
@@ -116,6 +122,7 @@ PASSIVE_SCAN_PROFILES = {
 def _validate_probe_configuration(config):
     active = config[CONF_ACTIVE_PROBE]
     legacy = config[CONF_LEGACY_GKH_XK76_PROBE]
+    oem_rtl = config[CONF_OEM_RTL_PROBE]
     silent = config[CONF_SILENT_BOOTSTRAP_PROBE]
     persistent = config[CONF_PERSISTENT_CONTROLLER]
 
@@ -133,6 +140,16 @@ def _validate_probe_configuration(config):
     if persistent and not legacy:
         raise cv.Invalid(
             "persistent_controller uses the legacy GKH/XK76 controller-state codec"
+        )
+    if oem_rtl and (active or legacy or silent or persistent):
+        raise cv.Invalid(
+            "oem_rtl_probe is a separate bounded 4800-8E1 OEM startup experiment; "
+            "disable all legacy GKH/XK76 transmit options when enabling it"
+        )
+    if oem_rtl and config[CONF_PASSIVE_SCAN]:
+        raise cv.Invalid(
+            "oem_rtl_probe owns the UART profile during its bounded startup sequence; "
+            "disable passive_scan when enabling it"
         )
     return config
 
@@ -169,6 +186,14 @@ CONFIG_SCHEMA = cv.All(
             ): cv.one_of(*PASSIVE_SCAN_PROFILES, upper=True),
             cv.Optional(CONF_ACTIVE_PROBE, default=False): cv.boolean,
             cv.Optional(CONF_LEGACY_GKH_XK76_PROBE, default=False): cv.boolean,
+            cv.Optional(CONF_OEM_RTL_PROBE, default=False): cv.boolean,
+            cv.Optional(CONF_OEM_RTL_PROBE_DELAY, default="5s"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(
+                    min=cv.TimePeriod(seconds=1),
+                    max=cv.TimePeriod(seconds=30),
+                ),
+            ),
             cv.Optional(CONF_ACTIVE_PROBE_INTERVAL, default="1200ms"): cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(
@@ -214,6 +239,8 @@ CONFIG_SCHEMA = cv.All(
                 accuracy_decimals=1,
                 device_class="temperature",
             ),
+            cv.Optional(CONF_OEM_VALID_FRAMES): counter_schema,
+            cv.Optional(CONF_OEM_LAST_COMMAND): raw_value_schema,
             cv.Optional(CONF_LAST_FRAME): text_schema,
             cv.Optional(CONF_LAST_PAYLOAD): text_schema,
             cv.Optional(CONF_LAST_ROUTE): text_schema,
@@ -232,6 +259,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_POLL_PAYLOAD): text_schema,
             cv.Optional(CONF_POLL_CHANGES): text_schema,
             cv.Optional(CONF_FF40_INDEXED): text_schema,
+            cv.Optional(CONF_OEM_PROBE_STATE): text_schema,
+            cv.Optional(CONF_OEM_LAST_FRAME): text_schema,
             cv.Optional(CONF_BUS_ACTIVE): binary_schema,
             cv.Optional(CONF_LISTEN_ONLY): binary_schema,
             cv.Optional(CONF_RX_LINE_HIGH): binary_schema,
@@ -275,6 +304,8 @@ async def to_code(config):
     )
     cg.add(var.set_active_probe(config[CONF_ACTIVE_PROBE]))
     cg.add(var.set_legacy_gkh_xk76_probe(config[CONF_LEGACY_GKH_XK76_PROBE]))
+    cg.add(var.set_oem_rtl_probe(config[CONF_OEM_RTL_PROBE]))
+    cg.add(var.set_oem_rtl_probe_delay(config[CONF_OEM_RTL_PROBE_DELAY]))
     cg.add(var.set_active_probe_interval(config[CONF_ACTIVE_PROBE_INTERVAL]))
     cg.add(var.set_registration_attempts(config[CONF_REGISTRATION_ATTEMPTS]))
     cg.add(var.set_silent_bootstrap_probe(config[CONF_SILENT_BOOTSTRAP_PROBE]))
@@ -309,6 +340,8 @@ async def to_code(config):
         CONF_CONTROLLER_RESPONSES_SENT: "set_controller_responses_sent_sensor",
         CONF_REGISTERED_STATUS_FRAMES: "set_registered_status_frames_sensor",
         CONF_REGISTERED_SETPOINT_CANDIDATE: "set_registered_setpoint_candidate_sensor",
+        CONF_OEM_VALID_FRAMES: "set_oem_valid_frames_sensor",
+        CONF_OEM_LAST_COMMAND: "set_oem_last_command_sensor",
     }
     for key, method in sensor_entities.items():
         if key in config:
@@ -334,6 +367,8 @@ async def to_code(config):
         CONF_POLL_PAYLOAD: "set_poll_payload_sensor",
         CONF_POLL_CHANGES: "set_poll_changes_sensor",
         CONF_FF40_INDEXED: "set_ff40_indexed_sensor",
+        CONF_OEM_PROBE_STATE: "set_oem_probe_state_sensor",
+        CONF_OEM_LAST_FRAME: "set_oem_last_frame_sensor",
     }
     for key, method in text_entities.items():
         if key in config:
