@@ -327,14 +327,24 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         this->registration_response_capture_.push_back(byte);
       }
 
-      std::vector<uint8_t> complete;
-      const auto result = this->assembler_.push(byte, complete);
-      if (result == protocol::AssembleResult::INVALID_LENGTH) {
-        ++this->invalid_lengths_;
-        this->publish_counters_();
-        ESP_LOGW(TAG, "Discarded COM-MANUAL frame with invalid declared body length");
-      } else if (result == protocol::AssembleResult::FRAME_READY) {
-        this->process_frame_(complete);
+      if (this->oem_rtl_probe_) {
+        std::vector<uint8_t> oem_complete;
+        const auto oem_result = this->oem_assembler_.push(byte, oem_complete);
+        if (oem_result == oem::AssembleResult::FRAME_READY) {
+          this->process_oem_frame_(oem_complete);
+        } else if (oem_result == oem::AssembleResult::INVALID_LENGTH) {
+          ESP_LOGD(TAG, "OEM probe parser resynchronized after invalid length");
+        }
+      } else {
+        std::vector<uint8_t> complete;
+        const auto result = this->assembler_.push(byte, complete);
+        if (result == protocol::AssembleResult::INVALID_LENGTH) {
+          ++this->invalid_lengths_;
+          this->publish_counters_();
+          ESP_LOGW(TAG, "Discarded COM-MANUAL frame with invalid declared body length");
+        } else if (result == protocol::AssembleResult::FRAME_READY) {
+          this->process_frame_(complete);
+        }
       }
     }
 
@@ -354,6 +364,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 
     const uint32_t setup_elapsed =
         static_cast<uint32_t>(after_rx - this->setup_started_at_);
+
+    this->maybe_run_oem_rtl_probe_(after_rx, setup_elapsed);
     if (registration::silent_bootstrap_ready(
             this->silent_bootstrap_probe_,
             this->legacy_gkh_xk76_probe_enabled_(),
@@ -399,6 +411,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
         this->last_raw_rx_sensor_->publish_state(this->last_raw_rx_hex_);
       }
       this->raw_rx_burst_.clear();
+      if (this->oem_rtl_probe_) this->oem_assembler_.reset();
     }
 
     if (this->bus_active_ && this->last_valid_frame_at_ != 0 &&
@@ -714,6 +727,203 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     ESP_LOGI(TAG, "RS485 direction guard active: GPIO%d forced LOW; UART is RX-only",
              this->direction_gpio_);
 #endif
+  }
+
+  enum class OemProbeStage : uint8_t {
+    IDLE,
+    IDENTITY_SENT,
+    MAC_WAIT,
+    STARTUP_SYNC,
+    WAIT_FINAL,
+    COMPLETE,
+  };
+
+  void publish_oem_probe_state_(const std::string &state) {
+    this->oem_probe_state_ = state;
+    if (this->oem_probe_state_sensor_ != nullptr) {
+      this->oem_probe_state_sensor_->publish_state(state);
+    }
+  }
+
+  void process_oem_frame_(const std::vector<uint8_t> &raw) {
+    oem::ParsedFrame frame;
+    if (!oem::parse_frame(raw, frame)) {
+      ESP_LOGW(TAG, "OEM additive frame failed validation: %s", hex_(raw).c_str());
+      return;
+    }
+
+    ++this->oem_valid_frames_;
+    this->oem_last_command_ = frame.command;
+    this->oem_last_frame_hex_ = hex_(raw);
+    if (this->oem_valid_frames_sensor_ != nullptr) {
+      this->oem_valid_frames_sensor_->publish_state(this->oem_valid_frames_);
+    }
+    if (this->oem_last_command_sensor_ != nullptr) {
+      this->oem_last_command_sensor_->publish_state(frame.command);
+    }
+    if (this->oem_last_frame_sensor_ != nullptr) {
+      this->oem_last_frame_sensor_->publish_state(this->oem_last_frame_hex_);
+    }
+
+    ESP_LOGI(TAG, "OEM RX valid cmd=0x%02X len=%u: %s",
+             frame.command, static_cast<unsigned>(raw.size()),
+             this->oem_last_frame_hex_.c_str());
+
+    if (frame.command == 0x44 && oem::accepted_information_44(frame)) {
+      this->oem_information_44_accepted_ = true;
+      this->publish_oem_probe_state_("identity-accepted-0x44");
+    }
+    if (frame.command == 0x31) {
+      this->oem_status_31_seen_ = true;
+      this->oem_last_status_payload_ = frame.payload;
+      this->publish_oem_probe_state_("status-0x31-seen");
+    }
+  }
+
+  bool send_oem_probe_frame_(const std::vector<uint8_t> &frame,
+                             const char *label) {
+    if (frame.empty()) return false;
+    if (!this->hardware_half_duplex_ && !this->set_direction_level_(1)) {
+      ESP_LOGE(TAG, "OEM probe %s aborted: could not enable RS485 driver", label);
+      this->force_receive_mode_();
+      return false;
+    }
+
+    this->tx_in_progress_ = true;
+    ESP_LOGI(TAG, "OEM TX %s profile=4800-8E1 bytes=%u: %s",
+             label, static_cast<unsigned>(frame.size()), hex_(frame).c_str());
+    this->write_array(frame.data(), frame.size());
+    const auto flush_result = this->flush();
+
+    // Drop only bytes already pending while our driver still owns the line.
+    if (!this->hardware_half_duplex_) {
+      const size_t pending = this->available();
+      for (size_t i = 0; i < pending; ++i) {
+        uint8_t ignored = 0;
+        if (!this->read_byte(&ignored)) break;
+      }
+      this->force_receive_mode_();
+    }
+    this->tx_in_progress_ = false;
+
+    if (flush_result != uart::UARTFlushResult::UART_FLUSH_RESULT_SUCCESS) {
+      ESP_LOGW(TAG, "OEM probe %s TX flush was not confirmed", label);
+      return false;
+    }
+    return true;
+  }
+
+  void configure_oem_uart_() {
+    if (this->oem_uart_configured_) return;
+    this->scan_profile_index_ = 5;  // 4800-8E1
+    this->apply_scan_profile_(this->scan_profile_index_, true);
+    this->assembler_.reset();
+    this->oem_assembler_.reset();
+    this->oem_uart_configured_ = true;
+    ESP_LOGI(TAG, "OEM probe owns UART profile=4800-8E1 for bounded startup sequence");
+  }
+
+  void maybe_run_oem_rtl_probe_(uint32_t now, uint32_t setup_elapsed) {
+    if (!this->oem_rtl_probe_ || this->oem_probe_stage_ == OemProbeStage::COMPLETE) return;
+    if (setup_elapsed < this->oem_rtl_probe_delay_ms_) return;
+
+    this->configure_oem_uart_();
+
+    if (this->oem_probe_stage_ == OemProbeStage::IDLE) {
+      const std::vector<uint8_t> frame(
+          oem::BOOT_IDENTITY.begin(), oem::BOOT_IDENTITY.end());
+      if (this->send_oem_probe_frame_(frame, "identity-0x02")) {
+        this->oem_probe_stage_ = OemProbeStage::IDENTITY_SENT;
+        this->oem_probe_last_action_at_ = now;
+        this->publish_oem_probe_state_("identity-0x02-sent");
+      }
+      return;
+    }
+
+    if (this->oem_probe_stage_ == OemProbeStage::IDENTITY_SENT) {
+      if (static_cast<uint32_t>(now - this->oem_probe_last_action_at_) < 300U) return;
+      std::array<uint8_t, 6> mac{{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}};
+#ifdef USE_ESP32
+      esp_read_mac(mac.data(), ESP_MAC_WIFI_STA);
+#endif
+      const auto report = oem::build_mac_report(mac);
+      if (this->send_oem_probe_frame_(
+              std::vector<uint8_t>(report.begin(), report.end()),
+              "mac-solicit-0x04")) {
+        ++this->oem_mac_attempts_;
+        this->oem_probe_stage_ = OemProbeStage::MAC_WAIT;
+        this->oem_probe_last_action_at_ = now;
+        this->publish_oem_probe_state_("waiting-for-0x44");
+      }
+      return;
+    }
+
+    if (this->oem_probe_stage_ == OemProbeStage::MAC_WAIT) {
+      if (this->oem_information_44_accepted_) {
+        this->oem_probe_stage_ = OemProbeStage::STARTUP_SYNC;
+        this->oem_probe_last_action_at_ = now - 300U;
+        this->publish_oem_probe_state_("startup-sync-after-0x44");
+        return;
+      }
+      if (static_cast<uint32_t>(now - this->oem_probe_last_action_at_) < 1200U) return;
+      if (this->oem_mac_attempts_ < 6) {
+        std::array<uint8_t, 6> mac{{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}};
+#ifdef USE_ESP32
+        esp_read_mac(mac.data(), ESP_MAC_WIFI_STA);
+#endif
+        const auto report = oem::build_mac_report(mac);
+        if (this->send_oem_probe_frame_(
+                std::vector<uint8_t>(report.begin(), report.end()),
+                "mac-solicit-0x04")) {
+          ++this->oem_mac_attempts_;
+          this->oem_probe_last_action_at_ = now;
+        }
+        return;
+      }
+
+      // Both audited RTL generations continue startup after six failed 0x04
+      // attempts using a fallback identity. Mirror that bounded behavior.
+      this->oem_probe_stage_ = OemProbeStage::STARTUP_SYNC;
+      this->oem_probe_last_action_at_ = now - 300U;
+      this->publish_oem_probe_state_("startup-sync-after-0x44-timeout");
+      return;
+    }
+
+    if (this->oem_probe_stage_ == OemProbeStage::STARTUP_SYNC) {
+      if (static_cast<uint32_t>(now - this->oem_probe_last_action_at_) < 300U) return;
+      if (this->oem_startup_sync_sent_ < 4) {
+        const auto sync = oem::build_startup_sync();
+        if (this->send_oem_probe_frame_(
+                std::vector<uint8_t>(sync.begin(), sync.end()),
+                "startup-sync-0x03")) {
+          ++this->oem_startup_sync_sent_;
+          this->oem_probe_last_action_at_ = now;
+          char state[64];
+          std::snprintf(state, sizeof(state), "startup-sync-%u/4",
+                        static_cast<unsigned>(this->oem_startup_sync_sent_));
+          this->publish_oem_probe_state_(state);
+        }
+        return;
+      }
+      this->oem_probe_stage_ = OemProbeStage::WAIT_FINAL;
+      this->oem_probe_last_action_at_ = now;
+      this->publish_oem_probe_state_("waiting-final-response");
+      return;
+    }
+
+    if (this->oem_probe_stage_ == OemProbeStage::WAIT_FINAL &&
+        static_cast<uint32_t>(now - this->oem_probe_last_action_at_) >= 1500U) {
+      this->oem_probe_stage_ = OemProbeStage::COMPLETE;
+      char summary[96];
+      std::snprintf(summary, sizeof(summary),
+                    "complete valid=%lu last_cmd=0x%02X info44=%s status31=%s",
+                    static_cast<unsigned long>(this->oem_valid_frames_),
+                    this->oem_last_command_,
+                    this->oem_information_44_accepted_ ? "YES" : "NO",
+                    this->oem_status_31_seen_ ? "YES" : "NO");
+      this->publish_oem_probe_state_(summary);
+      ESP_LOGI(TAG, "OEM probe complete: %s", summary);
+    }
   }
 
   void probe_rx_receiver_path_() {
