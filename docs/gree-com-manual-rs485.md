@@ -150,6 +150,40 @@ The primary reverse-engineering target is an authentic **XK76/XK76CA 4-core
 indoor-side startup/session** on Vireo R32. Legacy 1200-8N1/7E7E remains
 reference-only until that transaction is observed.
 
+## No-extra-hardware controller-first probe
+
+The deployment goal is direct local control from the existing four-wire
+COM-MANUAL interface; no GREE gateway, XK76/XE71, or adapter board is a required
+runtime dependency.
+
+Two independently audited current GREE RTL8720CF Wi-Fi-module firmware
+generations provide a concrete controller-first startup hypothesis that is
+materially different from the legacy XK19/GKH indoor-first transaction. Their
+appliance UART uses 4800 baud, 8 data bits, even parity, 1 stop bit and additive
+`7E 7E LEN CMD ... SUM` framing. Both implement the same ordered startup:
+
+1. command `0x02` identity:
+   `7E 7E 10 02 00 00 00 00 00 00 03 00 28 1E 19 23 23 00 BA`
+2. command `0x04` full-MAC solicitation, retried at most six times while
+   waiting for a valid command `0x44` information response;
+3. four identical 29-byte neutral command-`0x03` startup/status frames:
+   `7E 7E 1A 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 00 1E`
+4. only after startup does that firmware enter normal command-`0x01`
+   poll/control operation.
+
+This does **not** prove that Vireo R32 COM-MANUAL uses the Wi-Fi-module
+application protocol. It is, however, an evidence-backed controller-first
+sequence from current GREE firmware and directly tests the strongest remaining
+explanation for a physically healthy but completely idle receive line.
+
+The package
+`gree-vireo-xiao-rs485-oem-rtl-probe.yaml` implements this as a bounded
+experiment on the existing Seeed RS485 board. It dynamically changes the live
+UART to 4800-8E1 after the configured delay, emits only the identity/startup
+sequence above, accepts any additive-checksum-valid reply, retains the complete
+frame and command byte, and then stops. It does not emit a climate-state
+command. The normal passive package keeps this probe disabled.
+
 ## R32 startup FE finding and safety gate
 
 The target Vireo has a repeatable startup observation: attaching the Seeed
