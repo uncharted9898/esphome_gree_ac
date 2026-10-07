@@ -119,23 +119,36 @@ when no UART transitions are observed.
 
 ## Current GMS GW / DCBAS lead
 
-GREE's current GMS GW integration path lists VIREO R32 as a supported split
-family. Its public manual shows HVAC Lines 1 and 2 as `DCBAS (DCBAS)`, while
-the directly extracted ToolBox 2.1.23 `setuputility.exe` contains a line type
-named `DCABAS` with internal token `DCAB`.
+GREE's current GMS-GW integration path lists VIREO R32 as supported, but
+the installation documentation reveals an important two-bus topology rather
+than a direct COM-MANUAL gateway connection.
 
-The same binary also exposes a **separate** Gree line family with identifiers
-`CG4`, `CG5`, and `AG4`. That distinction is important: neither the manual
-label nor the ToolBox string alone proves which line driver speaks to VIREO R32
-or what bytes appear on COM-MANUAL. The DCBAS/DCABAS naming difference may be
-version-specific or may identify a gateway-side module rather than the indoor
-wire protocol.
+The normal published mini-split path is:
 
-What is proven is that a current shipping gateway can locally run/stop VIREO
-R32, change setpoint/mode/fan/louver, and read alarms/room temperature over a
-supported local integration. The exact Vireo line driver and byte protocol
-remain the primary reverse-engineering target. Legacy 1200-8N1/7E7E stays
-reference-only.
+`GMS-GW L1/L2 RS485 -> XK76CA -> indoor unit`
+
+XK76CA is documented as an XK76 wired controller plus two wiring harnesses.
+The XK76 owner manual states that its **4-core terminal connects the air
+conditioner**, while its **2-core terminal connects the centralized
+controller**. The GMS-GW installation drawing connects the gateway A/B line to
+that controller-side XK76 network. A separate direct-to-indoor drawing is
+explicitly limited to "specific models only".
+
+This makes the likely purpose of the two XK76CA harnesses clear (an inference
+from the two manuals, not a published harness part-number mapping): one serves
+the four-core XK76-to-indoor connection and one serves the two-core
+GMS-GW/centralized-controller side.
+
+The extracted ToolBox 2.1.23 binary supports that separation. Its static
+`line_types` table contains `Gree` with internal code `GR`; `CG4`,
+`CG5`, and `DCABAS/DCAB` are separate entries and are not evidence for the
+Vireo COM-MANUAL framing. The CM5 firmware images are therefore still useful
+for understanding the GMS supervisory bus, but they are no longer the shortest
+path to the indoor protocol.
+
+The primary reverse-engineering target is an authentic **XK76/XK76CA 4-core
+indoor-side startup/session** on Vireo R32. Legacy 1200-8N1/7E7E remains
+reference-only until that transaction is observed.
 
 ## R32 startup FE finding and safety gate
 
