@@ -1,0 +1,15 @@
+# Field-test image for the existing Sunroom/Vireo XIAO + RS485 hardware.
+# Inherits the field-qualified pinout and networking from the passive example,
+# then enables only the bounded controller-first OEM startup sequence.
+packages:
+  base: !include gree-vireo-xiao-rs485-listen-only.yaml
+
+gree_wired_rs485:
+  id: gree_com_manual
+  passive_scan: false
+  active_probe: false
+  legacy_gkh_xk76_probe: false
+  silent_bootstrap_probe: false
+  persistent_controller: false
+  oem_rtl_probe: true
+  oem_rtl_probe_delay: 5s

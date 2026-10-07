@@ -1,0 +1,21 @@
+# Bounded controller-first OEM startup probe for Vireo R32 COM-MANUAL.
+#
+# This is intentionally separate from the legacy GKH/XK76 probe. It switches
+# the live UART to 4800-8E1 and emits only the startup/identity sequence
+# recovered identically from two current GREE RTL8720CF appliance-UART firmware
+# generations:
+#   1) command 0x02 identity
+#   2) command 0x04 MAC/identity solicitation, up to six attempts
+#   3) four command 0x03 neutral startup/status frames
+#
+# No climate-state command is sent. Any additive-checksum-valid response is
+# retained verbatim and surfaced through the OEM Probe diagnostics.
+gree_wired_rs485:
+  id: gree_com_manual
+  passive_scan: false
+  active_probe: false
+  legacy_gkh_xk76_probe: false
+  silent_bootstrap_probe: false
+  persistent_controller: false
+  oem_rtl_probe: true
+  oem_rtl_probe_delay: 5s
