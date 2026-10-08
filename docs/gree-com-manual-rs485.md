@@ -235,10 +235,43 @@ Therefore the exact public targets to acquire are:
 - `https://fw-releases.wirenboard.com/fw/by-signature/ok_gr3b/main/26.08.01.wbfw`
 - `https://fw-releases.wirenboard.com/fw/by-signature/ok_gr3c/main/26.08.01.wbfw`
 
-The `.wbfw` format is not an opaque vendor archive to the updater: the open
-Wiren Board flasher writes a 32-byte info block followed by raw 136-byte data
-blocks. That makes either GR-3 image a substantially better reverse-engineering
-target than the encrypted Zigbee GBL.
+### GR-3 WBFW reverse-engineering status (October 8, 2026)
+
+Two ONOKOM Modbus GR-3 revision images were supplied for analysis:
+
+- `ok_gr3b__26.08.01_main_8aa3044.wbfw`
+- `ok_gr3c__26.08.01_main_8aa3044.wbfw`
+
+The prior local investigation reported both files at 40,832 bytes, with a
+32-byte information block and 300 x 136-byte data blocks. This is a transport
+layout, **not** proof the 40,800-byte body is raw executable flash. The
+reported firmware bodies are high-entropy with no meaningful plain-text
+strings. The first approximately 39.2 KB align closely between revisions B/C,
+while the last approximately 1.56 KB differ substantially. The differences
+could reflect revision-specific metadata, signing, encryption, packaging, or
+other image transforms; none is established. Do not assume an MCU architecture,
+vector table, decryption method, key, or COM-MANUAL opcode from these packages.
+
+The open Wiren Board updater/flasher confirms the 32-byte info block and
+136-byte Modbus transfer units. It does **not** establish that its transport
+blocks are decrypted code. Confirm whether the target device bootloader writes
+those bytes unchanged, decrypts them, verifies signatures, decompresses them,
+or delegates interpretation before attempting disassembly.
+
+Current implementation gate: until a verified direct-COM-MANUAL transaction
+is recovered, do not reuse GREE Wi-Fi-module `4800-8E1` packet definitions or
+legacy GKH/XK76 status codecs to drive this Vireo. The October 7 field run
+saw **zero post-transmit GPIO RX edges and zero received UART bytes**, so there
+is no received packet on which to validate a checksum or parser. This does not
+prove what signaling an uninstrumented COM-MANUAL bus carries and does not
+independently establish the reason for the missing response.
+
+Non-invasive remaining avenues are documentation/source of the GR-3 interface,
+analysis of any verifiably unpacked controller firmware, and differential
+measurement of the already connected RS485 receiver path; no new hardware or
+transmit experiments are prerequisites to keeping the ESPHome passive monitor
+operational. Do not send additional guessed controller frames to the R32 gas
+sensor's shared bus solely on the strength of firmware-file similarity.
 
 ## R32 startup FE finding and safety gate
 
