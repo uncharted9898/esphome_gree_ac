@@ -59,6 +59,7 @@ CONF_PROTOCOL = "protocol"
 CONF_SERIAL_PROFILE = "serial_profile"
 CONF_LAST_RAW_RX = "last_raw_rx"
 CONF_RX_RECEIVER_PATH = "rx_receiver_path"
+CONF_RX_CAPTURE_STATE = "rx_capture_state"
 CONF_FF40_APPENDIX = "ff40_appendix"
 CONF_CONTROLLER_STATE = "controller_state"
 CONF_FF40_PAYLOAD = "ff40_payload"
@@ -251,6 +252,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_SERIAL_PROFILE): text_schema,
             cv.Optional(CONF_LAST_RAW_RX): text_schema,
             cv.Optional(CONF_RX_RECEIVER_PATH): text_schema,
+            cv.Optional(CONF_RX_CAPTURE_STATE): text_schema,
             cv.Optional(CONF_FF40_APPENDIX): text_schema,
             cv.Optional(CONF_CONTROLLER_STATE): text_schema,
             cv.Optional(CONF_FF40_PAYLOAD): text_schema,
@@ -359,6 +361,7 @@ async def to_code(config):
         CONF_SERIAL_PROFILE: "set_serial_profile_sensor",
         CONF_LAST_RAW_RX: "set_last_raw_rx_sensor",
         CONF_RX_RECEIVER_PATH: "set_rx_receiver_path_sensor",
+        CONF_RX_CAPTURE_STATE: "set_rx_capture_state_sensor",
         CONF_FF40_APPENDIX: "set_ff40_appendix_sensor",
         CONF_CONTROLLER_STATE: "set_controller_state_sensor",
         CONF_FF40_PAYLOAD: "set_ff40_payload_sensor",
