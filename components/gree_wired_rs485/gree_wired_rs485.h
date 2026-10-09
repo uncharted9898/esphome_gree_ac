@@ -150,6 +150,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   void set_rx_receiver_path_sensor(text_sensor::TextSensor *s) {
     this->rx_receiver_path_sensor_ = s;
   }
+  void set_rx_capture_state_sensor(text_sensor::TextSensor *s) {
+    this->rx_capture_state_sensor_ = s;
+  }
   void set_ff40_appendix_sensor(text_sensor::TextSensor *s) { this->ff40_appendix_sensor_ = s; }
   void set_controller_state_sensor(text_sensor::TextSensor *s) { this->controller_state_sensor_ = s; }
   void set_ff40_payload_sensor(text_sensor::TextSensor *s) { this->ff40_payload_sensor_ = s; }
@@ -185,6 +188,9 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     if (!this->hardware_half_duplex_) {
       this->force_receive_mode_();
       this->probe_rx_receiver_path_();
+      // Capture the earliest post-boot edges, before the UART component is
+      // configured. Waiting 250ms misses a time-critical shared-bus startup.
+      this->setup_rx_edge_monitor_();
     }
 
     ESP_LOGI(TAG,
@@ -246,11 +252,12 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
     this->observe_line_activity_();
     this->publish_line_states_();
 
-    // GPIO7 is also routed to the UART RX matrix. Install a passive any-edge
-    // observer after component setup settles so short 1200-baud transitions
-    // are not lost to main-loop sampling. This never changes the pin level.
-    this->set_timeout("rx-edge-monitor", 250, [this]() {
-      this->setup_rx_edge_monitor_();
+    // ESP-IDF may reset GPIO interrupt configuration when UART RX is
+    // initialized after this component (POWER-1 priority). Re-arm the existing
+    // handler once the UART setup has completed, without clearing edge counts.
+    this->set_timeout("rx-edge-monitor-rearm", 250, [this]() {
+      this->rearm_rx_edge_monitor_();
+      this->publish_rx_capture_state_();
     });
   }
 
@@ -472,6 +479,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
       // Publish periodically even if electrical RX never forms a valid legacy
       // frame. This separates wiring/UART silence from protocol incompatibility.
       this->publish_counters_();
+      this->publish_rx_capture_state_();
       const bool rx_recent =
           this->last_byte_at_ != 0 &&
           static_cast<uint32_t>(now - this->last_byte_at_) <= this->bus_idle_timeout_ms_;
@@ -1639,6 +1647,42 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 #endif
   }
 
+  // Re-apply the GPIO interrupt type after IDF UART initialization or
+  // dynamic scan-profile changes, which may reconfigure the same RX pin.
+  // This does not touch the RS485 A/B pair or the transceiver direction pin.
+  void rearm_rx_edge_monitor_() {
+#ifdef USE_ESP32
+    if (!this->rx_edge_monitor_installed_) {
+      this->setup_rx_edge_monitor_();
+      return;
+    }
+    const auto gpio = static_cast<gpio_num_t>(this->rx_line_gpio_);
+    esp_err_t err = gpio_set_intr_type(gpio, GPIO_INTR_ANYEDGE);
+    if (err == ESP_OK) err = gpio_intr_enable(gpio);
+    if (err != ESP_OK) {
+      gpio_isr_handler_remove(gpio);
+      this->rx_edge_monitor_installed_ = false;
+      ESP_LOGE(TAG, "RX edge ISR re-arm failed on GPIO%d: %s",
+               this->rx_line_gpio_, esp_err_to_name(err));
+    }
+#endif
+  }
+
+  void publish_rx_capture_state_() {
+    if (this->rx_capture_state_sensor_ == nullptr) return;
+    if (!this->rx_edge_monitor_installed_) {
+      this->rx_capture_state_sensor_->publish_state("RX_GPIO_IRQ_NOT_ARMED");
+    } else if (this->rx_transition_total_() == 0 && this->bytes_received_ == 0) {
+      this->rx_capture_state_sensor_->publish_state("RX_NO_EDGES_NO_BYTES");
+    } else if (this->rx_transition_total_() != 0 && this->bytes_received_ == 0) {
+      this->rx_capture_state_sensor_->publish_state("RX_EDGES_NO_UART_BYTES");
+    } else if (this->valid_frames_ == 0 && this->oem_valid_frames_ == 0) {
+      this->rx_capture_state_sensor_->publish_state("RX_BYTES_UNIDENTIFIED");
+    } else {
+      this->rx_capture_state_sensor_->publish_state("RX_PROTOCOL_FRAMES_SEEN");
+    }
+  }
+
   void setup_rx_edge_monitor_() {
 #ifdef USE_ESP32
     if (this->rx_line_gpio_ < 0 || this->rx_edge_monitor_installed_) return;
@@ -1797,6 +1841,8 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
 #if defined(USE_ESP32)
     if (reload_uart) {
       this->parent_->load_settings(false);
+      // The driver reload may clear the GPIO interrupt type.
+      this->rearm_rx_edge_monitor_();
     }
 #else
     (void) reload_uart;
@@ -2179,6 +2225,7 @@ class GreeWiredRS485 : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *serial_profile_sensor_{nullptr};
   text_sensor::TextSensor *last_raw_rx_sensor_{nullptr};
   text_sensor::TextSensor *rx_receiver_path_sensor_{nullptr};
+  text_sensor::TextSensor *rx_capture_state_sensor_{nullptr};
   text_sensor::TextSensor *ff40_appendix_sensor_{nullptr};
   text_sensor::TextSensor *controller_state_sensor_{nullptr};
   text_sensor::TextSensor *ff40_payload_sensor_{nullptr};

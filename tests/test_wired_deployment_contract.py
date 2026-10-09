@@ -92,6 +92,19 @@ class WiredDeploymentContractTests(unittest.TestCase):
         self.assertIn("#   5V selector -> IN", text)
         self.assertIn("Deterministic manual RS485 direction", text)
 
+    def test_vireo_rx_edge_monitor_arms_early_and_rearms(self):
+        text = HEADER.read_text()
+        config = (ROOT / "components/gree_wired_rs485/__init__.py").read_text()
+        package = PACKAGE.read_text()
+        setup = text.split("  void setup() override {", 1)[1].split("  void on_shutdown()", 1)[0]
+        self.assertLess(setup.index("this->setup_rx_edge_monitor_();"), setup.index("ESP_LOGI(TAG,"))
+        self.assertIn("rx-edge-monitor-rearm", setup)
+        self.assertIn("this->rearm_rx_edge_monitor_();", text)
+        self.assertIn("RX_EDGES_NO_UART_BYTES", text)
+        self.assertIn("RX_GPIO_IRQ_NOT_ARMED", text)
+        self.assertIn("CONF_RX_CAPTURE_STATE", config)
+        self.assertIn("rx_capture_state:", package)
+
     def test_vireo_receiver_path_self_test_is_receive_only(self):
         text = HEADER.read_text()
         config = (ROOT / "components/gree_wired_rs485/__init__.py").read_text()
